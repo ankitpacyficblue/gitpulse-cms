@@ -8,6 +8,10 @@ BEGIN
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON public.%I', t);
   END LOOP;
 END $$;
+DROP TABLE IF EXISTS public.account_settings;
+ALTER TABLE public.conversations DROP COLUMN IF EXISTS assigned_user_id;
+ALTER TABLE public.accounts DROP COLUMN IF EXISTS default_currency;
+ALTER TABLE public.users DROP COLUMN IF EXISTS must_change_password, DROP COLUMN IF EXISTS temp_password_expires;
 DROP TABLE IF EXISTS public.whatsapp_accounts;
 DROP TABLE IF EXISTS public.memberships;
 ALTER TABLE public.messages      DROP CONSTRAINT IF EXISTS messages_conversation_same_account, DROP CONSTRAINT IF EXISTS messages_contact_same_account;
