@@ -323,7 +323,8 @@ def render_dashboard_html() -> str:
 <body class="bg-slate-950 text-slate-100">
     <div class="app-layout">
         <!-- Persistent Left Sidebar Navigation with Clear Sections -->
-        <aside class="sidebar">
+        <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="toggleSidebar(false)"></div>
+        <aside class="sidebar" id="sidebar" aria-label="Main navigation">
             <!-- Sidebar Header & Brand -->
             <div class="p-4 border-b border-slate-800/80">
                 <div class="flex items-center space-x-3 mb-3">
@@ -345,11 +346,11 @@ def render_dashboard_html() -> str:
                 <!-- Multi-Tenant Client Selector -->
                 <div class="bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
                     <div class="flex justify-between items-center mb-1">
-                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Business / Client</span>
+                        <label for="client-select-filter" class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Client account</label>
                         <button onclick="openAddClientModal()" class="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold">+ Add</button>
                     </div>
                     <select id="client-select-filter" onchange="onClientFilterChange()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-slate-200 outline-none">
-                        <option value="">All Clients & Orgs</option>
+                        <option value="">All accounts (admin view)</option>
                     </select>
                 </div>
             </div>
@@ -362,27 +363,27 @@ def render_dashboard_html() -> str:
                         <span>📰</span>
                         <span>Blog & Content Engine</span>
                     </div>
-                    <a class="sidebar-nav-item active" onclick="switchTab('repos')">
+                    <a class="sidebar-nav-item active" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('repos')">
                         <span class="flex items-center gap-2">
                             <span>📦</span>
                             <span>Connected Repos</span>
                         </span>
                         <span id="sidebar-badge-repos" class="sidebar-badge bg-slate-800 text-slate-300">-</span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('staging')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('staging')">
                         <span class="flex items-center gap-2">
                             <span>✍️</span>
                             <span>Editorial Staging</span>
                         </span>
                         <span id="badge-staging-count" class="sidebar-badge bg-amber-500/20 text-amber-300 border border-amber-500/30">0</span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('posts')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('posts')">
                         <span class="flex items-center gap-2">
                             <span>📑</span>
                             <span>Articles Feed</span>
                         </span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('zeroredeploy')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('zeroredeploy')">
                         <span class="flex items-center gap-2">
                             <span>⚡</span>
                             <span>1-Click Blog Embed</span>
@@ -397,34 +398,34 @@ def render_dashboard_html() -> str:
                         <span>💬</span>
                         <span>WhatsApp CRM & Automation</span>
                     </div>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-inbox')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-inbox')">
                         <span class="flex items-center gap-2">
                             <span>📥</span>
                             <span>Shared Team Inbox</span>
                         </span>
                         <span id="sidebar-badge-inbox" class="sidebar-badge bg-slate-800 text-slate-400">0</span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-contacts')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-contacts')">
                         <span class="flex items-center gap-2">
                             <span>👥</span>
                             <span>Contacts & Audience</span>
                         </span>
                         <span id="sidebar-badge-contacts" class="sidebar-badge bg-slate-800 text-slate-400">0</span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-deals')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-deals')">
                         <span class="flex items-center gap-2">
                             <span>🎯</span>
                             <span>Sales Pipeline (Kanban)</span>
                         </span>
                         <span id="sidebar-badge-deals" class="sidebar-badge bg-emerald-500/10 text-emerald-400 font-mono">$0</span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-broadcasts')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-broadcasts')">
                         <span class="flex items-center gap-2">
                             <span>📢</span>
                             <span>Broadcast Campaigns</span>
                         </span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-automations')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-automations')">
                         <span class="flex items-center gap-2">
                             <span>🤖</span>
                             <span>No-Code Automations</span>
@@ -439,25 +440,31 @@ def render_dashboard_html() -> str:
                         <span>⚙️</span>
                         <span>Platform & Settings</span>
                     </div>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-config')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-config')">
                         <span class="flex items-center gap-2">
                             <span>📱</span>
                             <span>WhatsApp API Setup</span>
                         </span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('supabase')">
+                    <a class="sidebar-nav-item" id="nav-users" role="button" tabindex="0" onclick="switchTab('users')" onkeydown="navKey(event,this)">
+                        <span class="flex items-center gap-2">
+                            <span>👥</span>
+                            <span>Users & Roles</span>
+                        </span>
+                    </a>
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('supabase')">
                         <span class="flex items-center gap-2">
                             <span>☁️</span>
                             <span>Supabase Cloud DB</span>
                         </span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('logs')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('logs')">
                         <span class="flex items-center gap-2">
                             <span>📋</span>
                             <span>Activity & Webhook Logs</span>
                         </span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('settings')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('settings')">
                         <span class="flex items-center gap-2">
                             <span>🛡️</span>
                             <span>Security & 2FA</span>
@@ -489,7 +496,8 @@ def render_dashboard_html() -> str:
         <div class="main-content">
             <!-- Top Action Bar -->
             <header class="top-bar">
-                <div>
+                <button type="button" class="menu-toggle" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false" onclick="toggleSidebar()">☰</button>
+                <div class="min-w-0 flex-1">
                     <h1 id="view-header-title" class="text-lg font-bold text-white tracking-tight">Connected Projects</h1>
                     <p id="view-header-sub" class="text-xs text-slate-400">Autonomous multi-repo daily blog publishing targets</p>
                 </div>
@@ -512,7 +520,8 @@ def render_dashboard_html() -> str:
             </header>
 
             <!-- Dashboard Body -->
-            <main class="flex-1 p-6 max-w-7xl w-full mx-auto">
+            <main class="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto" id="main-content">
+                <p class="text-[11px] text-slate-400 mb-3">Working in: <strong id="account-banner-name" class="text-slate-200">All accounts</strong></p>
                 <!-- 5 Top Metric Stat Cards -->
                 <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
                     <div class="metric-card">
@@ -1030,6 +1039,41 @@ def render_dashboard_html() -> str:
         </div>
 
         <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
+        <div id="tab-users" class="tab-content hidden">
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <section class="xl:col-span-2 bg-slate-900 border border-slate-800 rounded-xl shadow-xl" aria-labelledby="users-h">
+                    <div class="p-5 border-b border-slate-800 flex flex-wrap justify-between items-center gap-2">
+                        <h2 id="users-h" class="text-base font-semibold text-white">People with access to <span id="users-account-name">this account</span></h2>
+                        <span id="users-role-note" class="text-[11px] text-slate-400"></span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead class="text-[11px] uppercase text-slate-400 bg-slate-950/40"><tr>
+                                <th scope="col" class="px-5 py-3">User</th><th scope="col" class="px-5 py-3">Role</th><th scope="col" class="px-5 py-3 text-right">Actions</th>
+                            </tr></thead>
+                            <tbody id="users-table-body" class="divide-y divide-slate-800"></tbody>
+                        </table>
+                    </div>
+                    <div id="users-empty"></div>
+                </section>
+                <section id="users-invite-card" class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-4" aria-labelledby="invite-h" data-requires="users.manage">
+                    <h2 id="invite-h" class="text-base font-semibold text-white">Invite a person</h2>
+                    <form onsubmit="submitInviteUser(event)" class="space-y-3">
+                        <div>
+                            <label for="invite-username" class="block text-xs font-medium text-slate-300 mb-1">Username or email *</label>
+                            <input type="text" id="invite-username" required class="input-text text-xs" autocomplete="off">
+                        </div>
+                        <div>
+                            <label for="invite-role" class="block text-xs font-medium text-slate-300 mb-1">Role</label>
+                            <select id="invite-role" class="input-text text-xs"></select>
+                            <p id="invite-role-help" class="text-[11px] text-slate-500 mt-1"></p>
+                        </div>
+                        <button type="submit" class="btn-primary text-xs py-2 px-3 w-full">Send invite</button>
+                    </form>
+                </section>
+            </div>
+        </div>
+
         <div id="tab-wa-config" class="tab-content hidden">
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <!-- Meta Cloud API Credentials Form -->
@@ -1056,7 +1100,7 @@ def render_dashboard_html() -> str:
 
                         <div>
                             <label class="block text-xs font-medium text-slate-300 mb-1">Permanent System User Access Token *</label>
-                            <input type="password" id="wa-cfg-token" required class="input-text font-mono text-xs" placeholder="EAABwzLIXnzYBO...">
+                            <input type="password" id="wa-cfg-token" autocomplete="new-password" class="input-text font-mono text-xs" placeholder="Paste the access token from Meta">
                             <p class="text-[11px] text-slate-500 mt-1">Permanent Meta Business Token with <code>whatsapp_business_messaging</code> permissions.</p>
                         </div>
 
