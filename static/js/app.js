@@ -47,6 +47,11 @@ async function initApp() {
     await fetchPresets();
     await loadClients();
     await refreshMe();
+    if (needsPasswordChange()) { showPasswordChange(); return; }
+    if (!window.__accounts || window.__accounts.length === 0 || !getActiveAccountId()) {
+        showNoAccess(isPlatformAdmin());
+        if (!isPlatformAdmin()) return;
+    }
     await loadStatus();
     await loadProjects();
     await loadStagingPosts();
@@ -74,8 +79,22 @@ async function initApp() {
 }
 
 // --- Tabs & Sidebar Navigation ---
+const TAB_GUARD = {
+    'users': () => can('users.manage'),
+    'wa-config': () => can('wa.config'),
+    'supabase': () => isPlatformAdmin(),
+    'settings': () => isPlatformAdmin(),
+    'logs': () => can('audit.read'),
+    'zeroredeploy': () => can('content.publish'),
+    'wa-broadcasts': () => can('crm.read')
+};
+
 function switchTab(tabName) {
+    if (TAB_GUARD[tabName] && currentUser && !TAB_GUARD[tabName]()) tabName = 'repos';
+    const kpi = document.getElementById('kpi-cards');
+    if (kpi) kpi.classList.toggle('hidden', tabName !== 'repos');
     if (window.innerWidth <= 900) toggleSidebar(false);
+    toggleNewMenu(false);
     document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
     document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.sidebar-nav-item').forEach(el => el.classList.remove('active'));
@@ -226,6 +245,12 @@ function isScoped(endpoint) {
 function scopeUrl(endpoint) { return endpoint; }
 function scopeBody(endpoint, data) { return data; }
 
+function checkApiGuards(res) {
+    if (res && res.error === 'password_change_required') showPasswordChange();
+    if (res && res.error === 'forbidden' && res.required === 'membership') showNoAccess(false);
+    return res;
+}
+
 function getAuthHeaders(customHeaders = {}) {
     const headers = { ...customHeaders };
     try {
@@ -250,7 +275,7 @@ async function apiGet(endpoint) {
             window.location.href = '/login';
             return null;
         }
-        return await res.json();
+        return checkApiGuards(await res.json());
     } catch (err) {
         showToast(`Network error: ${err.message}`, 'error');
         return null;
@@ -270,7 +295,7 @@ async function apiPost(endpoint, data = {}) {
             window.location.href = '/login';
             return null;
         }
-        return await res.json();
+        return checkApiGuards(await res.json());
     } catch (err) {
         showToast(`Request failed: ${err.message}`, 'error');
         return null;
@@ -290,7 +315,7 @@ async function apiPut(endpoint, data = {}) {
             window.location.href = '/login';
             return null;
         }
-        return await res.json();
+        return checkApiGuards(await res.json());
     } catch (err) {
         showToast(`Request failed: ${err.message}`, 'error');
         return null;
@@ -315,6 +340,19 @@ async function apiDelete(endpoint, data) {
         showToast(`Delete failed: ${err.message}`, 'error');
         return null;
     }
+}
+
+// --- Money: always format with the deal's own currency ---
+function formatMoney(amount, currency) {
+    const cur = (currency || 'USD').toUpperCase();
+    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(amount || 0); }
+    catch (e) { return `${cur} ${Math.round(amount || 0).toLocaleString()}`; }
+}
+function sumByCurrency(deals) {
+    const m = {};
+    deals.forEach(d => { const c = (d.currency || 'USD').toUpperCase(); m[c] = (m[c] || 0) + (parseFloat(d.value) || 0); });
+    const keys = Object.keys(m);
+    return keys.length ? keys.map(c => formatMoney(m[c], c)).join(' + ') : formatMoney(0, 'USD');
 }
 
 // --- Presets ---
@@ -376,11 +414,10 @@ async function loadStatus() {
         }
 
         if (dealData && dealData.deals) {
-            const totalVal = dealData.deals.reduce((sum, d) => sum + (parseFloat(d.value) || 0), 0);
             const el = document.getElementById('stat-pipeline-value');
-            if (el) el.innerText = `$${totalVal.toLocaleString()}`;
+            if (el) el.innerText = sumByCurrency(dealData.deals);
             const badge = document.getElementById('sidebar-badge-deals');
-            if (badge) badge.innerText = `$${Math.round(totalVal/1000)}k`;
+            if (badge) badge.innerText = String(dealData.deals.length);
         }
 
         if (autoData && autoData.automations) {
@@ -1302,7 +1339,7 @@ async function selectConversation(convId, force = false) {
     if (idx !== -1 && allThreads[idx]) allThreads[idx].classList.add('active');
     
     // Mark as read
-    apiPost(`/api/whatsapp/conversations/${convId}/read`, {});
+    if (can('crm.write')) apiPost(`/api/whatsapp/conversations/${convId}/read`, {});
     
     const conv = currentConversationsList.find(c => c.id === convId);
     if (conv) {
@@ -1345,7 +1382,8 @@ async function loadConversationMessages(convId, silent = false) {
         const timeStr = msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
         let tick = '';
         if (!isInbound) {
-            if (msg.status === 'read') tick = '<span class="chat-status-tick text-cyan-300 font-bold" title="Read">✓✓</span>';
+            if (msg.status === 'mock') tick = '<span class="text-[10px] text-amber-300" title="Mock mode: not sent">mock</span>';
+            else if (msg.status === 'read') tick = '<span class="chat-status-tick text-cyan-300 font-bold" title="Read">✓✓</span>';
             else if (msg.status === 'delivered') tick = '<span class="chat-status-tick text-slate-300" title="Delivered">✓✓</span>';
             else tick = '<span class="chat-status-tick text-slate-400" title="Sent">✓</span>';
         }
@@ -1517,7 +1555,7 @@ async function loadWhatsAppDeals() {
         const subtotal = list.reduce((sum, d) => sum + (parseFloat(d.value) || 0), 0);
         
         if (countEl) countEl.innerText = list.length;
-        if (totalEl) totalEl.innerText = `$${subtotal.toLocaleString()}`;
+        if (totalEl) totalEl.innerText = sumByCurrency(list);
         
         list.forEach(deal => {
             const card = document.createElement('div');
@@ -1527,8 +1565,9 @@ async function loadWhatsAppDeals() {
             const prevStage = stageIndex > 0 ? stages[stageIndex - 1] : null;
             const nextStage = stageIndex < stages.length - 1 ? stages[stageIndex + 1] : null;
             
-            const prevBtn = prevStage ? `<button onclick="updateDealStage(${deal.id}, '${prevStage}')" class="text-slate-500 hover:text-indigo-400 text-xs px-1" title="Move back to ${prevStage}">←</button>` : '';
-            const nextBtn = nextStage ? `<button onclick="updateDealStage(${deal.id}, '${nextStage}')" class="text-slate-500 hover:text-emerald-400 text-xs px-1" title="Advance to ${nextStage}">→</button>` : '';
+            const canMove = can('crm.write');
+            const prevBtn = (canMove && prevStage) ? `<button onclick="updateDealStage(${deal.id}, '${prevStage}')" class="text-slate-500 hover:text-indigo-400 text-xs px-1" title="Move back to ${prevStage}">←</button>` : '';
+            const nextBtn = (canMove && nextStage) ? `<button onclick="updateDealStage(${deal.id}, '${nextStage}')" class="text-slate-500 hover:text-emerald-400 text-xs px-1" title="Advance to ${nextStage}">→</button>` : '';
             
             card.innerHTML = `
                 <div class="flex justify-between items-start mb-1.5">
@@ -1537,7 +1576,7 @@ async function loadWhatsAppDeals() {
                 </div>
                 <div class="text-[11px] text-slate-400 mb-2">${escapeHtml(deal.contact_name || 'Unassigned Contact')}</div>
                 <div class="flex justify-between items-center pt-2 border-t border-slate-900 text-xs">
-                    <span class="font-bold text-emerald-400">$${(parseFloat(deal.value) || 0).toLocaleString()}</span>
+                    <span class="font-bold text-emerald-400">${formatMoney(parseFloat(deal.value) || 0, deal.currency)}</span>
                     <div class="flex items-center gap-1 bg-slate-900 px-1 py-0.5 rounded border border-slate-800">
                         ${prevBtn}
                         <span class="text-[10px] text-slate-500 uppercase">${stage.substring(0, 3)}</span>
@@ -1634,6 +1673,7 @@ async function loadWhatsAppBroadcasts() {
 }
 
 async function runBroadcastFromUI(broadcastId) {
+    if (!confirm('Send this broadcast now to everyone in its audience?')) return;
     showToast('Executing WhatsApp broadcast campaign...', 'info');
     const res = await apiPost(`/api/whatsapp/broadcasts/${broadcastId}/run`, {});
     if (res && res.success) {
@@ -1740,9 +1780,18 @@ async function loadWhatsAppConfig() {
         document.getElementById('wa-cfg-token').placeholder = (cfg.has_token || cfg.access_token) ? `Saved (${cfg.token_masked || 'hidden'}). Leave blank to keep it` : 'Paste the access token from Meta';
     }
     if (document.getElementById('wa-cfg-verify-token')) document.getElementById('wa-cfg-verify-token').value = cfg.verify_token || '';
+    window.__mock = cfg.mock_mode === true;
+    const mb = document.getElementById('wa-mode-badge');
+    if (mb && typeof cfg.mock_mode === 'boolean') {
+        mb.classList.remove('hidden');
+        mb.className = 'text-xs px-2 py-0.5 rounded-full border flex items-center gap-1 font-normal ' + (cfg.mock_mode ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30');
+        mb.innerText = cfg.mock_mode ? 'Mock mode: messages are not sent' : 'Live';
+    }
+    const simCard = document.getElementById('wa-sim-card');
+    if (simCard) simCard.classList.toggle('hidden', !(cfg.mock_mode === true && can('wa.config')));
     const hint = document.getElementById('wa-webhook-url-display');
     if (hint) {
-        const path = cfg.webhook_path || cfg.webhook_url || '';
+        const path = cfg.webhook_url || cfg.webhook_path || '';
         hint.value = path ? (path.startsWith('http') ? path : window.location.origin + path) : window.location.origin + '/api/webhook/whatsapp';
     }
     const sec = document.getElementById('wa-cfg-app-secret');
@@ -1937,6 +1986,7 @@ function applyRolePermissions() {
         if (n) n.classList.toggle('hidden', !isPlatformAdmin());
     });
     document.querySelectorAll('[data-requires]').forEach(el => {
+        if (el.id === 'wa-sim-card') return;
         el.classList.toggle('hidden', !can(el.getAttribute('data-requires')));
     });
     const nav = document.getElementById('nav-users');
@@ -1954,6 +2004,9 @@ function applyRolePermissions() {
     ['openAddContactModal', 'openAddDealModal'].forEach(fn => {
         document.querySelectorAll(`header [onclick^="${fn}"]`).forEach(b => b.classList.toggle('hidden', !write));
     });
+    const anyAction = [...document.querySelectorAll('#top-actions > *')].some(b => !b.classList.contains('hidden'));
+    const nb = document.getElementById('new-menu-btn');
+    if (nb) nb.style.visibility = anyAction ? '' : 'hidden';
     const roleEl = document.querySelector('.sidebar-footer .text-slate-400');
     if (roleEl && currentUser) roleEl.innerText = currentUser.role ? currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1) : '';
 }
@@ -2005,7 +2058,7 @@ async function loadUsersAndRoles() {
                 ? `<select aria-label="Role for ${escapeHtml(u.username)}" class="input-text text-xs" onchange="changeUserRole(${Number(uid)}, this.value)">${opts}</select>`
                 : `<span class="text-xs text-slate-300">${escapeHtml(u.role)}</span>`}</td>
             <td class="px-5 py-3 text-right">${manage && !locked
-                ? `<button class="btn-secondary text-[11px] py-1 px-2.5 text-red-400" onclick="revokeUser(${Number(uid)}, ${jsAttr(u.username)})">Revoke access</button>` : ''}</td>`;
+                ? `<button class="btn-secondary text-[11px] py-1 px-2.5 mr-1" onclick="resetUserPassword(${Number(uid)}, ${jsAttr(u.username)})">Reset password</button><button class="btn-secondary text-[11px] py-1 px-2.5 text-red-400" onclick="revokeUser(${Number(uid)}, ${jsAttr(u.username)})">Revoke access</button>` : ''}</td>`;
         body.appendChild(tr);
     });
 }
@@ -2106,3 +2159,121 @@ async function apiPatch(endpoint, data = {}) {
         return await res.json();
     } catch (err) { showToast(`Request failed: ${err.message}`, 'error'); return null; }
 }
+
+
+// ====================================================================
+// Full-page states: no access, first-login password, "New" menu, modal focus
+// ====================================================================
+function needsPasswordChange() {
+    try { if (localStorage.getItem('gitpulse_must_change') === '1') return true; } catch (e) {}
+    return !!(currentUser && currentUser.must_change_password);
+}
+
+function showPasswordChange() {
+    const o = document.getElementById('overlay-change-password');
+    if (o && o.classList.contains('hidden')) { o.classList.remove('hidden'); const f = document.getElementById('chpw-current'); if (f) f.focus(); }
+}
+
+async function submitFirstLoginPassword(e) {
+    e.preventDefault();
+    const msg = document.getElementById('chpw-msg');
+    msg.innerText = '';
+    const res = await apiPost('/api/auth/change-password', {
+        current_password: document.getElementById('chpw-current').value,
+        new_password: document.getElementById('chpw-new').value
+    });
+    if (res && !res.error) {
+        try { localStorage.removeItem('gitpulse_must_change'); localStorage.removeItem('gitpulse_token'); } catch (err) {}
+        document.cookie = 'session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
+        window.location.href = '/login';
+    } else {
+        msg.innerText = (res && (res.error || res.message)) || 'Could not change the password.';
+    }
+}
+
+function showNoAccess(canCreate) {
+    const o = document.getElementById('overlay-no-access');
+    if (!o) return;
+    const txt = document.getElementById('noaccess-text');
+    if (canCreate) {
+        document.getElementById('noaccess-h').innerText = 'No client accounts yet';
+        txt.innerText = 'Create the first client account to start.';
+        o.classList.add('hidden');
+        const banner = document.getElementById('account-banner-name');
+        if (banner) banner.innerText = 'No account yet. Use "+ New account" in the sidebar.';
+        return;
+    }
+    document.getElementById('noaccess-h').innerText = 'You no longer have access';
+    txt.innerText = 'Your access to this client account was removed, or it has not been set up yet. Ask an account owner to add you.';
+    o.classList.remove('hidden');
+}
+
+function toggleNewMenu(force) {
+    const panel = document.getElementById('top-actions');
+    const btn = document.getElementById('new-menu-btn');
+    if (!panel || !btn) return;
+    const open = typeof force === 'boolean' ? force : !panel.classList.contains('open');
+    panel.classList.toggle('open', open);
+    btn.setAttribute('aria-expanded', String(open));
+}
+
+// Focus handling for modals: focus the first field on open, keep Tab inside, restore focus on close.
+(function setupModalFocus() {
+    const opener = new WeakMap();
+    const obs = new MutationObserver(muts => {
+        muts.forEach(m => {
+            const el = m.target;
+            if (!el.id || !el.id.startsWith('modal-')) return;
+            if (!el.classList.contains('hidden')) {
+                opener.set(el, document.activeElement);
+                const f = el.querySelector('input:not([type=hidden]), select, textarea, button');
+                if (f) setTimeout(() => f.focus(), 30);
+            } else {
+                const prev = opener.get(el);
+                if (prev && prev.focus) prev.focus();
+            }
+        });
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('[id^="modal-"]').forEach(m => {
+            m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true');
+            obs.observe(m, { attributes: true, attributeFilter: ['class'] });
+        });
+    });
+    document.addEventListener('keydown', ev => {
+        if (ev.key !== 'Tab') return;
+        const m = document.querySelector('[id^="modal-"]:not(.hidden)');
+        if (!m) return;
+        const f = [...m.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select, textarea')].filter(x => x.offsetParent !== null);
+        if (!f.length) return;
+        const first = f[0], last = f[f.length - 1];
+        if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+        else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+    });
+})();
+
+async function resetUserPassword(uid, name) {
+    if (!confirm(`Create a new temporary password for ${name}? Their current sessions end immediately.`)) return;
+    const acct = getActiveAccountId();
+    const res = await apiPost(`/api/accounts/${encodeURIComponent(acct)}/users/${uid}/reset-password`, {});
+    const note = document.getElementById('invite-result');
+    if (res && res.temporary_password) {
+        if (note) {
+            note.innerHTML = `New temporary password for <strong>${escapeHtml(name)}</strong>, shown once: <code id="tmp-pw" class="text-emerald-300">${escapeHtml(res.temporary_password)}</code> <button type="button" class="btn-secondary text-[11px] py-0.5 px-2" onclick="copyTempPassword()">Copy</button>`;
+        }
+        showToast('Password reset. Copy it now.', 'success');
+    } else {
+        showToast(errorText(res, 'Could not reset the password.'), 'error');
+    }
+}
+
+function copyTempPassword() {
+    const el = document.getElementById('tmp-pw');
+    if (!el) return;
+    navigator.clipboard.writeText(el.innerText).then(() => {
+        showToast('Copied. It will not be shown again.', 'success');
+        const note = document.getElementById('invite-result');
+        if (note) note.innerText = 'Password copied. It is no longer shown.';
+    });
+}
+

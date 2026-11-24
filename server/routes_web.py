@@ -211,6 +211,7 @@ def render_login_html() -> str:
                     } catch (e) {
                         console.error('Local token store error', e);
                     }
+                    try { if (data.must_change_password) localStorage.setItem('gitpulse_must_change', '1'); else localStorage.removeItem('gitpulse_must_change'); } catch (e) {}
                     setTimeout(() => {
                         window.location.href = '/';
                     }, 50);
@@ -492,7 +493,8 @@ def render_dashboard_html() -> str:
                     <p id="view-header-sub" class="text-xs text-slate-400">Autonomous multi-repo daily blog publishing targets</p>
                 </div>
 
-                <div class="flex items-center space-x-2.5">
+                <button type="button" id="new-menu-btn" class="new-menu-btn btn-primary text-xs py-2 px-3" aria-haspopup="true" aria-expanded="false" onclick="toggleNewMenu()">New ▾</button>
+                <div id="top-actions" class="top-actions flex items-center space-x-2.5">
                     <button onclick="openAddProjectModal()" class="btn-primary flex items-center space-x-1.5 text-xs py-2 px-3 shadow-indigo-500/25">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
                         <span>Connect Website in 60s</span>
@@ -513,7 +515,7 @@ def render_dashboard_html() -> str:
             <main class="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto" id="main-content">
                 <p class="text-[11px] text-slate-400 mb-3">Working in: <strong id="account-banner-name" class="text-slate-200">All accounts</strong></p>
                 <!-- 5 Top Metric Stat Cards -->
-                <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+                <div id="kpi-cards" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
                     <div class="metric-card">
                         <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">Connected Repos</div>
                         <div class="text-xl font-bold mt-1 text-white" id="stat-repos-count">-</div>
@@ -792,11 +794,9 @@ def render_dashboard_html() -> str:
                 <div>
                     <h2 class="text-lg font-semibold text-white flex items-center gap-2">
                         <span>💬 WhatsApp Shared Team Inbox</span>
-                        <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 font-normal">
-                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Meta Cloud API Live
-                        </span>
+                        <span id="wa-mode-badge" class="hidden text-xs px-2 py-0.5 rounded-full border flex items-center gap-1 font-normal"></span>
                     </h2>
-                    <p class="text-sm text-slate-400">Two-way live threaded messaging, delivery ticks (sent, delivered, read), quick replies, and lead assignment.</p>
+                    <p class="text-sm text-slate-400">Two-way threaded WhatsApp messaging for this client account.</p>
                 </div>
                 <div class="flex items-center gap-2">
                     <button onclick="loadWhatsAppInbox()" class="btn-secondary text-xs">🔄 Refresh Chats</button>
@@ -847,17 +847,8 @@ def render_dashboard_html() -> str:
                             <!-- Populated dynamically -->
                         </div>
 
-                        <!-- Canned Quick Replies -->
-                        <div class="px-4 py-2 border-t border-slate-800/80 bg-slate-950/40 flex items-center gap-1.5 overflow-x-auto">
-                            <span class="text-[10px] text-slate-500 uppercase font-semibold mr-1 flex-shrink-0">Quick Replies:</span>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply(this.dataset.text)" data-text="Hi! Thanks for getting in touch. How can we help?">👋 Welcome</button>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply(this.dataset.text)" data-text="Thanks for your message. We have received it and will reply shortly.">🙏 Received</button>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply(this.dataset.text)" data-text="Could you share a few more details so we can help you better?">❓ More details</button>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply(this.dataset.text)" data-text="Thank you! Is there anything else we can help with?">✅ Wrap up</button>
-                        </div>
-
                         <!-- Message Composer Input -->
-                        <form onsubmit="sendWhatsAppReply(event)" class="p-3 border-t border-slate-800 bg-slate-950 flex items-center gap-2">
+                        <form onsubmit="sendWhatsAppReply(event)" data-requires="crm.write" class="p-3 border-t border-slate-800 bg-slate-950 flex items-center gap-2">
                             <input type="text" id="wa-message-input" placeholder="Type WhatsApp message (Enter to send)..." class="input-text text-xs flex-1 py-2">
                             <button type="submit" class="btn-primary text-xs py-2 px-4 flex items-center gap-1.5 shadow-indigo-500/30">
                                 <span>Send</span>
@@ -1157,7 +1148,7 @@ def render_dashboard_html() -> str:
                     </div>
 
                     <!-- Interactive Live WhatsApp Message Simulator -->
-                    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+                    <div id="wa-sim-card" data-requires="wa.config" class="hidden bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
                         <div class="flex justify-between items-center">
                             <h2 class="text-base font-semibold text-white flex items-center gap-2">
                                 <span>🧪 Inbound WhatsApp Simulator</span>
@@ -1170,18 +1161,18 @@ def render_dashboard_html() -> str:
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
                                     <label class="block text-xs font-medium text-slate-400 mb-1">Sender Name</label>
-                                    <input type="text" id="wa-sim-name" value="Test Contact" class="input-text text-xs">
+                                    <input type="text" id="wa-sim-name" placeholder="Contact name" class="input-text text-xs">
                                 </div>
                                 <div>
                                     <label class="block text-xs font-medium text-slate-400 mb-1">Sender Phone</label>
-                                    <input type="text" id="wa-sim-phone" value="+15550100000" class="input-text text-xs font-mono">
+                                    <input type="text" id="wa-sim-phone" placeholder="+countrycode number" class="input-text text-xs font-mono">
                                 </div>
                             </div>
 
                             <div>
                                 <label class="block text-xs font-medium text-slate-400 mb-1">Incoming Message Body</label>
                                 <div class="flex gap-2">
-                                    <input type="text" id="wa-sim-message" value="Hello, this is a test message." class="input-text text-xs flex-1">
+                                    <input type="text" id="wa-sim-message" placeholder="Message text" class="input-text text-xs flex-1">
                                     <button type="submit" class="btn-primary text-xs py-2 px-3 whitespace-nowrap shadow-cyan-500/20">
                                         Test Message
                                     </button>
@@ -1763,6 +1754,28 @@ def render_dashboard_html() -> str:
 """ + _get_embedded_js() + """
         }
     </script>
+
+    <div id="overlay-no-access" class="hidden fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6" role="alertdialog" aria-labelledby="noaccess-h">
+        <div class="max-w-md text-center space-y-3">
+            <h1 id="noaccess-h" class="text-xl font-bold text-white">No access to a client account</h1>
+            <p id="noaccess-text" class="text-sm text-slate-400">Your access was removed or has not been set up yet. Ask an account owner to add you.</p>
+            <div id="noaccess-actions" class="flex justify-center gap-2">
+                <button type="button" class="btn-secondary text-xs py-2 px-3" onclick="handleLogout()">Sign out</button>
+            </div>
+        </div>
+    </div>
+    <div id="overlay-change-password" class="hidden fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6" role="dialog" aria-labelledby="chpw-h">
+        <form onsubmit="submitFirstLoginPassword(event)" class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-3">
+            <h1 id="chpw-h" class="text-lg font-bold text-white">Choose a new password</h1>
+            <p class="text-xs text-slate-400">You signed in with a temporary password. Set your own to continue.</p>
+            <label for="chpw-current" class="block text-xs text-slate-300">Temporary password</label>
+            <input type="password" id="chpw-current" required autocomplete="current-password" class="input-text text-xs">
+            <label for="chpw-new" class="block text-xs text-slate-300">New password (8+ characters)</label>
+            <input type="password" id="chpw-new" required minlength="8" autocomplete="new-password" class="input-text text-xs">
+            <p id="chpw-msg" class="text-xs text-red-400" role="alert"></p>
+            <button type="submit" class="btn-primary text-xs py-2 px-3 w-full">Save and continue</button>
+        </form>
+    </div>
 </body>
 </html>
 """

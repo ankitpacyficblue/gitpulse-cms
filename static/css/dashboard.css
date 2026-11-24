@@ -943,3 +943,14 @@ input:checked + .slider:before {
     table { display: block; overflow-x: auto; }
 }
 @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+
+/* Header "New" menu: one button under 640px */
+.new-menu-btn { display: none; }
+@media (max-width: 640px) {
+    .new-menu-btn { display: inline-flex; margin-left: auto; }
+    .top-actions { display: none !important; position: absolute; right: 0.75rem; top: 3.75rem; z-index: 45;
+        flex-direction: column; align-items: stretch; gap: 0.5rem; padding: 0.5rem; background: #0f172a;
+        border: 1px solid #334155; border-radius: 0.5rem; }
+    .top-actions.open { display: flex !important; }
+    .top-actions > * { margin: 0 !important; }
+}
