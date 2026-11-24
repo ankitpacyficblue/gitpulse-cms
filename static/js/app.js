@@ -344,15 +344,15 @@ async function apiDelete(endpoint, data) {
 
 // --- Money: always format with the deal's own currency ---
 function formatMoney(amount, currency) {
-    const cur = (currency || 'USD').toUpperCase();
+    const cur = (currency || 'INR').toUpperCase();
     try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(amount || 0); }
     catch (e) { return `${cur} ${Math.round(amount || 0).toLocaleString()}`; }
 }
 function sumByCurrency(deals) {
     const m = {};
-    deals.forEach(d => { const c = (d.currency || 'USD').toUpperCase(); m[c] = (m[c] || 0) + (parseFloat(d.value) || 0); });
+    deals.forEach(d => { const c = (d.currency || 'INR').toUpperCase(); m[c] = (m[c] || 0) + (parseFloat(d.value) || 0); });
     const keys = Object.keys(m);
-    return keys.length ? keys.map(c => formatMoney(m[c], c)).join(' + ') : formatMoney(0, 'USD');
+    return keys.length ? keys.map(c => formatMoney(m[c], c)).join(' + ') : formatMoney(0, 'INR');
 }
 
 // --- Presets ---
@@ -1890,7 +1890,8 @@ async function submitAddDeal(e) {
     const expected_close = document.getElementById('new-deal-close').value;
     const notes = document.getElementById('new-deal-notes').value;
     
-    const res = await apiPost('/api/whatsapp/deals', { title, value, stage, contact_id, expected_close, notes });
+    const currency = document.getElementById('new-deal-currency').value || 'INR';
+    const res = await apiPost('/api/whatsapp/deals', { title, value, currency, stage, contact_id, expected_close, notes });
     if (res && res.success) {
         showToast(`Deal "${title}" added to pipeline!`, 'success');
         closeAddDealModal();

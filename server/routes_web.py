@@ -1633,8 +1633,13 @@ def render_dashboard_html() -> str:
                 </div>
                 <div class="grid grid-cols-2 gap-3">
                     <div>
-                        <label class="block text-xs font-medium text-slate-300 mb-1">Deal Value ($) *</label>
-                        <input type="number" step="100" id="new-deal-value" required class="input-text font-mono" placeholder="4200">
+                        <label for="new-deal-value" class="block text-xs font-medium text-slate-300 mb-1">Deal value *</label>
+                        <div class="flex gap-2">
+                            <select id="new-deal-currency" aria-label="Currency" class="input-text text-xs w-24">
+                                <option value="INR" selected>INR ₹</option><option value="USD">USD $</option><option value="EUR">EUR €</option><option value="GBP">GBP £</option><option value="AED">AED</option>
+                            </select>
+                            <input type="number" step="1" min="0" id="new-deal-value" required class="input-text font-mono flex-1" placeholder="45000">
+                        </div>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-300 mb-1">Pipeline Stage</label>
