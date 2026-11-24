@@ -142,6 +142,9 @@ def init_schema(conn) -> None:
         is_active INTEGER NOT NULL DEFAULT 1, executions_count INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )""")
+    acct_cols = {r[1] for r in cur.execute("PRAGMA table_info(accounts)").fetchall()}
+    if "default_currency" not in acct_cols:
+        cur.execute("ALTER TABLE accounts ADD COLUMN default_currency TEXT NOT NULL DEFAULT 'INR'")
     conv_cols = {r[1] for r in cur.execute("PRAGMA table_info(conversations)").fetchall()}
     if "assigned_user_id" not in conv_cols:
         cur.execute("ALTER TABLE conversations ADD COLUMN assigned_user_id INTEGER")
@@ -179,6 +182,17 @@ def get_account(account_id: str) -> Optional[Dict[str, Any]]:
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM accounts WHERE id = ? AND status != 'deleted'", (account_id,)).fetchone()
         return dict(row) if row else None
+
+
+def set_default_currency(account_id: str, currency: str) -> bool:
+    cur_code = (currency or "").strip().upper()
+    if not (len(cur_code) == 3 and cur_code.isalpha()):
+        raise ValueError("Currency must be a 3-letter code such as INR or USD.")
+    with get_connection() as conn:
+        cur = conn.execute("UPDATE accounts SET default_currency = ? WHERE id = ? AND status != 'deleted'",
+                           (cur_code, account_id))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def rename_account(account_id: str, name: str) -> bool:
@@ -585,7 +599,9 @@ def list_deals(account_id: str) -> List[Dict[str, Any]]:
 
 
 def create_deal(account_id: str, title: str, value: float, stage: str = "lead", contact_id: Optional[int] = None,
-                currency: str = "USD", expected_close: str = "", notes: str = "") -> int:
+                currency: Optional[str] = None, expected_close: str = "", notes: str = "") -> int:
+    if not currency:
+        currency = (get_account(account_id) or {}).get("default_currency") or "INR"
     if contact_id is not None and not get_contact(account_id, contact_id):
         raise ValueError("contact_not_found")
     now = _now()

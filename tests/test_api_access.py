@@ -194,6 +194,20 @@ class TestCrossAccountIsolationViaApi(Base):
         self.assertEqual(self.users["admin"]("PUT", base, {"user_id": None})[0], 200)
         self.assertEqual(cs.get_conversation(self.acct, conv["id"])["assigned_to"], "Team")
 
+    def test_default_currency_is_inr_and_editable(self):
+        acct = new_account()
+        from tests.apihelpers import new_user as nu, join as jn
+        u = nu("cur"); jn(acct, u, "owner")
+        c = Caller(u, acct)
+        did = cs.create_deal(acct, "D1", 10)
+        self.assertEqual([d["currency"] for d in cs.list_deals(acct) if d["id"] == did], ["INR"])
+        self.assertEqual(c("PATCH", f"/api/accounts/{acct}", {"default_currency": "usd"})[0], 200)
+        self.assertEqual(c("GET", f"/api/accounts/{acct}")[1]["default_currency"], "USD")
+        self.assertEqual(c("PATCH", f"/api/accounts/{acct}", {"default_currency": "rupees"})[0], 400)
+        did2 = c("POST", "/api/whatsapp/deals", {"title": "D2"})[1]["id"]
+        self.assertEqual([d["currency"] for d in cs.list_deals(acct) if d["id"] == did2], ["USD"])
+        self.assertEqual(self.users["admin"]("PATCH", f"/api/accounts/{self.acct}", {"default_currency": "EUR"})[0], 403)
+
     def test_deal_cannot_link_foreign_contact(self):
         cid = cs.create_contact(self.other, "Foreign", "+15559990002")
         code, _ = self.users["owner"]("POST", "/api/whatsapp/deals", {"title": "Steal", "contact_id": cid})

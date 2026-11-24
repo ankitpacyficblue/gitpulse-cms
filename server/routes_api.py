@@ -275,15 +275,19 @@ def accounts_create(ctx, m, q, body):
 @route("GET", r"/api/accounts/(?P<aid>[0-9a-f]{32})", "member")
 def account_get(ctx, m, q, body):
     a = cs.get_account(ctx.account_id)
-    return 200, {"id": a["id"], "name": a["name"], "role": ctx.role, "permissions": sorted(permissions_for(ctx.role))}
+    return 200, {"id": a["id"], "name": a["name"], "default_currency": a.get("default_currency", "INR"), "role": ctx.role, "permissions": sorted(permissions_for(ctx.role))}
 
 
 @route("PATCH", r"/api/accounts/(?P<aid>[0-9a-f]{32})", "path:account.manage")
 def account_rename(ctx, m, q, body):
+    ok = False
     try:
-        ok = cs.rename_account(ctx.account_id, body.get("name", ""))
+        if "default_currency" in body:
+            ok = cs.set_default_currency(ctx.account_id, body["default_currency"])
+        if "name" in body or "default_currency" not in body:
+            ok = cs.rename_account(ctx.account_id, body.get("name", ""))
     except ValueError as e:
-        return 400, {"error": "name_required", "message": str(e)}
+        return 400, {"error": "invalid_input", "message": str(e)}
     return 200, {"success": ok}
 
 
@@ -708,7 +712,7 @@ def deals_create(ctx, m, q, body):
         return 400, {"error": "invalid_stage", "allowed": DEAL_STAGES}
     try:
         did = cs.create_deal(ctx.account_id, title, value, stage=body.get("stage", "lead"),
-                             contact_id=_int(body.get("contact_id")), currency=body.get("currency", "USD"),
+                             contact_id=_int(body.get("contact_id")), currency=(body.get("currency") or None),
                              expected_close=body.get("expected_close", ""), notes=body.get("notes", ""))
     except ValueError:
         return 404, {"error": "Contact not found."}
