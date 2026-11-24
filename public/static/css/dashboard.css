@@ -910,3 +910,47 @@ input:checked + .slider:before {
     transform: translateX(16px);
 }
 
+
+/* ====================================================================
+   Small windows: sidebar becomes a slide-in menu, nothing scrolls sideways
+   ==================================================================== */
+.menu-toggle { display: none; }
+.sidebar-backdrop { display: none; }
+
+:focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
+
+@media (max-width: 900px) {
+    .menu-toggle {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 2.5rem; height: 2.5rem; margin-right: 0.5rem; flex-shrink: 0;
+        border: 1px solid #334155; border-radius: 0.5rem; background: #0f172a; color: #e2e8f0;
+    }
+    .sidebar {
+        position: fixed; left: 0; top: 0; bottom: 0; height: 100%;
+        transform: translateX(-100%); transition: transform 0.2s ease;
+        max-width: 85vw; z-index: 50;
+    }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-backdrop.open {
+        display: block; position: fixed; inset: 0; background: rgba(2, 6, 23, 0.6); z-index: 40;
+    }
+    .top-bar { height: auto; min-height: 4rem; padding: 0.5rem 0.75rem; flex-wrap: wrap; gap: 0.5rem; }
+    .top-bar > div:last-child { overflow-x: auto; max-width: 100%; padding-bottom: 2px; }
+    .top-bar > div:last-child > * { flex-shrink: 0; }
+    .main-content { width: 100%; }
+    .chat-container { flex-direction: column; height: auto; min-height: 640px; }
+    .chat-sidebar { width: 100% !important; max-height: 260px; border-right: 0; border-bottom: 1px solid #1e293b; }
+    table { display: block; overflow-x: auto; }
+}
+@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+
+/* Header "New" menu: one button under 640px */
+.new-menu-btn { display: none; }
+@media (max-width: 640px) {
+    .new-menu-btn { display: inline-flex; margin-left: auto; }
+    .top-actions { display: none !important; position: absolute; right: 0.75rem; top: 3.75rem; z-index: 45;
+        flex-direction: column; align-items: stretch; gap: 0.5rem; padding: 0.5rem; background: #0f172a;
+        border: 1px solid #334155; border-radius: 0.5rem; }
+    .top-actions.open { display: flex !important; }
+    .top-actions > * { margin: 0 !important; }
+}

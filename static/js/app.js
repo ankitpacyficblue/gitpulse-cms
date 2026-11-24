@@ -113,7 +113,7 @@ function switchTab(tabName) {
         'staging': { title: 'Editorial Staging & Review', sub: 'Review, edit, and approve AI-generated drafts with live SEO scoring' },
         'posts': { title: 'Published Blog Articles', sub: 'Inspect published posts, live Markdown, and GitHub commits/PRs' },
         'zeroredeploy': { title: 'Zero-Redeploy "One-Time Blog Page"', sub: 'Turnkey dynamic blog embed with zero CI/CD rebuilds' },
-        'wa-inbox': { title: 'Shared Team Inbox', sub: 'Two-way live WhatsApp messaging with delivery status and quick replies' },
+        'wa-inbox': { title: 'Shared Team Inbox', sub: 'Two-way WhatsApp conversations for your team' },
         'wa-contacts': { title: 'Contacts & Audience CRM', sub: 'Manage customer profiles, lead tags, and WhatsApp communication history' },
         'wa-deals': { title: 'Sales Pipeline (Kanban)', sub: 'Track and advance deals across qualification, proposals, and closed won' },
         'wa-broadcasts': { title: 'Broadcast Campaigns', sub: 'Mass WhatsApp messaging campaigns segmented by audience tags' },
