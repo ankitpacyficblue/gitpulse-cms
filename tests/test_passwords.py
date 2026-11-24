@@ -62,6 +62,7 @@ class TestTempPasswords(unittest.TestCase):
         code, body = self.admin_c("POST", f"/api/accounts/{self.acct}/users/{uid}/reset-password")
         self.assertEqual(code, 200)
         self.assertTrue(body["must_change_password"])
+        self.assertIsNone(auth.validate_session(old_token))          # old session is dead: 401 for the caller
         ok, token, _ = login("fresh3", body["temporary_password"])
         self.assertTrue(ok)
         self.assertTrue(auth.validate_session(token)["must_change_password"])
