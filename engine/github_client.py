@@ -34,6 +34,9 @@ class GitHubClient:
         if "/" not in repo_clean:
             return False, f"Invalid repository format '{repo}'. Expected 'owner/repo'."
 
+        if self.token == "mock":
+            return True, f"Connected to {repo_clean} (Mock Simulation Mode: Push access enabled)."
+
         url = f"{self.base_url}/repos/{repo_clean}"
         req = urllib.request.Request(url, headers=self._get_headers(), method="GET")
 

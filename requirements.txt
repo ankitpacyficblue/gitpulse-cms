@@ -1,0 +1,3 @@
+# GitPulse CMS Dependencies
+# Built entirely on modern Python 3 standard library with zero external dependencies.
+# The serverless runtime uses built-in urllib, json, sqlite3, and http.server.

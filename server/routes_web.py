@@ -200,9 +200,18 @@ def render_dashboard_html() -> str:
 
             <!-- Header Actions & User Session -->
             <div class="flex items-center space-x-3">
-                <button onclick="openAddProjectModal()" class="btn-primary flex items-center space-x-1.5 text-sm">
+                <!-- Multi-Tenant Client Filter -->
+                <div class="flex items-center space-x-1.5 bg-slate-900 border border-slate-800 rounded-lg p-1 text-xs">
+                    <span class="text-slate-400 pl-1.5 font-medium">Client:</span>
+                    <select id="client-select-filter" onchange="onClientFilterChange()" class="bg-transparent text-slate-200 text-xs py-0.5 px-1 outline-none border-none cursor-pointer">
+                        <option value="">All Clients</option>
+                    </select>
+                    <button onclick="openAddClientModal()" class="text-indigo-400 hover:text-indigo-300 font-semibold px-1.5 py-0.5 rounded hover:bg-slate-800" title="Add New Business / Client">+ Add</button>
+                </div>
+
+                <button onclick="openAddProjectModal()" class="btn-primary flex items-center space-x-1.5 text-sm shadow-indigo-500/25">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                    <span>Connect Repository</span>
+                    <span>Connect Website in 60s</span>
                 </button>
 
                 <div class="h-6 w-px bg-slate-800 mx-1"></div>
@@ -393,6 +402,41 @@ def render_dashboard_html() -> str:
 
         <!-- TAB: SETTINGS & 2FA -->
         <div id="tab-settings" class="tab-content hidden">
+            <!-- Supabase Cloud PostgreSQL Database -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4 mb-6">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <h2 class="text-base font-semibold text-white flex items-center gap-2">
+                            <span>☁️ Supabase Cloud Database Architecture</span>
+                            <span id="badge-supabase-status" class="text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400">Checking...</span>
+                        </h2>
+                        <p class="text-xs text-slate-400 mt-0.5">Persist articles, multi-client repositories, and system configurations permanently in Supabase PostgreSQL across Vercel serverless runs.</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Supabase REST URL</label>
+                        <input type="text" id="setting-supabase-url" class="input-text font-mono text-xs" value="https://suvmyyonlqyipzgnmony.supabase.co" placeholder="https://<ref>.supabase.co">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Supabase API Key (Service Role or Anon Key)</label>
+                        <input type="password" id="setting-supabase-key" class="input-text font-mono text-xs" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+                        <p class="text-[11px] text-slate-500 mt-1">Project Ref: <code>suvmyyonlqyipzgnmony</code>. Found in Supabase Project Settings -> API.</p>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-3 pt-1">
+                    <button type="button" onclick="testSupabaseFromUI()" class="btn-secondary text-xs flex items-center gap-1.5">
+                        <span>⚡ Test Supabase Connection</span>
+                    </button>
+                    <button type="button" onclick="syncAllToSupabaseFromUI()" class="btn-secondary text-xs flex items-center gap-1.5 text-indigo-300 border-indigo-500/30">
+                        <span>☁️ Sync All Content to Cloud</span>
+                    </button>
+                    <span id="supabase-test-feedback" class="text-xs font-mono"></span>
+                </div>
+            </div>
+
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <!-- Global Secrets & AI Provider -->
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-5">
@@ -552,85 +596,258 @@ def render_dashboard_html() -> str:
         </div>
     </div>
 
-    <!-- Add Repository Modal -->
+    <!-- Interactive 3-Step Website Connection Wizard (Built for Non-Technical Users) -->
     <div id="modal-add-project" class="modal-backdrop hidden">
         <div class="modal-dialog max-w-2xl">
+            <!-- Header -->
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-lg font-bold text-white">Connect New GitHub Repository</h3>
-                <button onclick="closeAddProjectModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <div>
+                    <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                        <span>⚡ Connect Your Website</span>
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-normal">3-Step Easy Setup</span>
+                    </h3>
+                    <p class="text-xs text-slate-400 mt-0.5">Automate daily SEO blog publishing directly into any GitHub project.</p>
+                </div>
+                <button onclick="closeAddProjectModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
             </div>
-            <form id="form-add-project" onsubmit="submitAddProject(event)" class="space-y-4">
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Project Name *</label>
-                        <input type="text" id="add-name" required class="input-text" placeholder="e.g. Acme Tech Blog">
+
+            <!-- Visual Step Indicator -->
+            <div class="wizard-step-bar">
+                <div id="step-node-1" class="wizard-step-node active">
+                    <span class="wizard-step-number">1</span>
+                    <span>Website Platform</span>
+                </div>
+                <div class="h-0.5 flex-1 bg-slate-800 mx-2"></div>
+                <div id="step-node-2" class="wizard-step-node">
+                    <span class="wizard-step-number">2</span>
+                    <span>GitHub Repo</span>
+                </div>
+                <div class="h-0.5 flex-1 bg-slate-800 mx-2"></div>
+                <div id="step-node-3" class="wizard-step-node">
+                    <span class="wizard-step-number">3</span>
+                    <span>Topics & Tone</span>
+                </div>
+            </div>
+
+            <!-- STEP 1: Website Platform Picker -->
+            <div id="wizard-step-1" class="space-y-4">
+                <div>
+                    <div class="text-xs font-semibold text-slate-300 mb-1">What kind of website is this?</div>
+                    <p class="text-xs text-slate-400 mb-3">Click your platform and GitPulse will automatically configure file folders and templates for you.</p>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="wizard-card selected" onclick="selectWizardFramework('nextjs', this)">
+                        <div class="check-icon">✓</div>
+                        <div class="text-2xl mb-1.5">⚛️</div>
+                        <div class="font-bold text-white text-sm">Next.js</div>
+                        <div class="text-xs text-slate-400 mt-1">Modern React website. Automatically writes rich MDX to <code>content/posts</code>.</div>
                     </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">GitHub Repo (owner/repo) *</label>
-                        <input type="text" id="add-repo" required class="input-text" placeholder="e.g. acme-inc/website">
+
+                    <div class="wizard-card" onclick="selectWizardFramework('astro', this)">
+                        <div class="check-icon">✓</div>
+                        <div class="text-2xl mb-1.5">🚀</div>
+                        <div class="font-bold text-white text-sm">Astro</div>
+                        <div class="text-xs text-slate-400 mt-1">Superfast content collections. Writes Markdown to <code>src/content/blog</code>.</div>
+                    </div>
+
+                    <div class="wizard-card" onclick="selectWizardFramework('generic', this)">
+                        <div class="check-icon">✓</div>
+                        <div class="text-2xl mb-1.5">🌐</div>
+                        <div class="font-bold text-white text-sm">HTML / Simple Website</div>
+                        <div class="text-xs text-slate-400 mt-1">Turnkey zero-redeploy blog. Automatically renders live articles without code changes.</div>
+                    </div>
+
+                    <div class="wizard-card" onclick="selectWizardFramework('hugo', this)">
+                        <div class="check-icon">✓</div>
+                        <div class="text-2xl mb-1.5">⚡</div>
+                        <div class="font-bold text-white text-sm">Hugo / Jekyll / Docs</div>
+                        <div class="text-xs text-slate-400 mt-1">Classic static site or GitHub Pages repo. Writes Markdown to <code>content/posts</code>.</div>
                     </div>
                 </div>
 
-                <div class="grid grid-cols-3 gap-4">
+                <!-- Hidden inputs maintained automatically for form submission -->
+                <input type="hidden" id="wizard-framework" value="nextjs">
+                <input type="hidden" id="wizard-content-dir" value="content/posts">
+                <input type="hidden" id="wizard-file-ext" value=".mdx">
+
+                <!-- Collapsible technical settings for developers -->
+                <details class="text-xs text-slate-400 pt-1">
+                    <summary class="cursor-pointer text-indigo-400 hover:text-indigo-300">⚙️ Advanced Folder Settings (Optional)</summary>
+                    <div class="grid grid-cols-2 gap-3 mt-2 bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+                        <div>
+                            <label class="block text-slate-400 mb-1">Target Directory</label>
+                            <input type="text" id="wizard-custom-dir" value="content/posts" class="input-text text-xs font-mono" oninput="document.getElementById('wizard-content-dir').value = this.value">
+                        </div>
+                        <div>
+                            <label class="block text-slate-400 mb-1">Branch</label>
+                            <input type="text" id="wizard-branch" value="main" class="input-text text-xs font-mono">
+                        </div>
+                    </div>
+                </details>
+
+                <div class="flex justify-end pt-3 border-t border-slate-800">
+                    <button type="button" onclick="goToWizardStep(2)" class="btn-primary text-sm flex items-center gap-1.5">
+                        <span>Continue to GitHub</span>
+                        <span>→</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- STEP 2: GitHub Repository Linker -->
+            <div id="wizard-step-2" class="space-y-4 hidden">
+                <div class="space-y-3">
                     <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Framework Preset</label>
-                        <select id="add-framework" onchange="onFrameworkSelect()" class="input-select">
-                            <option value="nextjs">Next.js (MDX / Contentlayer)</option>
-                            <option value="astro">Astro (Content Collections)</option>
-                            <option value="hugo">Hugo</option>
-                            <option value="jekyll">Jekyll / GitHub Pages</option>
-                            <option value="docusaurus">Docusaurus</option>
-                            <option value="generic">Generic Markdown</option>
+                        <label class="block text-xs font-medium text-slate-300 mb-1">Business / Client *</label>
+                        <div class="flex gap-2">
+                            <select id="wizard-client-id" class="input-select text-xs">
+                                <option value="">(Select or create business)</option>
+                            </select>
+                            <button type="button" onclick="openAddClientModal()" class="btn-secondary text-xs whitespace-nowrap">+ Add Client</button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-medium text-slate-300 mb-1">Website Name or Label *</label>
+                        <input type="text" id="wizard-name" class="input-text text-sm" placeholder="e.g. Acme Health Blog">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-medium text-slate-300 mb-1">GitHub Repository (owner/repo) *</label>
+                        <input type="text" id="wizard-repo" class="input-text text-sm font-mono" placeholder="e.g. your-org/your-website" oninput="resetWizardVerify()">
+                        <p class="text-[11px] text-slate-400 mt-1">Format: <code>username/repository</code></p>
+                    </div>
+
+                    <!-- 1-Click Token Callout -->
+                    <div class="p-3 rounded-lg bg-indigo-950/40 border border-indigo-500/20 text-xs space-y-1.5">
+                        <div class="flex items-center justify-between">
+                            <span class="font-semibold text-indigo-300 flex items-center gap-1">🔑 GitHub Access Token</span>
+                            <a href="https://github.com/settings/tokens/new?scopes=repo&description=GitPulse+CMS" target="_blank" class="text-cyan-400 hover:underline flex items-center gap-0.5">
+                                <span>Create Token in 1-Click</span>
+                                <span>↗</span>
+                            </a>
+                        </div>
+                        <input type="password" id="wizard-token" class="input-text text-xs" placeholder="ghp_... (Leave blank to use the token saved in Settings)">
+                        <p class="text-[10px] text-slate-400">Requires <code>repo</code> permissions to create blog commits or pull requests.</p>
+                    </div>
+
+                    <!-- Interactive Live Verify Button & Status Banner -->
+                    <div>
+                        <button type="button" id="btn-wizard-verify" onclick="verifyWizardGitHub()" class="btn-secondary w-full text-xs py-2 flex items-center justify-center gap-2">
+                            <span>⚡ Test Repository Connection</span>
+                        </button>
+                        <div id="wizard-verify-result" class="hidden mt-2 p-2.5 rounded text-xs"></div>
+                    </div>
+                </div>
+
+                <div class="flex justify-between pt-3 border-t border-slate-800">
+                    <button type="button" onclick="goToWizardStep(1)" class="btn-secondary text-sm">← Back</button>
+                    <button type="button" onclick="goToWizardStep(3)" class="btn-primary text-sm flex items-center gap-1.5">
+                        <span>Continue to Topics & Tone</span>
+                        <span>→</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- STEP 3: Topic & Autopilot Preferences -->
+            <div id="wizard-step-3" class="space-y-4 hidden">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">What should GitPulse write about? *</label>
+                    <textarea id="wizard-topic" rows="2" class="input-text text-xs resize-none" placeholder="e.g. Health innovations, intermittent fasting, clinical nutrition, and preventative wellness."></textarea>
+                    
+                    <!-- Instant Inspiration Chips -->
+                    <div class="flex flex-wrap gap-1.5 mt-2">
+                        <span class="text-[11px] text-slate-400 mr-1 flex items-center">Inspiration:</span>
+                        <span class="inspiration-chip" onclick="applyInspiration('AI & Machine Learning', 'Cutting-edge LLM architectures, agentic AI frameworks, prompt engineering, vector databases, and real-world deployment.')">🤖 AI & LLMs</span>
+                        <span class="inspiration-chip" onclick="applyInspiration('SaaS & Startups', 'Product-led growth, churn reduction, MRR scaling, user onboarding, and B2B SaaS architecture.')">🚀 SaaS & Growth</span>
+                        <span class="inspiration-chip" onclick="applyInspiration('Health & Wellness', 'Preventative health, evidence-based nutrition, longevity science, fitness routines, and mental wellness.')">🌿 Health & Wellness</span>
+                        <span class="inspiration-chip" onclick="applyInspiration('Fintech & Investing', 'Algorithmic trading, personal finance, automated wealth building, index funds, and financial independence.')">📈 Fintech & Finance</span>
+                    </div>
+                </div>
+
+                <!-- Tone Selector -->
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Writing Tone</label>
+                    <input type="hidden" id="wizard-tone" value="Authoritative, practical, and engaging">
+                    <div class="grid grid-cols-3 gap-2">
+                        <div class="tone-pill selected" onclick="selectTone('Authoritative, practical, and engaging', this)">
+                            <div class="font-bold text-white text-xs">👔 Professional</div>
+                            <div class="text-[10px] text-slate-400 mt-0.5">Authoritative & clear</div>
+                        </div>
+                        <div class="tone-pill" onclick="selectTone('Conversational, modern, punchy, and direct', this)">
+                            <div class="font-bold text-white text-xs">🚀 Startup Casual</div>
+                            <div class="text-[10px] text-slate-400 mt-0.5">Energetic & punchy</div>
+                        </div>
+                        <div class="tone-pill" onclick="selectTone('Educational, benchmark-driven, step-by-step, and beginner-friendly', this)">
+                            <div class="font-bold text-white text-xs">🎓 Educational</div>
+                            <div class="text-[10px] text-slate-400 mt-0.5">Step-by-step guides</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Publishing Safety Choice -->
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Publishing Mode</label>
+                    <input type="hidden" id="wizard-publishing-mode" value="pr">
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="wizard-card selected" onclick="selectPublishMode('pr', this)">
+                            <div class="check-icon">✓</div>
+                            <div class="font-bold text-white text-xs flex items-center gap-1">🛡️ Review First (Recommended)</div>
+                            <div class="text-[11px] text-slate-400 mt-1">Generates articles into your Review Queue so you can review before they go live on GitHub.</div>
+                        </div>
+                        <div class="wizard-card" onclick="selectPublishMode('direct', this)">
+                            <div class="check-icon">✓</div>
+                            <div class="font-bold text-white text-xs flex items-center gap-1">⚡ Full Autopilot</div>
+                            <div class="text-[11px] text-slate-400 mt-1">Directly commits and publishes articles to your website every day without manual steps.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-300 mb-1">Daily Publishing Time (UTC)</label>
+                        <select id="wizard-publish-time" class="input-select text-xs">
+                            <option value="09:00">Morning (09:00 UTC / 2:30 PM IST)</option>
+                            <option value="13:00">Midday (13:00 UTC / 6:30 PM IST)</option>
+                            <option value="18:00">Evening (18:00 UTC / 11:30 PM IST)</option>
+                            <option value="04:00">Early Morning (04:00 UTC / 9:30 AM IST)</option>
                         </select>
                     </div>
                     <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Branch</label>
-                        <input type="text" id="add-branch" value="main" class="input-text">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Publishing Mode</label>
-                        <select id="add-publishing-mode" class="input-select">
-                            <option value="pr">Pull Request (Recommended)</option>
-                            <option value="direct">Direct Commit</option>
-                        </select>
+                        <label class="block text-xs font-medium text-slate-300 mb-1">Author Name</label>
+                        <input type="text" id="wizard-author" value="Editorial Team" class="input-text text-xs">
                     </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Content Directory</label>
-                        <input type="text" id="add-content-dir" value="content/posts" class="input-text">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Daily Publish Time (UTC)</label>
-                        <input type="text" id="add-publish-time" value="09:00" class="input-text" placeholder="HH:MM e.g. 09:00">
-                    </div>
+                <div class="flex justify-between pt-3 border-t border-slate-800">
+                    <button type="button" onclick="goToWizardStep(2)" class="btn-secondary text-sm">← Back</button>
+                    <button type="button" id="btn-wizard-submit" onclick="submitWizardProject()" class="btn-primary text-sm flex items-center gap-1.5 shadow-indigo-500/40">
+                        <span>✨ Connect Website & Start Publishing</span>
+                    </button>
                 </div>
+            </div>
+        </div>
+    </div>
 
+    <!-- Modal: Add New Business / Client -->
+    <div id="modal-add-client" class="modal-backdrop hidden">
+        <div class="modal-dialog max-w-md">
+            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
+                <h3 class="text-base font-bold text-white">Add New Client or Business</h3>
+                <button onclick="closeAddClientModal()" class="text-slate-400 hover:text-white">&times;</button>
+            </div>
+            <form onsubmit="submitAddClient(event)" class="space-y-4">
                 <div>
-                    <label class="block text-xs font-medium text-slate-400 mb-1">Core Topic & Niche *</label>
-                    <textarea id="add-topic" required rows="2" class="input-text resize-none" placeholder="e.g. Distributed database architecture, Raft consensus, vector search, and cloud scalability."></textarea>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Business Name *</label>
+                    <input type="text" id="new-client-name" required class="input-text" placeholder="e.g. Acme Digital or Fintech Labs">
                 </div>
-
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Target Audience</label>
-                        <input type="text" id="add-audience" value="Senior Backend Engineers & Architects" class="input-text">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Tone of Voice</label>
-                        <input type="text" id="add-tone" value="Authoritative, practical, and code-rich" class="input-text">
-                    </div>
-                </div>
-
                 <div>
-                    <label class="block text-xs font-medium text-slate-400 mb-1">Seed Keywords (comma-separated)</label>
-                    <input type="text" id="add-keywords" class="input-text" placeholder="databases, distributed systems, golang, performance, storage">
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Contact Email (Optional)</label>
+                    <input type="email" id="new-client-email" class="input-text" placeholder="team@business.com">
                 </div>
-
-                <div class="flex justify-end space-x-3 pt-3 border-t border-slate-800">
-                    <button type="button" onclick="closeAddProjectModal()" class="btn-secondary">Cancel</button>
-                    <button type="submit" class="btn-primary">Save & Activate</button>
+                <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                    <button type="button" onclick="closeAddClientModal()" class="btn-secondary text-xs">Cancel</button>
+                    <button type="submit" class="btn-primary text-xs">Save Client</button>
                 </div>
             </form>
         </div>

@@ -5,6 +5,7 @@ Handles persistent storage with WAL mode, robust transaction management, and ORM
 
 import sqlite3
 import json
+import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from config import DATABASE_PATH, FRAMEWORK_PRESETS
@@ -23,10 +24,21 @@ def init_db():
     with get_connection() as conn:
         cursor = conn.cursor()
         
+        # Clients / Organizations Table (Multi-tenant grouping)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS clients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            contact_email TEXT DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """)
+
         # Projects Table
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
             name TEXT NOT NULL,
             github_repo TEXT NOT NULL,
             github_branch TEXT NOT NULL DEFAULT 'main',
@@ -151,6 +163,8 @@ def init_db():
 
         # Safe Column Migrations for Existing Databases
         project_cols = [c[1] for c in cursor.execute("PRAGMA table_info(projects)").fetchall()]
+        if "client_id" not in project_cols:
+            cursor.execute("ALTER TABLE projects ADD COLUMN client_id INTEGER REFERENCES clients(id)")
         if "auto_publish" not in project_cols:
             cursor.execute("ALTER TABLE projects ADD COLUMN auto_publish INTEGER NOT NULL DEFAULT 1")
         if "forbidden_words" not in project_cols:
@@ -180,26 +194,86 @@ def init_db():
 
         conn.commit()
 
-# --- Project Operations ---
+# --- Client / Multi-Tenant Operations ---
 
-def list_projects() -> List[Dict[str, Any]]:
+def list_clients() -> List[Dict[str, Any]]:
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
+            SELECT c.*, 
+                   COUNT(p.id) as total_projects
+            FROM clients c
+            LEFT JOIN projects p ON c.id = p.client_id
+            GROUP BY c.id
+            ORDER BY c.name ASC
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+def get_client(client_id: int) -> Optional[Dict[str, Any]]:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clients WHERE id = ?", (client_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+def create_client(name: str, contact_email: str = "") -> int:
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO clients (name, contact_email, created_at) VALUES (?, ?, ?)",
+                       (name.strip(), contact_email.strip(), now))
+        conn.commit()
+        client_id = cursor.lastrowid
+
+        # Sync to Supabase if configured
+        try:
+            sb = get_supabase_client()
+            if sb.is_configured():
+                sb.table("clients").insert({"name": name.strip(), "contact_email": contact_email.strip()})
+        except Exception:
+            pass
+
+        return client_id
+
+def delete_client(client_id: int) -> bool:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE projects SET client_id = NULL WHERE client_id = ?", (client_id,))
+        cursor.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+# --- Project Operations ---
+
+def list_projects(client_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        query = """
             SELECT p.*, 
+                   c.name as client_name,
                    COUNT(post.id) as total_posts,
                    SUM(CASE WHEN post.status = 'published' THEN 1 ELSE 0 END) as published_posts
             FROM projects p
+            LEFT JOIN clients c ON p.client_id = c.id
             LEFT JOIN posts post ON p.id = post.project_id
-            GROUP BY p.id
-            ORDER BY p.id DESC
-        """)
+        """
+        params = []
+        if client_id is not None:
+            query += " WHERE p.client_id = ?"
+            params.append(client_id)
+        query += " GROUP BY p.id ORDER BY p.id DESC"
+        cursor.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
 def get_project(project_id: int) -> Optional[Dict[str, Any]]:
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+        cursor.execute("""
+            SELECT p.*, c.name as client_name
+            FROM projects p
+            LEFT JOIN clients c ON p.client_id = c.id
+            WHERE p.id = ?
+        """, (project_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -212,18 +286,27 @@ def create_project(data: Dict[str, Any]) -> int:
     file_extension = data.get("file_extension") or preset["file_extension"]
     frontmatter_template = data.get("frontmatter_template") or preset["frontmatter_template"]
 
+    raw_client_id = data.get("client_id")
+    client_id = None
+    if raw_client_id not in (None, "", "null"):
+        try:
+            client_id = int(raw_client_id)
+        except (ValueError, TypeError):
+            client_id = None
+
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO projects (
-                name, github_repo, github_branch, github_token,
+                client_id, name, github_repo, github_branch, github_token,
                 target_framework, content_dir, file_extension,
                 frontmatter_template, topic, target_audience, tone,
                 keywords, author_name, publishing_mode, publish_time,
                 is_active, auto_publish, forbidden_words, webhook_secret,
                 zero_redeploy_enabled, blog_page_path, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
+            client_id,
             data.get("name", "New Project"),
             data.get("github_repo", "").strip(),
             data.get("github_branch", "main").strip(),
@@ -249,14 +332,54 @@ def create_project(data: Dict[str, Any]) -> int:
             now
         ))
         conn.commit()
-        return cursor.lastrowid
+        project_id = cursor.lastrowid
+
+        # Async or direct write to Supabase cloud if active
+        try:
+            sb = get_supabase_client()
+            if sb.is_configured():
+                sb.table("projects").insert({
+                    "name": data.get("name", "New Project"),
+                    "github_repo": data.get("github_repo", "").strip(),
+                    "github_branch": data.get("github_branch", "main").strip(),
+                    "target_framework": framework,
+                    "content_dir": content_dir.strip("/"),
+                    "file_extension": file_extension,
+                    "frontmatter_template": frontmatter_template,
+                    "topic": data.get("topic", "").strip(),
+                    "target_audience": data.get("target_audience", "Developers and Tech Enthusiasts").strip(),
+                    "tone": data.get("tone", "Authoritative, practical, and engaging").strip(),
+                    "keywords": data.get("keywords", "").strip(),
+                    "author_name": data.get("author_name", "Editorial Team").strip(),
+                    "publishing_mode": data.get("publishing_mode", "pr"),
+                    "publish_time": data.get("publish_time", "09:00").strip(),
+                    "is_active": bool(data.get("is_active", True)),
+                    "auto_publish": bool(data.get("auto_publish", True)),
+                    "forbidden_words": data.get("forbidden_words", "").strip(),
+                    "webhook_secret": data.get("webhook_secret", "").strip(),
+                    "zero_redeploy_enabled": bool(data.get("zero_redeploy_enabled", True)),
+                    "blog_page_path": data.get("blog_page_path", "public/blog/index.html").strip()
+                })
+        except Exception:
+            pass
+
+        return project_id
 
 def update_project(project_id: int, data: Dict[str, Any]) -> bool:
     now = datetime.utcnow().isoformat()
+    raw_client_id = data.get("client_id")
+    client_id = None
+    if raw_client_id not in (None, "", "null"):
+        try:
+            client_id = int(raw_client_id)
+        except (ValueError, TypeError):
+            client_id = None
+
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE projects SET
+                client_id = COALESCE(?, client_id),
                 name = COALESCE(?, name),
                 github_repo = COALESCE(?, github_repo),
                 github_branch = COALESCE(?, github_branch),
@@ -281,6 +404,7 @@ def update_project(project_id: int, data: Dict[str, Any]) -> bool:
                 updated_at = ?
             WHERE id = ?
         """, (
+            client_id,
             data.get("name"),
             data.get("github_repo"),
             data.get("github_branch"),
@@ -577,3 +701,89 @@ def seed_demo_data():
         create_project(p)
 
     log_event("Initialized database and seeded starter projects.", "INFO")
+
+# --- Supabase Cloud PostgreSQL Sync & Bridge ---
+
+def get_supabase_client():
+    from engine.supabase_client import SupabaseClient
+    url = os.environ.get("SUPABASE_URL") or get_setting("supabase_url", "https://suvmyyonlqyipzgnmony.supabase.co")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY") or get_setting("supabase_key", "")
+    return SupabaseClient(url=url, key=key)
+
+def test_supabase_connection() -> Dict[str, Any]:
+    sb = get_supabase_client()
+    ok, msg = sb.test_connection()
+    return {
+        "configured": sb.is_configured(),
+        "url": sb.base_url,
+        "connected": ok,
+        "message": msg
+    }
+
+def sync_all_to_supabase() -> Dict[str, Any]:
+    sb = get_supabase_client()
+    if not sb.is_configured():
+        return {"success": False, "error": "Supabase key is not configured. Please enter your Service Role or Anon key in Settings."}
+
+    synced_clients = 0
+    synced_projects = 0
+    synced_posts = 0
+
+    try:
+        # Sync clients
+        for c in list_clients():
+            sb.table("clients").insert({
+                "name": c["name"],
+                "contact_email": c.get("contact_email", "")
+            })
+            synced_clients += 1
+
+        # Sync projects
+        for p in list_projects():
+            sb.table("projects").insert({
+                "name": p["name"],
+                "github_repo": p["github_repo"],
+                "github_branch": p.get("github_branch", "main"),
+                "target_framework": p.get("target_framework", "nextjs"),
+                "content_dir": p.get("content_dir", "content/posts"),
+                "file_extension": p.get("file_extension", ".mdx"),
+                "frontmatter_template": p.get("frontmatter_template", ""),
+                "topic": p.get("topic", ""),
+                "target_audience": p.get("target_audience", ""),
+                "tone": p.get("tone", ""),
+                "keywords": p.get("keywords", ""),
+                "author_name": p.get("author_name", "Editorial Team"),
+                "publishing_mode": p.get("publishing_mode", "pr"),
+                "publish_time": p.get("publish_time", "09:00"),
+                "is_active": bool(p.get("is_active", 1)),
+                "auto_publish": bool(p.get("auto_publish", 1)),
+                "forbidden_words": p.get("forbidden_words", ""),
+                "webhook_secret": p.get("webhook_secret", ""),
+                "zero_redeploy_enabled": bool(p.get("zero_redeploy_enabled", 1)),
+                "blog_page_path": p.get("blog_page_path", "public/blog/index.html")
+            })
+            synced_projects += 1
+
+        # Sync posts
+        for post in list_posts(limit=100):
+            sb.table("posts").insert({
+                "project_id": post["project_id"],
+                "title": post["title"],
+                "slug": post["slug"],
+                "excerpt": post.get("excerpt", ""),
+                "content_markdown": post.get("content_markdown", ""),
+                "frontmatter_yaml": post.get("frontmatter_yaml", ""),
+                "target_path": post.get("target_path", ""),
+                "status": post.get("status", "draft"),
+                "seo_score": post.get("seo_score", 100),
+                "github_commit_sha": post.get("github_commit_sha"),
+                "github_pr_url": post.get("github_pr_url")
+            })
+            synced_posts += 1
+
+        return {
+            "success": True,
+            "message": f"Successfully synced {synced_clients} clients, {synced_projects} projects, and {synced_posts} posts to Supabase cloud."
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Supabase sync failed: {str(e)}"}

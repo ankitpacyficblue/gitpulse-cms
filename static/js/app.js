@@ -33,12 +33,14 @@ async function initApp() {
 
     // 2. Load Dashboard Components
     await fetchPresets();
+    await loadClients();
     await loadStatus();
     await loadProjects();
     await loadStagingPosts();
     await loadPosts();
     await loadLogs();
     await loadSettings();
+    await loadSupabaseStatus();
 
     // Auto-refresh metrics, staging queue, and logs every 15 seconds
     setInterval(() => {
@@ -236,24 +238,40 @@ async function loadStatus() {
 
 // --- Projects Management ---
 async function loadProjects() {
-    const data = await apiGet('/api/projects');
+    const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
+    const url = clientFilter ? `/api/projects?client_id=${clientFilter}` : '/api/projects';
+    const data = await apiGet(url);
     if (!data || !data.projects) return;
 
     const grid = document.getElementById('projects-grid');
     grid.innerHTML = '';
 
     const filterSelect = document.getElementById('post-filter-project');
-    filterSelect.innerHTML = '<option value="">All Repositories</option>';
+    if (filterSelect) filterSelect.innerHTML = '<option value="">All Repositories</option>';
 
     const zeroRedeploySelect = document.getElementById('zeroredeploy-project-select');
     if (zeroRedeploySelect) zeroRedeploySelect.innerHTML = '';
 
+    if (data.projects.length === 0) {
+        grid.innerHTML = `
+            <div class="col-span-full p-8 text-center bg-slate-900 border border-slate-800 rounded-xl">
+                <div class="text-3xl mb-2">🌐</div>
+                <h3 class="text-base font-bold text-white mb-1">No Websites Connected Yet</h3>
+                <p class="text-xs text-slate-400 max-w-md mx-auto mb-4">Connect your GitHub repository in 60 seconds and start publishing automated SEO articles every day.</p>
+                <button onclick="openAddProjectModal()" class="btn-primary text-xs py-2 px-4 shadow-indigo-500/30">⚡ Connect Website in 60s</button>
+            </div>
+        `;
+        return;
+    }
+
     data.projects.forEach(p => {
         // Populate filters
-        const opt = document.createElement('option');
-        opt.value = p.id;
-        opt.innerText = `${p.name} (${p.github_repo})`;
-        filterSelect.appendChild(opt);
+        if (filterSelect) {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.innerText = `${p.name} (${p.github_repo})`;
+            filterSelect.appendChild(opt);
+        }
 
         if (zeroRedeploySelect) {
             const opt2 = document.createElement('option');
@@ -268,9 +286,12 @@ async function loadProjects() {
         card.innerHTML = `
             <div>
                 <div class="flex justify-between items-start mb-2">
-                    <span class="text-xs px-2 py-0.5 rounded uppercase font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                        ${p.target_framework}
-                    </span>
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                        <span class="text-xs px-2 py-0.5 rounded uppercase font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                            ${p.target_framework}
+                        </span>
+                        ${p.client_name ? `<span class="text-[11px] px-2 py-0.5 rounded font-medium bg-slate-800 text-slate-300 border border-slate-700">🏢 ${escapeHtml(p.client_name)}</span>` : ''}
+                    </div>
                     <span class="text-xs text-slate-400 flex items-center gap-1">
                         ⏰ ${p.publish_time} UTC
                     </span>
@@ -291,7 +312,7 @@ async function loadProjects() {
                 <div class="flex justify-between items-center">
                     <div class="flex space-x-1.5">
                         <button onclick="triggerProjectRun(${p.id}, this)" class="btn-primary text-xs py-1 px-2.5">
-                            ⚡ Publish Now
+                            ✨ Write Today's Article
                         </button>
                         <button onclick="testGitHubConnection(${p.id}, this)" class="btn-secondary text-xs py-1 px-2">
                             Verify Repo
@@ -304,7 +325,7 @@ async function loadProjects() {
                 
                 <!-- Zero Redeploy Installer button -->
                 <button onclick="installZeroRedeployForProject(${p.id})" class="w-full text-center text-[11px] py-1 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 hover:bg-indigo-500/20">
-                    Commit 1-Time Blog Page to Repo ↗
+                    🚀 Add 1-Time Live Blog to Website ↗
                 </button>
             </div>
         `;
@@ -623,49 +644,290 @@ function closePostModal() {
     document.getElementById('modal-post').classList.add('hidden');
 }
 
-// --- Modals & Add Project ---
+// --- Multi-Tenant Clients Management ---
+async function loadClients() {
+    const data = await apiGet('/api/clients');
+    if (!data || !data.clients) return;
+
+    // Header client filter
+    const headerFilter = document.getElementById('client-select-filter');
+    if (headerFilter) {
+        const curVal = headerFilter.value;
+        headerFilter.innerHTML = '<option value="">All Clients</option>';
+        data.clients.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.id;
+            opt.innerText = c.name;
+            headerFilter.appendChild(opt);
+        });
+        headerFilter.value = curVal;
+    }
+
+    // Wizard client selector
+    const wizardClient = document.getElementById('wizard-client-id');
+    if (wizardClient) {
+        wizardClient.innerHTML = '<option value="">(Select or create business)</option>';
+        data.clients.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.id;
+            opt.innerText = c.name;
+            wizardClient.appendChild(opt);
+        });
+    }
+}
+
+function onClientFilterChange() {
+    loadProjects();
+}
+
+function openAddClientModal() {
+    document.getElementById('modal-add-client').classList.remove('hidden');
+}
+
+function closeAddClientModal() {
+    document.getElementById('modal-add-client').classList.add('hidden');
+}
+
+async function submitAddClient(e) {
+    e.preventDefault();
+    const name = document.getElementById('new-client-name').value;
+    const email = document.getElementById('new-client-email').value;
+
+    const res = await apiPost('/api/clients', { name, contact_email: email });
+    if (res && res.id) {
+        showToast('Client created successfully!', 'success');
+        closeAddClientModal();
+        document.getElementById('new-client-name').value = '';
+        document.getElementById('new-client-email').value = '';
+        await loadClients();
+        const wizardClient = document.getElementById('wizard-client-id');
+        if (wizardClient) wizardClient.value = res.id;
+    } else {
+        showToast(res ? res.error : 'Failed to create client', 'error');
+    }
+}
+
+// --- Interactive 3-Step Wizard (Built for Non-Technical UX) ---
+let currentWizardStep = 1;
+
 function openAddProjectModal() {
+    currentWizardStep = 1;
+    goToWizardStep(1);
     document.getElementById('modal-add-project').classList.remove('hidden');
-    onFrameworkSelect();
+    loadClients();
+}
+
+function openConnectWizard() {
+    openAddProjectModal();
 }
 
 function closeAddProjectModal() {
     document.getElementById('modal-add-project').classList.add('hidden');
 }
 
-function onFrameworkSelect() {
-    const framework = document.getElementById('add-framework').value;
-    const preset = globalPresets[framework];
-    if (preset) {
-        document.getElementById('add-content-dir').value = preset.content_dir;
+function goToWizardStep(step) {
+    // Validation before proceeding to step 3
+    if (step === 3) {
+        const repo = document.getElementById('wizard-repo').value.trim();
+        const name = document.getElementById('wizard-name').value.trim();
+        if (!repo) {
+            showToast('Please enter your GitHub repository (e.g. username/repo)', 'error');
+            return;
+        }
+        if (!name) {
+            document.getElementById('wizard-name').value = repo.split('/')[1] || repo;
+        }
+    }
+
+    currentWizardStep = step;
+
+    // Show/hide step panels
+    document.getElementById('wizard-step-1').classList.toggle('hidden', step !== 1);
+    document.getElementById('wizard-step-2').classList.toggle('hidden', step !== 2);
+    document.getElementById('wizard-step-3').classList.toggle('hidden', step !== 3);
+
+    // Update step bar visual nodes
+    for (let i = 1; i <= 3; i++) {
+        const node = document.getElementById(`step-node-${i}`);
+        if (!node) continue;
+        node.classList.remove('active', 'completed');
+        if (i === step) node.classList.add('active');
+        else if (i < step) node.classList.add('completed');
     }
 }
 
-async function submitAddProject(e) {
-    e.preventDefault();
+function selectWizardFramework(framework, cardEl) {
+    document.querySelectorAll('#wizard-step-1 .wizard-card').forEach(c => c.classList.remove('selected'));
+    cardEl.classList.add('selected');
+
+    document.getElementById('wizard-framework').value = framework;
+    const preset = globalPresets[framework] || globalPresets['generic'];
+    if (preset) {
+        document.getElementById('wizard-content-dir').value = preset.content_dir;
+        document.getElementById('wizard-file-ext').value = preset.file_extension;
+        const customDir = document.getElementById('wizard-custom-dir');
+        if (customDir) customDir.value = preset.content_dir;
+    }
+}
+
+function resetWizardVerify() {
+    const resEl = document.getElementById('wizard-verify-result');
+    if (resEl) {
+        resEl.className = 'hidden';
+        resEl.innerHTML = '';
+    }
+}
+
+async function verifyWizardGitHub() {
+    const repo = document.getElementById('wizard-repo').value.trim();
+    const token = document.getElementById('wizard-token').value.trim();
+    const btn = document.getElementById('btn-wizard-verify');
+    const resEl = document.getElementById('wizard-verify-result');
+
+    if (!repo) {
+        showToast('Please enter your GitHub repository first.', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="inline-block animate-spin mr-1">🔄</span> Verifying GitHub Access...';
+
+    const res = await apiPost('/api/github/verify', {
+        github_repo: repo,
+        github_token: token
+    });
+
+    btn.disabled = false;
+    btn.innerHTML = '<span>⚡ Test Repository Connection</span>';
+
+    resEl.classList.remove('hidden');
+    if (res && res.valid) {
+        resEl.className = 'mt-2 p-2.5 rounded text-xs bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 flex items-center gap-2';
+        resEl.innerHTML = `<span>✅ <strong>Connected!</strong> Found <code>${escapeHtml(res.repo)}</code> on branch <code>${escapeHtml(res.branch)}</code>.</span>`;
+    } else {
+        resEl.className = 'mt-2 p-2.5 rounded text-xs bg-amber-500/10 border border-amber-500/30 text-amber-300 flex items-center gap-2';
+        resEl.innerHTML = `<span>⚠️ ${escapeHtml(res ? res.message : 'Could not verify repository. Please check name and token permissions.')}</span>`;
+    }
+}
+
+function applyInspiration(niche, topicText) {
+    document.getElementById('wizard-topic').value = topicText;
+    const nameInput = document.getElementById('wizard-name');
+    if (!nameInput.value) {
+        nameInput.value = niche;
+    }
+    showToast(`Applied topic inspiration: ${niche}`, 'info');
+}
+
+function selectTone(tone, pillEl) {
+    document.querySelectorAll('.tone-pill').forEach(p => p.classList.remove('selected'));
+    pillEl.classList.add('selected');
+    document.getElementById('wizard-tone').value = tone;
+}
+
+function selectPublishMode(mode, cardEl) {
+    document.querySelectorAll('#wizard-step-3 .wizard-card').forEach(c => c.classList.remove('selected'));
+    cardEl.classList.add('selected');
+    document.getElementById('wizard-publishing-mode').value = mode;
+}
+
+async function submitWizardProject() {
+    const btn = document.getElementById('btn-wizard-submit');
+    const name = document.getElementById('wizard-name').value.trim();
+    const repo = document.getElementById('wizard-repo').value.trim();
+    const topic = document.getElementById('wizard-topic').value.trim();
+
+    if (!name || !repo || !topic) {
+        showToast('Please fill in the website name, GitHub repository, and topic.', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerText = 'Connecting Website...';
+
     const payload = {
-        name: document.getElementById('add-name').value,
-        github_repo: document.getElementById('add-repo').value,
-        github_branch: document.getElementById('add-branch').value,
-        target_framework: document.getElementById('add-framework').value,
-        content_dir: document.getElementById('add-content-dir').value,
-        publishing_mode: document.getElementById('add-publishing-mode').value,
-        publish_time: document.getElementById('add-publish-time').value,
-        topic: document.getElementById('add-topic').value,
-        target_audience: document.getElementById('add-audience').value,
-        tone: document.getElementById('add-tone').value,
-        keywords: document.getElementById('add-keywords').value
+        client_id: document.getElementById('wizard-client-id').value || null,
+        name: name,
+        github_repo: repo,
+        github_branch: document.getElementById('wizard-branch').value || 'main',
+        github_token: document.getElementById('wizard-token').value || '',
+        target_framework: document.getElementById('wizard-framework').value || 'nextjs',
+        content_dir: document.getElementById('wizard-content-dir').value || 'content/posts',
+        publishing_mode: document.getElementById('wizard-publishing-mode').value || 'pr',
+        publish_time: document.getElementById('wizard-publish-time').value || '09:00',
+        author_name: document.getElementById('wizard-author').value || 'Editorial Team',
+        topic: topic,
+        tone: document.getElementById('wizard-tone').value || 'Authoritative, practical, and engaging',
+        target_audience: 'Customers and Industry Readers'
     };
 
     const res = await apiPost('/api/projects', payload);
+    btn.disabled = false;
+    btn.innerText = '✨ Connect Website & Start Publishing';
+
     if (res && res.id) {
-        showToast('Repository successfully connected and activated!', 'success');
+        showToast('🎉 Website successfully connected! Your daily blog pipeline is ready.', 'success');
         closeAddProjectModal();
-        document.getElementById('form-add-project').reset();
-        loadProjects();
-        loadStatus();
+        await loadProjects();
+        await loadStatus();
     } else {
-        showToast(res ? res.error : 'Failed to register project', 'error');
+        showToast(res ? res.error : 'Failed to register website', 'error');
+    }
+}
+
+// --- Supabase Cloud Database UI Controller ---
+async function loadSupabaseStatus() {
+    const badge = document.getElementById('badge-supabase-status');
+    if (!badge) return;
+
+    const data = await apiGet('/api/supabase/status');
+    if (data && data.configured && data.connected) {
+        badge.innerText = "Connected (Cloud Active)";
+        badge.className = "text-xs px-2.5 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/30";
+    } else if (data && data.configured && !data.connected) {
+        badge.innerText = "Auth Error";
+        badge.className = "text-xs px-2.5 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30";
+    } else {
+        badge.innerText = "Offline (Local SQLite)";
+        badge.className = "text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400 border border-slate-700";
+    }
+}
+
+async function testSupabaseFromUI() {
+    const url = document.getElementById('setting-supabase-url').value.trim();
+    const key = document.getElementById('setting-supabase-key').value.trim();
+    const feedback = document.getElementById('supabase-test-feedback');
+
+    feedback.innerText = 'Testing connection...';
+    feedback.className = 'text-xs font-mono text-slate-400';
+
+    const res = await apiPost('/api/supabase/test', { url, key });
+    if (res && res.connected) {
+        feedback.innerText = `✅ ${res.message}`;
+        feedback.className = 'text-xs font-mono text-emerald-400';
+        loadSupabaseStatus();
+    } else {
+        feedback.innerText = `⚠️ ${res ? res.message : 'Connection failed.'}`;
+        feedback.className = 'text-xs font-mono text-amber-400';
+    }
+}
+
+async function syncAllToSupabaseFromUI() {
+    if (!confirm('Sync all clients, connected repositories, and blog posts to Supabase cloud?')) return;
+    const feedback = document.getElementById('supabase-test-feedback');
+    feedback.innerText = 'Syncing to cloud...';
+    feedback.className = 'text-xs font-mono text-indigo-400';
+
+    const res = await apiPost('/api/supabase/sync', {});
+    if (res && res.success) {
+        feedback.innerText = `✅ ${res.message}`;
+        feedback.className = 'text-xs font-mono text-emerald-400';
+        showToast('All content synced to Supabase!', 'success');
+        loadSupabaseStatus();
+    } else {
+        feedback.innerText = `⚠️ ${res ? res.error : 'Sync failed.'}`;
+        feedback.className = 'text-xs font-mono text-red-400';
+        showToast(res ? res.error : 'Sync failed', 'error');
     }
 }
 
@@ -700,6 +962,8 @@ async function loadSettings() {
     if (settings.gemini_api_key) document.getElementById('setting-gemini-key').value = settings.gemini_api_key;
     if (settings.openai_api_key) document.getElementById('setting-openai-key').value = settings.openai_api_key;
     if (settings.github_webhook_secret) document.getElementById('setting-webhook-secret').value = settings.github_webhook_secret;
+    if (settings.supabase_url) document.getElementById('setting-supabase-url').value = settings.supabase_url;
+    if (settings.supabase_key) document.getElementById('setting-supabase-key').value = settings.supabase_key;
 }
 
 async function saveSettings() {
@@ -708,12 +972,15 @@ async function saveSettings() {
         ai_provider: document.getElementById('setting-ai-provider').value,
         gemini_api_key: document.getElementById('setting-gemini-key').value,
         openai_api_key: document.getElementById('setting-openai-key').value,
-        github_webhook_secret: document.getElementById('setting-webhook-secret').value
+        github_webhook_secret: document.getElementById('setting-webhook-secret').value,
+        supabase_url: document.getElementById('setting-supabase-url').value,
+        supabase_key: document.getElementById('setting-supabase-key').value
     };
 
     const res = await apiPost('/api/settings', payload);
     if (res && res.message) {
         showToast('Settings saved successfully.', 'success');
+        loadSupabaseStatus();
     }
 }
 

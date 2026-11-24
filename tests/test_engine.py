@@ -296,5 +296,103 @@ class TestGitPulseCMS(unittest.TestCase):
         final_post = get_post(post_id)
         self.assertEqual(final_post["status"], "published")
 
+    def test_multitenant_client_crud_and_project_linkage(self):
+        from database import create_client, list_clients, get_client, delete_client, create_project, list_projects
+        # Create clients
+        c1 = create_client("Fintech Innovations", "lead@fintech.io")
+        c2 = create_client("HealthTech Labs", "team@healthtech.com")
+        self.assertIsInstance(c1, int)
+        self.assertIsInstance(c2, int)
+
+        client_list = list_clients()
+        names = [c["name"] for c in client_list]
+        self.assertIn("Fintech Innovations", names)
+        self.assertIn("HealthTech Labs", names)
+
+        # Create project under client 1
+        p_id = create_project({
+            "client_id": c1,
+            "name": "Fintech Alpha Portal",
+            "github_repo": "fintech-org/alpha-site",
+            "topic": "Quantitative finance and algorithmic market making"
+        })
+
+        # Test filtering by client
+        c1_projects = list_projects(client_id=c1)
+        self.assertEqual(len(c1_projects), 1)
+        self.assertEqual(c1_projects[0]["name"], "Fintech Alpha Portal")
+        self.assertEqual(c1_projects[0]["client_name"], "Fintech Innovations")
+
+        c2_projects = list_projects(client_id=c2)
+        self.assertEqual(len(c2_projects), 0)
+
+        # Cleanup
+        delete_client(c1)
+        delete_client(c2)
+
+    def test_supabase_client_and_connection_testing(self):
+        from engine.supabase_client import SupabaseClient
+        from database import test_supabase_connection
+
+        # Client with default/unconfigured key
+        client = SupabaseClient(url="https://suvmyyonlqyipzgnmony.supabase.co", key="")
+        self.assertFalse(client.is_configured())
+        ok, msg = client.test_connection()
+        self.assertFalse(ok)
+        self.assertIn("not configured", msg)
+
+        # Client with mock key
+        configured_client = SupabaseClient(url="https://suvmyyonlqyipzgnmony.supabase.co", key="mock-service-role-key")
+        self.assertTrue(configured_client.is_configured())
+        self.assertEqual(configured_client.base_url, "https://suvmyyonlqyipzgnmony.supabase.co")
+
+        # Database connection tester
+        status = test_supabase_connection()
+        self.assertIn("configured", status)
+        self.assertIn("url", status)
+
+    def test_github_repo_verification_endpoint(self):
+        fake_user = {"id": 1, "username": "admin", "role": "admin"}
+        # Missing repo
+        code, resp = handle_api_request("POST", "/api/github/verify", {}, {"github_repo": ""}, current_user=fake_user)
+        self.assertEqual(code, 400)
+        self.assertFalse(resp["valid"])
+
+        # Simulated verification with mock token
+        code, resp = handle_api_request("POST", "/api/github/verify", {}, {"github_repo": "test-org/test-repo", "github_token": "mock"}, current_user=fake_user)
+        self.assertEqual(code, 200)
+        self.assertTrue(resp["valid"])
+        self.assertEqual(resp["repo"], "test-org/test-repo")
+
+    def test_vercel_serverless_wsgi_entrypoint(self):
+        import api.index as vercel_app
+        import io
+
+        def call_wsgi(path, method="GET", body=b""):
+            status_box = []
+            headers_box = []
+            def start_response(status, headers):
+                status_box.append(status)
+                headers_box.append(headers)
+            environ = {
+                "PATH_INFO": path,
+                "REQUEST_METHOD": method,
+                "QUERY_STRING": "",
+                "CONTENT_LENGTH": str(len(body)),
+                "wsgi.input": io.BytesIO(body)
+            }
+            res_body = b"".join(vercel_app.app(environ, start_response)).decode("utf-8")
+            return status_box[0], headers_box[0], res_body
+
+        # Test login page
+        status, headers, body = call_wsgi("/login")
+        self.assertIn("200 OK", status)
+        self.assertIn("Sign In - GitPulse CMS", body)
+
+        # Test public presets
+        status, headers, body = call_wsgi("/api/presets")
+        self.assertIn("200 OK", status)
+        self.assertIn("nextjs", body)
+
 if __name__ == "__main__":
     unittest.main()

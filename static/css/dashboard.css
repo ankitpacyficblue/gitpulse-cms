@@ -248,6 +248,137 @@ code, pre {
     animation: fadeIn 0.3s ease;
 }
 
+/* Wizard & Interactive UI Additions */
+.wizard-card {
+    background: #020617;
+    border: 2px solid var(--border-color);
+    border-radius: 0.75rem;
+    padding: 1rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+}
+
+.wizard-card:hover {
+    border-color: #6366f1;
+    transform: translateY(-2px);
+    background: #0b1329;
+}
+
+.wizard-card.selected {
+    border-color: #818cf8;
+    background: #0d1b3e;
+    box-shadow: 0 0 0 1px #818cf8, 0 4px 12px rgba(99, 102, 241, 0.25);
+}
+
+.wizard-card .check-icon {
+    display: none;
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    width: 1.25rem;
+    height: 1.25rem;
+    background: #10b981;
+    color: white;
+    border-radius: 9999px;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: bold;
+}
+
+.wizard-card.selected .check-icon {
+    display: flex;
+}
+
+.inspiration-chip {
+    background: #1e293b;
+    border: 1px solid var(--border-color);
+    color: #94a3b8;
+    border-radius: 9999px;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.inspiration-chip:hover {
+    background: #334155;
+    color: #f8fafc;
+    border-color: #6366f1;
+}
+
+.tone-pill {
+    background: #020617;
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: #94a3b8;
+    transition: all 0.15s ease;
+}
+
+.tone-pill:hover {
+    border-color: #4f46e5;
+    color: #f8fafc;
+}
+
+.tone-pill.selected {
+    background: #1e1b4b;
+    border-color: #818cf8;
+    color: #c7d2fe;
+    font-weight: 600;
+}
+
+.wizard-step-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1.5rem;
+    position: relative;
+}
+
+.wizard-step-node {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #64748b;
+}
+
+.wizard-step-node.active {
+    color: #818cf8;
+}
+
+.wizard-step-node.completed {
+    color: #10b981;
+}
+
+.wizard-step-number {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 9999px;
+    background: #1e293b;
+    color: #94a3b8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+}
+
+.wizard-step-node.active .wizard-step-number {
+    background: #4f46e5;
+    color: white;
+}
+
+.wizard-step-node.completed .wizard-step-number {
+    background: #10b981;
+    color: white;
+}
+
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }

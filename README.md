@@ -146,6 +146,46 @@ python3 cli.py reset-password --username admin --password "StrongNewPassword!"
 
 ---
 
+## 🚀 Vercel Serverless Deployment Guide
+
+GitPulse CMS is optimized for **Vercel Serverless Functions** (`@vercel/python`):
+
+1. **Push to GitHub**: Connect your repository to Vercel.
+2. **Serverless Entrypoint**: Vercel automatically detects `vercel.json` and routes all traffic to `api/index.py` (WSGI + HTTP handler).
+3. **Configure Environment Variables** in the Vercel Project Dashboard:
+   - `SUPABASE_URL`: `https://suvmyyonlqyipzgnmony.supabase.co`
+   - `SUPABASE_SERVICE_ROLE_KEY`: `eyJhbGciOi...` (Your Supabase Service Role Key)
+   - `GITHUB_TOKEN`: `ghp_...` (Your default GitHub Personal Access Token)
+   - `GEMINI_API_KEY`: `AIzaSy...` (Optional, for Gemini AI generation)
+
+---
+
+## ☁️ Supabase Multi-Tenant Schema Architecture
+
+For persistent storage across Vercel serverless runs and multi-client blog isolation, GitPulse connects directly to **Supabase PostgreSQL**:
+
+- **Schema Architecture (`supabase_schema.sql`)**:
+  - `clients`: Multi-tenant organization grouping for client businesses.
+  - `projects`: Repositories connected to GitPulse with branch, framework presets, tone, and zero-redeploy configuration.
+  - `posts`: Full markdown articles, hero SVG images, SEO scores, view counts, and GitHub commit/PR references.
+  - `system_logs`, `settings`, `users`, `sessions`, `login_attempts`: Complete security and audit trail.
+- **Applying Schema in Supabase**:
+  Run `supabase_schema.sql` in the Supabase SQL Editor (`https://supabase.com/dashboard/project/suvmyyonlqyipzgnmony/sql`).
+- **Cloud Sync**:
+  Use the **"Sync All to Cloud"** button in Settings or `POST /api/supabase/sync` to replicate local projects and posts to Supabase.
+
+---
+
+## 🧙‍♂️ Non-Technical Guided UX: Connect Website in 60s
+
+The post-login dashboard is designed specifically for non-technical team members:
+
+1. **Step 1: Visual Website Picker**: Click Next.js, Astro, Simple HTML, or Hugo. All technical directories, file formats, and frontmatter templates are configured automatically.
+2. **Step 2: 1-Click GitHub Linker**: Select the client business, type `owner/repo`, click the 1-click token generator shortcut, and click **"Test Repository Connection ⚡"** for instant live feedback.
+3. **Step 3: Topics & Tone**: Select ready-made topic inspiration chips (AI, SaaS, Health, Fintech), click an emoji tone pill (👔 Professional, 🚀 Startup Casual, 🎓 Educational), choose Review Mode or Autopilot, and click **Connect Website & Start Publishing**!
+
+---
+
 ## 🧪 Automated Test Suite
 
 Run the comprehensive unit and integration test suite:
@@ -154,7 +194,7 @@ Run the comprehensive unit and integration test suite:
 python3 tests/test_engine.py
 ```
 
-All 16 tests pass in under 0.6 seconds with zero external dependencies.
+All 20 tests pass in under 0.6 seconds with zero external dependencies.
 
 ---
 

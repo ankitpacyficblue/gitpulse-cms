@@ -8,7 +8,13 @@ from pathlib import Path
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
+
+# Support Vercel serverless /tmp ephemeral storage for local SQLite fallback
+if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    DATA_DIR = Path("/tmp/gitpulse_data")
+else:
+    DATA_DIR = BASE_DIR / "data"
+
 DATABASE_PATH = DATA_DIR / "gitpulse.db"
 
 # Ensure data directory exists

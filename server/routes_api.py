@@ -19,7 +19,13 @@ from database import (
     list_logs,
     get_all_settings,
     set_setting,
-    get_setting
+    get_setting,
+    list_clients,
+    create_client,
+    get_client,
+    delete_client,
+    test_supabase_connection,
+    sync_all_to_supabase
 )
 from config import FRAMEWORK_PRESETS, DEFAULT_AI_PROVIDER
 from engine.pipeline import run_publication_pipeline
@@ -184,9 +190,54 @@ def handle_api_request(
     if path == "/api/presets" and method == "GET":
         return 200, FRAMEWORK_PRESETS
 
+    # Clients (Multi-tenant)
+    if path == "/api/clients" and method == "GET":
+        return 200, {"clients": list_clients()}
+
+    if path == "/api/clients" and method == "POST":
+        name = body.get("name", "").strip()
+        if not name:
+            return 400, {"error": "Client / Business name is required."}
+        c_id = create_client(name, body.get("contact_email", ""))
+        return 201, {"id": c_id, "message": "Client created successfully."}
+
+    if path.startswith("/api/clients/") and method == "DELETE":
+        parts = path.strip("/").split("/")
+        if len(parts) == 3 and parts[2].isdigit():
+            c_id = int(parts[2])
+            delete_client(c_id)
+            return 200, {"message": "Client deleted."}
+
+    # Verify GitHub repository (for interactive non-technical wizard live feedback)
+    if path == "/api/github/verify" and method == "POST":
+        repo = body.get("github_repo", "").strip()
+        if not repo:
+            return 400, {"valid": False, "message": "Please enter a GitHub repository (e.g. username/repo)."}
+        token = body.get("github_token", "").strip() or get_setting("github_token", "")
+        client = GitHubClient(token=token)
+        ok, msg = client.test_connection(repo)
+        return 200, {"valid": ok, "repo": repo, "branch": "main", "message": msg}
+
+    # Supabase Cloud Database Management
+    if path == "/api/supabase/status" and method == "GET":
+        return 200, test_supabase_connection()
+
+    if path == "/api/supabase/test" and method == "POST":
+        from engine.supabase_client import SupabaseClient
+        url = body.get("url") or get_setting("supabase_url", "https://suvmyyonlqyipzgnmony.supabase.co")
+        key = body.get("key") or get_setting("supabase_key", "")
+        sb = SupabaseClient(url=url, key=key)
+        ok, msg = sb.test_connection()
+        return 200, {"connected": ok, "message": msg, "configured": sb.is_configured()}
+
+    if path == "/api/supabase/sync" and method == "POST":
+        res = sync_all_to_supabase()
+        return (200 if res.get("success") else 400), res
+
     # List & Create Projects
     if path == "/api/projects" and method == "GET":
-        return 200, {"projects": list_projects()}
+        client_id = int(query_params.get("client_id")) if query_params.get("client_id") and query_params.get("client_id").isdigit() else None
+        return 200, {"projects": list_projects(client_id=client_id)}
 
     if path == "/api/projects" and method == "POST":
         if not body.get("name") or not body.get("github_repo") or not body.get("topic"):
