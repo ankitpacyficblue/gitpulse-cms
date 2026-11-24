@@ -8,8 +8,7 @@ import argparse
 import json
 from database import (
     init_db,
-    seed_demo_data,
-    list_projects,
+    list_all_projects,
     get_project,
     list_posts,
     get_post,
@@ -21,17 +20,48 @@ from scheduler.cron_worker import start_scheduler
 from server.http_server import run_server
 from engine.pipeline import run_publication_pipeline
 from engine.github_client import GitHubClient
-from engine.auth import init_default_admin, get_user_by_username, update_user_password, create_user
+from engine.auth import get_user_by_username, update_user_password, create_user, generate_temporary_password
 from engine.templates_embed import generate_one_time_blog_html
 
 def cmd_init(args):
-    """Initialize database and seed starter data."""
+    """Initialize the database schema. Creates no sample data and no default login."""
     init_db()
-    seed_demo_data()
-    admin = init_default_admin()
-    print("✅ GitPulse CMS database initialized with starter repository templates.")
-    if admin.get("is_new"):
-        print(f"🔒 Initial Administrator Created: username='{admin['username']}', password='{admin['password']}'")
+    print("✅ GitPulse CMS database initialized (empty).")
+    print("   Next: python3 cli.py create-platform-admin --username NAME")
+
+def cmd_create_platform_admin(args):
+    """Create (or promote) a platform admin, who can create client accounts."""
+    init_db()
+    username = args.username.strip().lower()
+    user = get_user_by_username(username)
+    if user:
+        from database import get_connection
+        with get_connection() as conn:
+            conn.execute("UPDATE users SET is_platform_admin = 1 WHERE id = ?", (user["id"],))
+            conn.commit()
+        print(f"✅ '{username}' is now a platform admin.")
+        return
+    password = generate_temporary_password()
+    create_user(username, password, is_platform_admin=True)
+    print(f"✅ Platform admin '{username}' created. One-time password (shown once, change it after login): {password}")
+
+def cmd_create_owner(args):
+    """Create a client account with its first owner (new login, or an existing user)."""
+    init_db()
+    import crm_store
+    username = args.username.strip().lower()
+    user = get_user_by_username(username)
+    password = None
+    if user:
+        user_id = user["id"]
+    else:
+        password = generate_temporary_password()
+        user_id = create_user(username, password, email=args.email or "")
+    acct = crm_store.create_account(args.account, args.email or "")
+    crm_store.add_membership(acct["id"], user_id, "owner")
+    print(f"✅ Account '{acct['name']}' created (id {acct['id']}); '{username}' is its owner.")
+    if password:
+        print(f"   One-time password (shown once, change it after login): {password}")
 
 def cmd_install_blog(args):
     """Install zero-redeploy dynamic blog page to target repository."""
@@ -72,7 +102,6 @@ def cmd_reset_password(args):
 def cmd_start(args):
     """Start background scheduler daemon and HTTP Dashboard server."""
     init_db()
-    seed_demo_data()
     start_scheduler()
     host = args.host or SERVER_HOST
     port = args.port or SERVER_PORT
@@ -82,9 +111,9 @@ def cmd_start(args):
 def cmd_list_projects(args):
     """List all connected GitHub projects."""
     init_db()
-    projects = list_projects()
+    projects = list_all_projects()
     if not projects:
-        print("No projects registered yet. Run `python3 cli.py init` to seed demo targets.")
+        print("No projects registered yet. Add one from the dashboard.")
         return
 
     print("\n" + "=" * 80)
@@ -149,8 +178,18 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
     # init
-    p_init = subparsers.add_parser("init", help="Initialize database and seed starter projects")
+    p_init = subparsers.add_parser("init", help="Initialize the (empty) database schema")
     p_init.set_defaults(func=cmd_init)
+
+    p_pa = subparsers.add_parser("create-platform-admin", help="Create a platform admin (creates client accounts)")
+    p_pa.add_argument("--username", required=True)
+    p_pa.set_defaults(func=cmd_create_platform_admin)
+
+    p_owner = subparsers.add_parser("create-owner", help="Create a client account and its first owner")
+    p_owner.add_argument("--account", required=True, help="Account (business) name")
+    p_owner.add_argument("--username", required=True)
+    p_owner.add_argument("--email", default="")
+    p_owner.set_defaults(func=cmd_create_owner)
 
     # start
     p_start = subparsers.add_parser("start", help="Start Web Dashboard & Scheduler daemon")

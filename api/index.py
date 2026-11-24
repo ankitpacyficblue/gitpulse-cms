@@ -17,8 +17,8 @@ import io
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
-from database import init_db, seed_demo_data
-from engine.auth import init_default_admin, validate_session
+from database import init_db
+from engine.auth import validate_session
 from server.routes_web import render_dashboard_html, render_login_html
 from server.routes_api import handle_api_request
 from server.routes_public import handle_public_request
@@ -28,8 +28,6 @@ from server.routes_whatsapp import handle_whatsapp_webhook_get, handle_whatsapp_
 # Initialize DB on cold start
 try:
     init_db()
-    seed_demo_data()
-    init_default_admin()
 except Exception as e:
     pass
 
@@ -103,8 +101,8 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", content_type)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Account-Id")
         if set_cookie:
             self.send_header("Set-Cookie", set_cookie)
         if location:
@@ -169,7 +167,7 @@ class handler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             client_ip = self._get_client_ip()
             user_agent = self.headers.get("User-Agent", "")
-            code, resp = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent)
+            code, resp = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent, headers=dict(self.headers))
             self._set_headers(code, "application/json")
             self.wfile.write(json.dumps(resp).encode("utf-8"))
             return
@@ -179,6 +177,9 @@ class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._handle_body("POST")
+
+    def do_PATCH(self):
+        self._handle_body("PATCH")
 
     def do_PUT(self):
         self._handle_body("PUT")
@@ -206,7 +207,7 @@ class handler(BaseHTTPRequestHandler):
                 body_data = {}
 
         if path == "/api/webhook/whatsapp" and method == "POST":
-            code, resp = handle_whatsapp_webhook_post(body_data or {})
+            code, resp = handle_whatsapp_webhook_post(raw_body_bytes, self.headers.get("X-Hub-Signature-256", ""), body_data or {})
             self._set_headers(code, "application/json")
             self.wfile.write(json.dumps(resp).encode("utf-8"))
             return
@@ -220,7 +221,7 @@ class handler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/api/"):
-            code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent)
+            code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent, headers=dict(self.headers))
             set_cookie = None
             if path == "/api/auth/login" and code == 200 and "token" in resp:
                 is_https = (self.headers.get("X-Forwarded-Proto") == "https") or bool(os.environ.get("VERCEL"))
@@ -262,8 +263,8 @@ def app(environ, start_response):
 
     headers = [
         ("Access-Control-Allow-Origin", "*"),
-        ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
-        ("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        ("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS"),
+        ("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Account-Id")
     ]
 
     if method == "OPTIONS":
@@ -318,7 +319,7 @@ def app(environ, start_response):
             return [resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body]
 
         if path.startswith("/api/"):
-            code, resp = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent)
+            code, resp = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent, headers={"X-Account-Id": environ.get("HTTP_X_ACCOUNT_ID", "")})
             headers.append(("Content-Type", "application/json"))
             status_str = f"{code} OK" if code == 200 else f"{code} Error"
             start_response(status_str, headers)
@@ -339,7 +340,7 @@ def app(environ, start_response):
             body_data = {}
 
     if path == "/api/webhook/whatsapp" and method == "POST":
-        code, resp = handle_whatsapp_webhook_post(body_data or {})
+        code, resp = handle_whatsapp_webhook_post(body_bytes, environ.get("HTTP_X_HUB_SIGNATURE_256", ""), body_data or {})
         headers.append(("Content-Type", "application/json"))
         start_response(f"{code} OK" if code == 200 else f"{code} Error", headers)
         return [json.dumps(resp).encode("utf-8")]
@@ -353,7 +354,7 @@ def app(environ, start_response):
         return [json.dumps(resp).encode("utf-8")]
 
     if path.startswith("/api/"):
-        code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent)
+        code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent, headers={"X-Account-Id": environ.get("HTTP_X_ACCOUNT_ID", "")})
         headers.append(("Content-Type", "application/json"))
         if path == "/api/auth/login" and code == 200 and "token" in resp:
             is_https = (environ.get("HTTP_X_FORWARDED_PROTO") == "https") or bool(os.environ.get("VERCEL"))

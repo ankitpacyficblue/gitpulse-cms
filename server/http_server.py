@@ -72,8 +72,8 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", content_type)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Account-Id")
         if set_cookie:
             self.send_header("Set-Cookie", set_cookie)
         if location:
@@ -150,7 +150,7 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             client_ip = self._get_client_ip()
             user_agent = self.headers.get("User-Agent", "")
-            status_code, resp_data = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent)
+            status_code, resp_data = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent, headers=dict(self.headers))
             self._set_headers(status_code, "application/json")
             self.wfile.write(json.dumps(resp_data).encode("utf-8"))
             return
@@ -164,6 +164,9 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         self._handle_with_body("PUT")
+
+    def do_PATCH(self):
+        self._handle_with_body("PATCH")
 
     def do_DELETE(self):
         self._handle_with_body("DELETE")
@@ -189,7 +192,7 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
 
         # WhatsApp Webhook Receiver (POST)
         if path == "/api/webhook/whatsapp" and method == "POST":
-            code, resp = handle_whatsapp_webhook_post(body_data or {})
+            code, resp = handle_whatsapp_webhook_post(raw_body_bytes, self.headers.get("X-Hub-Signature-256", ""), body_data or {})
             self._set_headers(code, "application/json")
             self.wfile.write(json.dumps(resp).encode("utf-8"))
             return
@@ -204,7 +207,7 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/api/"):
-            status_code, resp_data = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent)
+            status_code, resp_data = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent, headers=dict(self.headers))
 
             # Handle Cookie setting on successful login
             set_cookie = None
