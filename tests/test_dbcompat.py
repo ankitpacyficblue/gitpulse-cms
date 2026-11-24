@@ -110,6 +110,52 @@ class WrapperTests(unittest.TestCase):
                 os.environ["DATABASE_URL"] = old
 
 
+class SslTests(unittest.TestCase):
+    def setUp(self):
+        import os
+        self._old = os.environ.pop("DATABASE_SSL_ROOT_CERT", None)
+
+    def tearDown(self):
+        import os
+        os.environ.pop("DATABASE_SSL_ROOT_CERT", None)
+        if self._old is not None:
+            os.environ["DATABASE_SSL_ROOT_CERT"] = self._old
+
+    def test_default_remote_is_encrypted_without_verification(self):
+        import ssl
+        ctx = dbcompat.ssl_context("postgresql://u:p@db.example.com:5432/postgres")
+        self.assertEqual(ctx.verify_mode, ssl.CERT_NONE)
+        self.assertFalse(ctx.check_hostname)
+
+    def test_localhost_and_disable_use_no_tls(self):
+        self.assertIsNone(dbcompat.ssl_context("postgresql://u:p@localhost/postgres"))
+        self.assertIsNone(dbcompat.ssl_context("postgresql://u:p@db.example.com/x?sslmode=disable"))
+
+    def test_verify_modes(self):
+        import ssl
+        c = dbcompat.ssl_context("postgresql://u:p@h/x?sslmode=verify-full")
+        self.assertEqual(c.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(c.check_hostname)
+        c = dbcompat.ssl_context("postgresql://u:p@h/x?sslmode=verify-ca")
+        self.assertEqual(c.verify_mode, ssl.CERT_REQUIRED)
+        self.assertFalse(c.check_hostname)
+
+    def test_unknown_mode_rejected_without_leaking_url(self):
+        with self.assertRaises(ValueError) as e:
+            dbcompat.ssl_context("postgresql://u:secret@h/x?sslmode=bogus")
+        self.assertNotIn("secret", str(e.exception))
+
+    def test_root_cert_env_forces_verify_full(self):
+        import os, ssl, subprocess, tempfile
+        d = tempfile.mkdtemp()
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", d + "/k.pem",
+                        "-out", d + "/c.pem", "-days", "1", "-subj", "/CN=t"], check=True, capture_output=True)
+        os.environ["DATABASE_SSL_ROOT_CERT"] = open(d + "/c.pem").read()
+        c = dbcompat.ssl_context("postgresql://u:p@db.example.com/x")
+        self.assertEqual(c.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(c.check_hostname)
+
+
 class RlsTests(unittest.TestCase):
     def test_every_table_the_app_creates_is_in_the_rls_list(self):
         import re, database, crm_store, inspect

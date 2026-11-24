@@ -15,7 +15,7 @@ import re
 import sqlite3
 import ssl
 from typing import Any, List, Optional, Sequence
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 # Tables whose primary key is a generated integer `id` (INSERT returns it).
 # Tables with a non-integer primary key (RLS is enabled on these too, see database.init_db).
@@ -221,17 +221,40 @@ class PGConnection:
         return False
 
 
+def ssl_context(url: str):
+    """libpq-style sslmode: disable | require (default, encrypted, no cert check) |
+    verify-ca | verify-full. DATABASE_SSL_ROOT_CERT (PEM text) forces verify-full
+    against that CA. Nothing here logs the URL."""
+    u = urlparse(url)
+    mode = (parse_qs(u.query).get("sslmode", [""])[0] or "").lower()
+    pem = os.environ.get("DATABASE_SSL_ROOT_CERT", "").strip()
+    if not mode:
+        mode = "disable" if (u.hostname or "") in ("localhost", "127.0.0.1") else "require"
+    if pem:
+        mode = "verify-full"
+    if mode in ("disable", "allow", "prefer"):
+        return None
+    if mode == "require":
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    if mode not in ("verify-ca", "verify-full"):
+        raise ValueError("unsupported sslmode")
+    ctx = ssl.create_default_context(cadata=pem or None)
+    ctx.check_hostname = mode == "verify-full"
+    return ctx
+
+
 def connect_postgres() -> PGConnection:
     import pg8000.dbapi  # imported lazily: only needed when DATABASE_URL is set
-    u = urlparse(database_url())
-    ctx = None
-    if (u.hostname or "") not in ("localhost", "127.0.0.1"):
-        ctx = ssl.create_default_context()
+    url = database_url()
+    u = urlparse(url)
     raw = pg8000.dbapi.connect(
         user=unquote(u.username or ""), password=unquote(u.password or ""),
         host=u.hostname, port=u.port or 5432,
         database=(u.path or "/postgres").lstrip("/") or "postgres",
-        ssl_context=ctx, timeout=20,
+        ssl_context=ssl_context(url), timeout=20,
     )
     return PGConnection(raw)
 
