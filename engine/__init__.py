@@ -11,7 +11,6 @@ from engine.auth import (
     authenticate_user,
     validate_session,
     revoke_session,
-    init_default_admin,
     create_user,
     update_user_password,
     check_login_lockout
@@ -40,7 +39,6 @@ __all__ = [
     "authenticate_user",
     "validate_session",
     "revoke_session",
-    "init_default_admin",
     "create_user",
     "update_user_password",
     "check_login_lockout",
