@@ -1046,6 +1046,18 @@ def render_dashboard_html() -> str:
                     </div>
                     <div id="users-empty"></div>
                 </section>
+                <section id="account-manage-card" class="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-3" aria-labelledby="acct-h" data-requires="account.manage">
+                    <h2 id="acct-h" class="text-base font-semibold text-white">Account settings</h2>
+                    <form onsubmit="renameAccount(event)" class="flex flex-wrap items-end gap-2">
+                        <div class="flex-1 min-w-[12rem]">
+                            <label for="acct-name" class="block text-xs font-medium text-slate-300 mb-1">Account name</label>
+                            <input type="text" id="acct-name" required class="input-text text-xs">
+                        </div>
+                        <button type="submit" class="btn-secondary text-xs py-2 px-3">Rename</button>
+                        <button type="button" onclick="deleteAccount()" class="btn-secondary text-xs py-2 px-3 text-red-400">Delete account</button>
+                    </form>
+                    <p class="text-[11px] text-slate-500">Deleting hides the account and its data from everyone. Type the account name to confirm.</p>
+                </section>
                 <section id="users-invite-card" class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-4" aria-labelledby="invite-h" data-requires="users.manage">
                     <h2 id="invite-h" class="text-base font-semibold text-white">Add a person</h2>
                     <form onsubmit="submitInviteUser(event)" class="space-y-3">

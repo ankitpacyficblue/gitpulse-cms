@@ -297,12 +297,13 @@ async function apiPut(endpoint, data = {}) {
     }
 }
 
-async function apiDelete(endpoint) {
+async function apiDelete(endpoint, data) {
     try {
         const res = await fetch(endpoint, {
             method: 'DELETE',
-            headers: getAuthHeaders(),
-            credentials: 'same-origin'
+            headers: data ? getAuthHeaders({ 'Content-Type': 'application/json' }) : getAuthHeaders(),
+            credentials: 'same-origin',
+            ...(data ? { body: JSON.stringify(data) } : {})
         });
         if (res.status === 401) {
             try { localStorage.removeItem('gitpulse_token'); } catch (e) {}
@@ -1965,6 +1966,8 @@ async function loadUsersAndRoles() {
     const acct = getActiveAccountId();
     const body = document.getElementById('users-table-body');
     const empty = document.getElementById('users-empty');
+    const an = document.getElementById('acct-name');
+    if (an) { const sl = document.getElementById('client-select-filter'); an.value = sl && sl.selectedOptions[0] ? sl.selectedOptions[0].text : ''; }
     const nameEl = document.getElementById('users-account-name');
     if (nameEl) {
         const sel = document.getElementById('client-select-filter');
@@ -2069,4 +2072,37 @@ async function rotateVerifyToken() {
         if (el) el.value = res.verify_token;
         showToast('New verify token created. Copy it now; it is shown once.', 'success');
     } else showToast(errorText(res, 'Could not create a new token.'), 'error');
+}
+
+async function renameAccount(e) {
+    e.preventDefault();
+    const acct = getActiveAccountId();
+    const name = document.getElementById('acct-name').value.trim();
+    const res = await apiPatch(`/api/accounts/${encodeURIComponent(acct)}`, { name });
+    if (res && !res.error) { showToast('Account renamed.', 'success'); await loadClients(); updateAccountBanner(); loadUsersAndRoles(); }
+    else showToast(errorText(res, 'Could not rename the account.'), 'error');
+}
+
+async function deleteAccount() {
+    const acct = getActiveAccountId();
+    const sel = document.getElementById('client-select-filter');
+    const current = sel && sel.selectedOptions[0] ? sel.selectedOptions[0].text : '';
+    const typed = prompt(`This hides "${current}" and all its data from everyone.\nType the account name to confirm:`);
+    if (typed === null) return;
+    const res = await apiDelete(`/api/accounts/${encodeURIComponent(acct)}`, { confirm_name: typed.trim() });
+    if (res && !res.error) {
+        showToast('Account deleted.', 'success');
+        try { localStorage.removeItem('gitpulse_account'); } catch (e) {}
+        if (sel) sel.innerHTML = '';
+        await loadClients();
+        await onClientFilterChange();
+    } else showToast(errorText(res, 'Could not delete the account.'), 'error');
+}
+
+async function apiPatch(endpoint, data = {}) {
+    try {
+        const res = await fetch(endpoint, { method: 'PATCH', headers: getAuthHeaders({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(data) });
+        if (res.status === 401) { window.location.href = '/login'; return null; }
+        return await res.json();
+    } catch (err) { showToast(`Request failed: ${err.message}`, 'error'); return null; }
 }
