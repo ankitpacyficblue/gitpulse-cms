@@ -40,7 +40,7 @@ def create_account_with_owner(actor: Dict[str, Any], name: str, owner_username: 
             owner_id = existing["id"]
         else:
             temp = auth.generate_temporary_password()
-            owner_id = auth.create_user(uname, temp, email=owner_email)
+            owner_id = auth.create_user(uname, temp, email=owner_email, temporary=True)
             out["owner_temporary_password"] = temp
     acct = cs.create_account(name, owner_email)
     cs.add_membership(acct["id"], owner_id, "owner")
@@ -64,7 +64,7 @@ def add_user(account_id: str, actor_role: str, username: str, role: str, email: 
         user_id = user["id"]
     else:
         temp = auth.generate_temporary_password()
-        user_id = auth.create_user(uname, temp, email=email)
+        user_id = auth.create_user(uname, temp, email=email, temporary=True)
         out["temporary_password"] = temp
     cs.add_membership(account_id, user_id, role)
     out.update({"user_id": user_id, "username": uname, "role": role})
@@ -87,6 +87,23 @@ def change_role(account_id: str, actor_role: str, target_user_id: int, new_role:
     if current == "owner" and new_role != "owner" and cs.count_owners(account_id) <= 1:
         raise ServiceError(409, "last_owner", "An account must keep at least one owner.")
     cs.set_membership_role(account_id, target_user_id, new_role)
+
+
+def reset_password(account_id: str, actor_role: str, actor_user_id: int, target_user_id: int) -> str:
+    """New one-time password for a member (shown once, expires in 72 h, must be changed). Sessions are revoked.
+    Only for people who belong to this account alone, so an admin can never take over a login
+    that also works in another account or on the platform."""
+    current = _target_role(account_id, target_user_id)
+    if not has_permission(actor_role, "users.manage") or (current == "owner" and not has_permission(actor_role, "owners.manage")):
+        raise ServiceError(403, "forbidden", "You cannot reset this member's password.")
+    if target_user_id == actor_user_id:
+        raise ServiceError(400, "use_change_password", "Use change password for your own login.")
+    target = auth.get_user_by_id(target_user_id)
+    if not target or target["is_platform_admin"] or len(cs.list_accounts_for_user(target_user_id)) > 1:
+        raise ServiceError(403, "shared_login", "This login is shared with another account or the platform; its owner must reset it.")
+    temp = auth.generate_temporary_password()
+    auth.update_user_password(target_user_id, temp, temporary=True)
+    return temp
 
 
 def remove_member(account_id: str, actor_role: str, target_user_id: int) -> None:

@@ -56,7 +56,7 @@ def cmd_create_owner(args):
         user_id = user["id"]
     else:
         password = generate_temporary_password()
-        user_id = create_user(username, password, email=args.email or "")
+        user_id = create_user(username, password, email=args.email or "", temporary=True)
     acct = crm_store.create_account(args.account, args.email or "")
     crm_store.add_membership(acct["id"], user_id, "owner")
     print(f"✅ Account '{acct['name']}' created (id {acct['id']}); '{username}' is its owner.")

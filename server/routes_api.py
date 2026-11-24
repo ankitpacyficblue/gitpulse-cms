@@ -49,6 +49,8 @@ class Ctx:
         self.host = host
 
 
+PASSWORD_CHANGE_OK = {"/api/auth/change-password", "/api/auth/me", "/api/auth/logout"}
+
 ROUTES: List[Tuple[str, "re.Pattern", str, Callable]] = []
 
 
@@ -109,6 +111,9 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
 
         if not current_user:
             return 401, {"error": "Authentication required. Please log in.", "code": "UNAUTHORIZED"}
+        if current_user.get("must_change_password") and path not in PASSWORD_CHANGE_OK:
+            return 403, {"error": "password_change_required", "code": "password_change_required",
+                         "message": "Change your temporary password to continue."}
         ctx = Ctx(current_user, ip=client_ip, user_agent=user_agent, token=current_user.get("token"),
                   host=hdrs.get("x-forwarded-host") or hdrs.get("host", ""))
 
@@ -241,6 +246,8 @@ def change_password(ctx, m, q, body):
     full = get_user_by_username(ctx.user["username"])
     if not verify_password(cur, full["salt"], full["password_hash"]):
         return 400, {"error": "Current password is incorrect."}
+    if new == cur:
+        return 400, {"error": "New password must be different from the current one."}
     update_user_password(ctx.user["id"], new)
     return 200, {"message": "Password changed successfully. Please log in again."}
 
@@ -304,6 +311,13 @@ def users_role(ctx, m, q, body):
     svc.change_role(ctx.account_id, ctx.role, int(m.group("uid")), body.get("role", ""))
     db.log_event(f"Role of user #{m.group('uid')} changed to {body.get('role')}.", "INFO", account_id=ctx.account_id)
     return 200, {"success": True}
+
+
+@route("POST", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)/reset-password", "path:users.manage")
+def users_reset_password(ctx, m, q, body):
+    temp = svc.reset_password(ctx.account_id, ctx.role, ctx.user["id"], int(m.group("uid")))
+    db.log_event(f"Password reset for user #{m.group('uid')}.", "INFO", account_id=ctx.account_id)
+    return 200, {"temporary_password": temp, "expires_in_hours": 72, "must_change_password": True}
 
 
 @route("DELETE", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)", "path:users.manage")
