@@ -28,6 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from database import (
+    get_connection,
     init_db,
     seed_demo_data,
     list_projects,
@@ -393,6 +394,76 @@ class TestGitPulseCMS(unittest.TestCase):
         status, headers, body = call_wsgi("/api/presets")
         self.assertIn("200 OK", status)
         self.assertIn("nextjs", body)
+
+    def test_stateless_hmac_session_across_containers(self):
+        # 1. Create a session in Container A
+        token = create_session(1, ip_address="127.0.0.1")
+        self.assertTrue(token)
+
+        # 2. Validate session in Container A (with local DB present)
+        user = validate_session(token)
+        self.assertIsNotNone(user)
+        self.assertEqual(user["id"], 1)
+        self.assertEqual(user["username"], "admin")
+
+        # 3. Simulate Container B: clear sessions table completely
+        with get_connection() as conn:
+            conn.cursor().execute("DELETE FROM sessions")
+            conn.commit()
+
+        # 4. Validate session in Container B (stateless HMAC verification without DB row)
+        user_container_b = validate_session(token)
+        self.assertIsNotNone(user_container_b)
+        self.assertEqual(user_container_b["id"], 1)
+        self.assertEqual(user_container_b["username"], "admin")
+
+        # 5. Tampered token must fail
+        tampered = token[:-4] + "xxxx"
+        self.assertIsNone(validate_session(tampered))
+
+        # 6. Revoke session and verify revocation
+        revoke_session(token)
+        self.assertIsNone(validate_session(token))
+
+    def test_wsgi_authenticated_navigation_with_cookie_and_bearer(self):
+        import api.index as vercel_app
+        import io
+
+        token = create_session(1)
+
+        def call_wsgi_auth(path, cookie="", auth_hdr=""):
+            status_box = []
+            headers_box = []
+            def start_response(status, headers):
+                status_box.append(status)
+                headers_box.append(headers)
+            environ = {
+                "PATH_INFO": path,
+                "REQUEST_METHOD": "GET",
+                "QUERY_STRING": "",
+                "CONTENT_LENGTH": "0",
+                "HTTP_COOKIE": cookie,
+                "HTTP_AUTHORIZATION": auth_hdr,
+                "wsgi.input": io.BytesIO(b"")
+            }
+            res_body = b"".join(vercel_app.app(environ, start_response)).decode("utf-8")
+            return status_box[0], headers_box[0], res_body
+
+        # Unauthenticated GET / must redirect to /login
+        st, hdrs, body = call_wsgi_auth("/")
+        self.assertIn("302 Found", st)
+        loc = [v for k, v in hdrs if k.lower() == "location"]
+        self.assertEqual(loc[0], "/login")
+
+        # Authenticated GET / with session_token cookie must return dashboard 200
+        st, hdrs, body = call_wsgi_auth("/", cookie=f"session_token={token}")
+        self.assertIn("200 OK", st)
+        self.assertIn("GitPulse", body)
+
+        # Authenticated GET /api/auth/me with Authorization Bearer must return 200 user
+        st, hdrs, body = call_wsgi_auth("/api/auth/me", auth_hdr=f"Bearer {token}")
+        self.assertIn("200 OK", st)
+        self.assertIn('"username": "admin"', body)
 
 if __name__ == "__main__":
     unittest.main()

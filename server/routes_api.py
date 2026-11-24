@@ -141,13 +141,13 @@ def handle_api_request(
     # Current user info
     if path == "/api/auth/me" and method == "GET":
         u = get_user_by_id(current_user["id"])
-        full_u = get_user_by_username(u["username"])
+        full_u = get_user_by_username(u["username"]) if u else None
         return 200, {
             "user": {
-                "id": u["id"],
-                "username": u["username"],
-                "role": u["role"],
-                "totp_enabled": bool(full_u.get("totp_enabled"))
+                "id": u["id"] if u else current_user.get("id", 1),
+                "username": u["username"] if u else current_user.get("username", "admin"),
+                "role": u["role"] if u else current_user.get("role", "admin"),
+                "totp_enabled": bool(full_u.get("totp_enabled")) if full_u else False
             }
         }
 

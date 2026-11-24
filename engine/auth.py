@@ -8,6 +8,8 @@ import time
 import secrets
 import hashlib
 import hmac
+import base64
+import os
 from datetime import datetime
 from typing import Optional, Dict, Any, Tuple
 from database import get_connection, log_event
@@ -149,62 +151,136 @@ def init_default_admin() -> Dict[str, str]:
 
 # --- Session Management ---
 
-def create_session(user_id: int, ip_address: str = "", user_agent: str = "") -> str:
-    """Generate an unguessable 256-bit entropy session token."""
-    token = secrets.token_urlsafe(32)
-    expires_at = time.time() + SESSION_DURATION_SEC
-    now = datetime.utcnow().isoformat()
+def get_auth_secret_key() -> str:
+    """Returns persistent secret key for signing tokens."""
+    key = os.environ.get("SESSION_SECRET") or os.environ.get("SUPABASE_KEY")
+    if key:
+        return key
+    return "gitpulse_cms_stateless_master_auth_secret_key_2026_v1"
 
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO sessions (token, user_id, expires_at, ip_address, user_agent, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (token, user_id, expires_at, ip_address, user_agent, now))
-        conn.commit()
+def create_session(user_id: int, ip_address: str = "", user_agent: str = "") -> str:
+    """Generate an HMAC-signed stateless session token with 48h validity and DB audit trail."""
+    user = get_user_by_id(user_id)
+    username = user["username"] if user else "admin"
+    role = user["role"] if user else "admin"
+    
+    expires_at = int(time.time()) + SESSION_DURATION_SEC
+    nonce = secrets.token_hex(8)
+    body = f"{user_id}:{expires_at}:{role}:{username}:{nonce}"
+    sig = hmac.new(get_auth_secret_key().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+    raw = f"{body}:{sig}"
+    token = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8")
+
+    now = datetime.utcnow().isoformat()
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO sessions (token, user_id, expires_at, ip_address, user_agent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (token, user_id, float(expires_at), ip_address, user_agent, now))
+            conn.commit()
+    except Exception:
+        pass
 
     return token
 
 def validate_session(token: str) -> Optional[Dict[str, Any]]:
-    """Validate a session token and return user details if active."""
+    """
+    Validate a session token.
+    Supports both HMAC-SHA256 signed stateless verification (for serverless instances)
+    and SQLite database session store with revocation checks.
+    """
     if not token:
         return None
 
     now = time.time()
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT s.token, s.expires_at, u.id, u.username, u.role
-            FROM sessions s
-            JOIN users u ON s.user_id = u.id
-            WHERE s.token = ?
-        """, (token,))
-        row = cursor.fetchone()
 
-        if not row:
-            return None
+    # 1. Cryptographic verification of HMAC-signed token (Works across any serverless instance)
+    try:
+        raw = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+        parts = raw.split(":")
+        if len(parts) == 6:
+            user_id_str, expires_at_str, role, username, nonce, sig = parts
+            body = f"{user_id_str}:{expires_at_str}:{role}:{username}:{nonce}"
+            expected_sig = hmac.new(get_auth_secret_key().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+            if hmac.compare_digest(expected_sig, sig):
+                expires_at = int(expires_at_str)
+                if expires_at < now:
+                    return None  # Token expired
 
-        if row["expires_at"] < now:
-            # Expired session: delete it
-            cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
-            conn.commit()
-            return None
+                # Check if explicitly revoked in sessions table
+                try:
+                    with get_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT id FROM sessions WHERE token = ? AND expires_at < 0", (token,))
+                        if cursor.fetchone():
+                            return None
+                except Exception:
+                    pass
 
-        return {
-            "id": row["id"],
-            "username": row["username"],
-            "role": row["role"],
-            "token": row["token"]
-        }
+                return {
+                    "id": int(user_id_str),
+                    "username": username,
+                    "role": role,
+                    "token": token
+                }
+    except Exception:
+        pass
+
+    # 2. Fallback to direct DB query (for legacy tokens or local SQLite)
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT s.token, s.expires_at, u.id, u.username, u.role
+                FROM sessions s
+                JOIN users u ON s.user_id = u.id
+                WHERE s.token = ?
+            """, (token,))
+            row = cursor.fetchone()
+
+            if not row:
+                return None
+
+            if row["expires_at"] < now:
+                cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
+                conn.commit()
+                return None
+
+            return {
+                "id": row["id"],
+                "username": row["username"],
+                "role": row["role"],
+                "token": row["token"]
+            }
+    except Exception:
+        return None
 
 def revoke_session(token: str):
     """Revoke a session (logout)."""
     if not token:
         return
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
-        conn.commit()
+    user_id = 1
+    try:
+        raw = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+        parts = raw.split(":")
+        if len(parts) >= 1 and parts[0].isdigit():
+            user_id = int(parts[0])
+    except Exception:
+        pass
+
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            cursor.execute("""
+                INSERT INTO sessions (token, user_id, expires_at, ip_address, user_agent, created_at)
+                VALUES (?, ?, -1, '', '', ?)
+            """, (token, user_id, datetime.utcnow().isoformat()))
+            conn.commit()
+    except Exception:
+        pass
 
 # --- High-level Login Handler ---
 

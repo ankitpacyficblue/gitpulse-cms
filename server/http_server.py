@@ -41,13 +41,13 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
 
     def _get_session_token(self) -> Optional[str]:
         """Extract session token from Cookie or Authorization header."""
-        # 1. Bearer Token Header
-        auth_header = self.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            return auth_header[len("Bearer "):].strip()
+        # 1. Bearer Token Header (case-insensitive)
+        auth_header = self.headers.get("Authorization") or self.headers.get("authorization") or ""
+        if auth_header.lower().startswith("bearer "):
+            return auth_header[7:].strip()
 
         # 2. Cookie Header (session_token=...)
-        cookie_header = self.headers.get("Cookie", "")
+        cookie_header = self.headers.get("Cookie") or self.headers.get("cookie") or ""
         if "session_token=" in cookie_header:
             for part in cookie_header.split(";"):
                 part = part.strip()
@@ -207,11 +207,13 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
             set_cookie = None
             if path == "/api/auth/login" and status_code == 200 and "token" in resp_data:
                 token = resp_data["token"]
-                set_cookie = f"session_token={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=172800"
+                is_https = (self.headers.get("X-Forwarded-Proto") == "https") or bool(os.environ.get("VERCEL"))
+                secure_flag = "; Secure" if is_https else ""
+                set_cookie = f"session_token={token}; Path=/; SameSite=Lax{secure_flag}; Max-Age=172800"
 
             # Handle Cookie removal on logout
             if path == "/api/auth/logout":
-                set_cookie = "session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+                set_cookie = "session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax"
 
             self._set_headers(status_code, "application/json", set_cookie=set_cookie)
             self.wfile.write(json.dumps(resp_data).encode("utf-8"))

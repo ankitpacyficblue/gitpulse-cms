@@ -10,9 +10,19 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function initApp() {
+    // 0. Ensure session token from localStorage is synced into cookie
+    try {
+        const token = localStorage.getItem('gitpulse_token');
+        if (token && !document.cookie.includes('session_token=')) {
+            const isHttps = window.location.protocol === 'https:';
+            document.cookie = `session_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+        }
+    } catch (e) {}
+
     // 1. Verify user session
     const authData = await apiGet('/api/auth/me');
     if (!authData || !authData.user) {
+        try { localStorage.removeItem('gitpulse_token'); } catch (e) {}
         window.location.href = '/login';
         return;
     }
@@ -114,7 +124,12 @@ async function handleLogout() {
     if (!confirm('Are you sure you want to sign out?')) return;
     try {
         await apiPost('/api/auth/logout', {});
+    } catch (e) {
     } finally {
+        try {
+            localStorage.removeItem('gitpulse_token');
+            document.cookie = "session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";
+        } catch (e) {}
         window.location.href = '/login';
     }
 }
@@ -188,10 +203,25 @@ async function confirmEnable2FA() {
 }
 
 // --- API Helpers with Auth Handling ---
+function getAuthHeaders(customHeaders = {}) {
+    const headers = { ...customHeaders };
+    try {
+        const token = localStorage.getItem('gitpulse_token');
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+    } catch (e) {}
+    return headers;
+}
+
 async function apiGet(endpoint) {
     try {
-        const res = await fetch(endpoint);
+        const res = await fetch(endpoint, {
+            headers: getAuthHeaders(),
+            credentials: 'same-origin'
+        });
         if (res.status === 401) {
+            try { localStorage.removeItem('gitpulse_token'); } catch (e) {}
             window.location.href = '/login';
             return null;
         }
@@ -206,10 +236,12 @@ async function apiPost(endpoint, data = {}) {
     try {
         const res = await fetch(endpoint, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
             body: JSON.stringify(data)
         });
         if (res.status === 401 && endpoint !== '/api/auth/login') {
+            try { localStorage.removeItem('gitpulse_token'); } catch (e) {}
             window.location.href = '/login';
             return null;
         }
@@ -224,10 +256,12 @@ async function apiPut(endpoint, data = {}) {
     try {
         const res = await fetch(endpoint, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
             body: JSON.stringify(data)
         });
         if (res.status === 401) {
+            try { localStorage.removeItem('gitpulse_token'); } catch (e) {}
             window.location.href = '/login';
             return null;
         }
@@ -240,8 +274,13 @@ async function apiPut(endpoint, data = {}) {
 
 async function apiDelete(endpoint) {
     try {
-        const res = await fetch(endpoint, { method: 'DELETE' });
+        const res = await fetch(endpoint, {
+            method: 'DELETE',
+            headers: getAuthHeaders(),
+            credentials: 'same-origin'
+        });
         if (res.status === 401) {
+            try { localStorage.removeItem('gitpulse_token'); } catch (e) {}
             window.location.href = '/login';
             return null;
         }

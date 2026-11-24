@@ -82,10 +82,10 @@ class handler(BaseHTTPRequestHandler):
         return self.client_address[0] if self.client_address else "127.0.0.1"
 
     def _get_session_token(self):
-        auth_header = self.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            return auth_header[len("Bearer "):].strip()
-        cookie_header = self.headers.get("Cookie", "")
+        auth_header = self.headers.get("Authorization") or self.headers.get("authorization") or ""
+        if auth_header.lower().startswith("bearer "):
+            return auth_header[7:].strip()
+        cookie_header = self.headers.get("Cookie") or self.headers.get("cookie") or ""
         if "session_token=" in cookie_header:
             for part in cookie_header.split(";"):
                 part = part.strip()
@@ -220,9 +220,11 @@ class handler(BaseHTTPRequestHandler):
             code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent)
             set_cookie = None
             if path == "/api/auth/login" and code == 200 and "token" in resp:
-                set_cookie = f"session_token={resp['token']}; Path=/; HttpOnly; SameSite=Strict; Max-Age=172800"
+                is_https = (self.headers.get("X-Forwarded-Proto") == "https") or bool(os.environ.get("VERCEL"))
+                secure_flag = "; Secure" if is_https else ""
+                set_cookie = f"session_token={resp['token']}; Path=/; SameSite=Lax{secure_flag}; Max-Age=172800"
             if path == "/api/auth/logout":
-                set_cookie = "session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+                set_cookie = "session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax"
 
             self._set_headers(code, "application/json", set_cookie=set_cookie)
             self.wfile.write(json.dumps(resp).encode("utf-8"))
@@ -248,8 +250,8 @@ def app(environ, start_response):
                 token = part[len("session_token="):]
     if not token and "HTTP_AUTHORIZATION" in environ:
         auth_hdr = environ["HTTP_AUTHORIZATION"]
-        if auth_hdr.startswith("Bearer "):
-            token = auth_hdr[len("Bearer "):].strip()
+        if auth_hdr.lower().startswith("bearer "):
+            token = auth_hdr[7:].strip()
 
     current_user = validate_session(token) if token else None
     client_ip = environ.get("HTTP_X_FORWARDED_FOR", environ.get("REMOTE_ADDR", "127.0.0.1")).split(",")[0].strip()
@@ -300,9 +302,10 @@ def app(environ, start_response):
 
         if path == "/api/webhook/whatsapp":
             code, ctype, resp_body = handle_whatsapp_webhook_get(query)
-            self._set_headers(code, ctype)
-            self.wfile.write(resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body)
-            return
+            headers.append(("Content-Type", ctype))
+            status_str = f"{code} OK" if code == 200 else f"{code} Error"
+            start_response(status_str, headers)
+            return [resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body]
 
         if path.startswith("/api/public/"):
             code, ctype, resp_body = handle_public_request(path, query, client_ip)
@@ -350,9 +353,11 @@ def app(environ, start_response):
         code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent)
         headers.append(("Content-Type", "application/json"))
         if path == "/api/auth/login" and code == 200 and "token" in resp:
-            headers.append(("Set-Cookie", f"session_token={resp['token']}; Path=/; HttpOnly; SameSite=Strict; Max-Age=172800"))
+            is_https = (environ.get("HTTP_X_FORWARDED_PROTO") == "https") or bool(os.environ.get("VERCEL"))
+            secure_flag = "; Secure" if is_https else ""
+            headers.append(("Set-Cookie", f"session_token={resp['token']}; Path=/; SameSite=Lax{secure_flag}; Max-Age=172800"))
         if path == "/api/auth/logout":
-            headers.append(("Set-Cookie", "session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT"))
+            headers.append(("Set-Cookie", "session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax"))
 
         status_str = f"{code} OK" if code == 200 else f"{code} Error"
         start_response(status_str, headers)

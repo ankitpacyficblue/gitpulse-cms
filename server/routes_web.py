@@ -81,6 +81,17 @@ def render_login_html() -> str:
     <style>
 """ + _get_embedded_css() + """
     </style>
+    <script>
+        (function() {
+            try {
+                const token = localStorage.getItem('gitpulse_token');
+                if (token && !document.cookie.includes('session_token=')) {
+                    const isHttps = window.location.protocol === 'https:';
+                    document.cookie = `session_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                }
+            } catch (e) {}
+        })();
+    </script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex items-center justify-center p-4">
     <div class="w-full max-w-md">
@@ -203,7 +214,16 @@ def render_login_html() -> str:
 
                 if (res.ok && data.token) {
                     btnText.innerText = 'Success! Redirecting...';
-                    window.location.href = '/';
+                    try {
+                        localStorage.setItem('gitpulse_token', data.token);
+                        const isHttps = window.location.protocol === 'https:';
+                        document.cookie = `session_token=${encodeURIComponent(data.token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                    } catch (e) {
+                        console.error('Local token store error', e);
+                    }
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 50);
                 } else if (data.requires_2fa) {
                     btn.disabled = false;
                     btnText.innerText = 'Verify 2FA Code & Sign In';
@@ -230,6 +250,27 @@ def render_login_html() -> str:
                 errText.innerText = 'Connection error: ' + err.message;
             }
         }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const token = localStorage.getItem('gitpulse_token');
+                if (token) {
+                    const isHttps = window.location.protocol === 'https:';
+                    document.cookie = `session_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                    const res = await fetch('/api/auth/me', {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data && data.user) {
+                            window.location.href = '/';
+                        }
+                    } else {
+                        localStorage.removeItem('gitpulse_token');
+                    }
+                }
+            } catch (e) {}
+        });
     </script>
 </body>
 </html>
@@ -267,6 +308,17 @@ def render_dashboard_html() -> str:
     <style>
 """ + _get_embedded_css() + """
     </style>
+    <script>
+        (function() {
+            try {
+                const token = localStorage.getItem('gitpulse_token');
+                if (token && !document.cookie.includes('session_token=')) {
+                    const isHttps = window.location.protocol === 'https:';
+                    document.cookie = `session_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                }
+            } catch (e) {}
+        })();
+    </script>
 </head>
 <body class="bg-slate-950 text-slate-100">
     <div class="app-layout">
