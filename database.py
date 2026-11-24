@@ -204,6 +204,8 @@ def init_db():
         if "is_platform_admin" not in user_cols:
             cursor.execute("ALTER TABLE users ADD COLUMN is_platform_admin INTEGER NOT NULL DEFAULT 0")
 
+        if "sessions_valid_after_ms" not in user_cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN sessions_valid_after_ms BIGINT NOT NULL DEFAULT 0")
         if "must_change_password" not in user_cols:
             cursor.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
         if "temp_password_expires" not in user_cols:

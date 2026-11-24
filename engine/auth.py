@@ -112,7 +112,8 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute("""SELECT id, username, COALESCE(email, '') AS email, COALESCE(is_active, 1) AS is_active,
                                  COALESCE(is_platform_admin, 0) AS is_platform_admin, created_at,
-                                 COALESCE(must_change_password, 0) AS must_change_password
+                                 COALESCE(must_change_password, 0) AS must_change_password,
+                                 COALESCE(sessions_valid_after_ms, 0) AS sessions_valid_after_ms
                           FROM users WHERE id = ?""", (user_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
@@ -154,6 +155,7 @@ def set_user_active(user_id: int, active: bool) -> bool:
         cursor.execute("UPDATE users SET is_active = ? WHERE id = ?", (1 if active else 0, user_id))
         if not active:
             cursor.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            cursor.execute("UPDATE users SET sessions_valid_after_ms = ? WHERE id = ?", (int(time.time() * 1000), user_id))
         conn.commit()
         return cursor.rowcount > 0
 
@@ -163,9 +165,11 @@ def update_user_password(user_id: int, new_password: str, temporary: bool = Fals
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            UPDATE users SET password_hash = ?, salt = ?, must_change_password = ?, temp_password_expires = ?
+            UPDATE users SET password_hash = ?, salt = ?, must_change_password = ?, temp_password_expires = ?,
+                             sessions_valid_after_ms = ?
             WHERE id = ?
-        """, (hash_hex, salt_hex, 1 if temporary else 0, _temp_expiry() if temporary else "", user_id))
+        """, (hash_hex, salt_hex, 1 if temporary else 0, _temp_expiry() if temporary else "",
+              int(time.time() * 1000), user_id))
         updated = cursor.rowcount > 0
         # Invalidate all existing sessions for this user on password change
         cursor.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
@@ -211,7 +215,7 @@ def create_session(user_id: int, ip_address: str = "", user_agent: str = "") -> 
     """HMAC-signed token (user id, expiry, nonce). Role and account access are NOT in the token:
     they are read from the database on every request, so changes apply immediately."""
     expires_at = int(time.time()) + SESSION_DURATION_SEC
-    body = f"{user_id}:{expires_at}:{secrets.token_hex(8)}"
+    body = f"{user_id}:{expires_at}:{secrets.token_hex(8)}:{int(time.time() * 1000)}"
     token = base64.urlsafe_b64encode(f"{body}:{_sign(body)}".encode("utf-8")).decode("utf-8")
     try:
         with get_connection() as conn:
@@ -230,8 +234,8 @@ def validate_session(token: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         raw = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
-        user_id_str, expires_at_str, nonce, sig = raw.split(":")
-        if not hmac.compare_digest(_sign(f"{user_id_str}:{expires_at_str}:{nonce}"), sig):
+        user_id_str, expires_at_str, nonce, issued_ms, sig = raw.split(":")
+        if not hmac.compare_digest(_sign(f"{user_id_str}:{expires_at_str}:{nonce}:{issued_ms}"), sig):
             return None
         if int(expires_at_str) < time.time():
             return None
@@ -243,6 +247,8 @@ def validate_session(token: str) -> Optional[Dict[str, Any]]:
         return None
     if not user or not user["is_active"]:
         return None
+    if int(issued_ms) <= int(user["sessions_valid_after_ms"]):
+        return None      # revoked by a password change/reset or deactivation
     return {"id": user["id"], "username": user["username"], "email": user["email"],
             "is_platform_admin": bool(user["is_platform_admin"]),
             "must_change_password": bool(user["must_change_password"]), "token": token}

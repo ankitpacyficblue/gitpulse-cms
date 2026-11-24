@@ -204,6 +204,7 @@ REVOKE ALL ON public.whatsapp_configs FROM anon, authenticated;
 -- 8b. UAT additions ----------------------------------------------------------
 ALTER TABLE public.users         ADD COLUMN IF NOT EXISTS must_change_password  BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE public.users         ADD COLUMN IF NOT EXISTS temp_password_expires TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.users         ADD COLUMN IF NOT EXISTS sessions_valid_after_ms BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE public.accounts      ADD COLUMN IF NOT EXISTS default_currency      TEXT NOT NULL DEFAULT 'INR';
 ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS assigned_user_id      BIGINT;
 
