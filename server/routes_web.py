@@ -426,7 +426,7 @@ def render_dashboard_html() -> str:
                 </div>
 
                 <!-- SECTION 3: PLATFORM & CLOUD -->
-                <div class="sidebar-section">
+                <div class="sidebar-section" id="nav-platform-section">
                     <div class="sidebar-section-title">
                         <span>⚙️</span>
                         <span>Platform & Settings</span>
@@ -805,7 +805,7 @@ def render_dashboard_html() -> str:
                         <option value="me">Assigned to me</option>
                     </select>
                     <button onclick="loadWhatsAppInbox()" class="btn-secondary text-xs">🔄 Refresh Chats</button>
-                    <button onclick="openAddContactModal()" class="btn-primary text-xs">+ New Lead</button>
+                    <button data-requires="crm.write" onclick="openAddContactModal()" class="btn-primary text-xs">+ New Lead</button>
                 </div>
             </div>
 
@@ -843,7 +843,7 @@ def render_dashboard_html() -> str:
                             <div class="flex flex-wrap items-center gap-2">
                                 <label class="sr-only" for="wa-assign-select">Assign conversation</label>
                                 <select id="wa-assign-select" data-requires="crm.write" class="input-select text-xs py-1 min-w-[9rem]" onchange="assignConversation(this.value)"></select>
-                                <button onclick="openAddDealModal(activeConversationId)" class="btn-secondary text-xs py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
+                                <button data-requires="crm.write" onclick="openAddDealModal(activeConversationId)" class="btn-secondary text-xs py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
                                     💰 + Create Deal
                                 </button>
                             </div>
@@ -885,7 +885,7 @@ def render_dashboard_html() -> str:
                     <h2 class="text-lg font-semibold text-white">Contacts & Audience CRM</h2>
                     <p class="text-sm text-slate-400">Manage customer audience, customer data platform (CDP) tags, and launch instant 1-click WhatsApp conversations.</p>
                 </div>
-                <button onclick="openAddContactModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-emerald-500/20">
+                <button data-requires="crm.write" onclick="openAddContactModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-emerald-500/20">
                     <span>+ Add New Lead</span>
                 </button>
             </div>
@@ -936,7 +936,7 @@ def render_dashboard_html() -> str:
                 </div>
                 <div class="flex items-center gap-2">
                     <button onclick="loadWhatsAppDeals()" class="btn-secondary text-xs">🔄 Refresh</button>
-                    <button onclick="openAddDealModal()" class="btn-primary text-xs">+ Add Sales Deal</button>
+                    <button data-requires="crm.write" onclick="openAddDealModal()" class="btn-primary text-xs">+ Add Sales Deal</button>
                 </div>
             </div>
 
@@ -996,7 +996,7 @@ def render_dashboard_html() -> str:
                     <h2 class="text-lg font-semibold text-white">Broadcast Campaigns</h2>
                     <p class="text-sm text-slate-400">Dispatch mass WhatsApp announcements, product updates, and newsletters targeted by audience tags.</p>
                 </div>
-                <button onclick="openAddBroadcastModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
+                <button data-requires="broadcasts.run" onclick="openAddBroadcastModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
                     <span>+ New Broadcast Campaign</span>
                 </button>
             </div>
@@ -1016,7 +1016,7 @@ def render_dashboard_html() -> str:
                     </h2>
                     <p class="text-sm text-slate-400">Automate welcome greetings, keyword auto-replies, and automatic WhatsApp broadcasts whenever blog articles are published.</p>
                 </div>
-                <button onclick="openAddAutomationModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
+                <button data-requires="automations.manage" onclick="openAddAutomationModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
                     <span>+ New Automation Rule</span>
                 </button>
             </div>
@@ -1109,6 +1109,7 @@ def render_dashboard_html() -> str:
                         <h2 class="text-base font-semibold text-white flex items-center gap-2">
                             <span>📱 Meta WhatsApp Cloud API Credentials</span>
                             <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">Official Graph API v21.0</span>
+                            <span id="wa-mock-badge" class="hidden text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/30">Mock mode: messages are not sent</span>
                         </h2>
                     </div>
                     <p class="text-xs text-slate-400">Configure your official Meta Business Cloud API credentials. Leave tokens set to mock mode for offline simulation.</p>

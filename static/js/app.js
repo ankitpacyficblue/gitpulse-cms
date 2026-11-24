@@ -113,7 +113,7 @@ function switchTab(tabName) {
         'staging': { title: 'Editorial Staging & Review', sub: 'Review, edit, and approve AI-generated drafts with live SEO scoring' },
         'posts': { title: 'Published Blog Articles', sub: 'Inspect published posts, live Markdown, and GitHub commits/PRs' },
         'zeroredeploy': { title: 'Zero-Redeploy "One-Time Blog Page"', sub: 'Turnkey dynamic blog embed with zero CI/CD rebuilds' },
-        'wa-inbox': { title: 'Shared Team Inbox', sub: 'Two-way live WhatsApp messaging with delivery status ticks and quick replies' },
+        'wa-inbox': { title: 'Shared Team Inbox', sub: 'Two-way live WhatsApp messaging with delivery status and quick replies' },
         'wa-contacts': { title: 'Contacts & Audience CRM', sub: 'Manage customer profiles, lead tags, and WhatsApp communication history' },
         'wa-deals': { title: 'Sales Pipeline (Kanban)', sub: 'Track and advance deals across qualification, proposals, and closed won' },
         'wa-broadcasts': { title: 'Broadcast Campaigns', sub: 'Mass WhatsApp messaging campaigns segmented by audience tags' },
@@ -1546,9 +1546,9 @@ async function loadWhatsAppContacts() {
                     <button onclick="startChatWithContact(${c.id})" class="btn-secondary text-[11px] py-1 px-2.5 flex items-center gap-1 text-emerald-400 hover:text-emerald-300">
                         <span>💬 Chat</span>
                     </button>
-                    <button onclick="openAddDealModal(${c.id}, ${jsAttr(c.name)})" class="btn-secondary text-[11px] py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
+                    ${can('crm.write') ? `<button onclick="openAddDealModal(${c.id}, ${jsAttr(c.name)})" class="btn-secondary text-[11px] py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
                         <span>+ Deal</span>
-                    </button>
+                    </button>` : ''}
                     ${can('crm.delete') ? `<button aria-label="Delete contact" onclick="deleteContactFromUI(${c.id}, ${jsAttr(c.name)})" class="text-slate-500 hover:text-red-400 p-1">🗑️</button>` : ''}
                 </div>
             </td>
@@ -1694,9 +1694,9 @@ async function loadWhatsAppBroadcasts() {
                         <span class="text-xs text-slate-400">Target: <strong class="text-indigo-300">${escapeHtml(b.target_tag.toUpperCase())}</strong></span>
                     </div>
                 </div>
-                <button ${can('broadcasts.run') ? '' : 'disabled title="Your role cannot send broadcasts"'} onclick="runBroadcastFromUI(${b.id})" class="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5">
+                ${can('broadcasts.run') ? `<button onclick="runBroadcastFromUI(${b.id})" class="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5">
                     <span>⚡ Run Broadcast</span>
-                </button>
+                </button>` : ''}
             </div>
             
             <div class="bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs text-slate-300 font-mono">
@@ -1840,6 +1840,7 @@ async function loadWhatsAppConfig() {
     }
     if (document.getElementById('wa-cfg-verify-token')) document.getElementById('wa-cfg-verify-token').value = cfg.verify_token || '';
     window.__mock = cfg.mock_mode === true;
+    const mkb = document.getElementById('wa-mock-badge'); if (mkb) mkb.classList.toggle('hidden', !window.__mock);
     const mb = document.getElementById('wa-mode-badge');
     if (mb && typeof cfg.mock_mode === 'boolean') {
         mb.classList.remove('hidden');
@@ -2084,6 +2085,8 @@ function applyRolePermissions() {
         const n = document.querySelector(`.sidebar-nav-item[onclick*="switchTab('${t}')"]`);
         if (n) n.classList.toggle('hidden', !can(navGate[t]));
     });
+    const ps = document.getElementById('nav-platform-section');
+    if (ps) ps.classList.toggle('hidden', ![...ps.querySelectorAll('.sidebar-nav-item')].some(n => !n.classList.contains('hidden')));
     document.querySelectorAll('header [onclick^="openAddProjectModal"]').forEach(b => b.classList.toggle('hidden', !can('content.publish')));
     document.querySelectorAll('header [onclick^="openAddBroadcastModal"]').forEach(b => b.classList.toggle('hidden', !can('broadcasts.run')));
     const write = can('crm.write');
