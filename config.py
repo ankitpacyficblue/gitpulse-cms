@@ -15,7 +15,7 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
 else:
     DATA_DIR = BASE_DIR / "data"
 
-DATABASE_PATH = DATA_DIR / "gitpulse.db"
+DATABASE_PATH = Path(os.environ["GITPULSE_DB_PATH"]) if os.environ.get("GITPULSE_DB_PATH") else DATA_DIR / "gitpulse.db"
 
 # Ensure data directory exists
 DATA_DIR.mkdir(parents=True, exist_ok=True)
