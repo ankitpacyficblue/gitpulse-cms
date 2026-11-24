@@ -23,6 +23,9 @@ from engine.auth import validate_session
 
 STATIC_DIR = BASE_DIR / "static"
 
+from server.security import SECURITY_HEADERS
+
+
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -71,9 +74,11 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
     ):
         self.send_response(status_code)
         self.send_header("Content-Type", content_type)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Account-Id")
+        for k, v in SECURITY_HEADERS:
+            self.send_header(k, v)
+        if getattr(self, "path", "").split("?")[0].startswith("/api/public/"):
+            # Read-only public blog data may be embedded on client sites; everything else is same-origin.
+            self.send_header("Access-Control-Allow-Origin", "*")
         if set_cookie:
             self.send_header("Set-Cookie", set_cookie)
         if location:

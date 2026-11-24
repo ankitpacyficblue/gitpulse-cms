@@ -18,6 +18,7 @@ import logging
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
+from server.security import SECURITY_HEADERS
 from database import init_db
 from engine.auth import validate_session
 from server.routes_web import render_dashboard_html, render_login_html
@@ -115,9 +116,11 @@ class handler(BaseHTTPRequestHandler):
     def _set_headers(self, status_code=200, content_type="application/json", set_cookie=None, location=None):
         self.send_response(status_code)
         self.send_header("Content-Type", content_type)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Account-Id")
+        for k, v in SECURITY_HEADERS:
+            self.send_header(k, v)
+        if getattr(self, "path", "").split("?")[0].startswith("/api/public/"):
+            # Read-only public blog data may be embedded on client sites; everything else is same-origin.
+            self.send_header("Access-Control-Allow-Origin", "*")
         if set_cookie:
             self.send_header("Set-Cookie", set_cookie)
         if location:
@@ -279,11 +282,9 @@ def app(environ, start_response):
     client_ip = environ.get("HTTP_X_FORWARDED_FOR", environ.get("REMOTE_ADDR", "127.0.0.1")).split(",")[0].strip()
     user_agent = environ.get("HTTP_USER_AGENT", "")
 
-    headers = [
-        ("Access-Control-Allow-Origin", "*"),
-        ("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS"),
-        ("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Account-Id")
-    ]
+    headers = list(SECURITY_HEADERS)
+    if path.startswith("/api/public/"):
+        headers.append(("Access-Control-Allow-Origin", "*"))
 
     if method == "OPTIONS":
         headers.append(("Content-Type", "text/plain"))
