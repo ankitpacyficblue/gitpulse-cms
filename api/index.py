@@ -34,6 +34,40 @@ except Exception as e:
 
 STATIC_DIR = ROOT_DIR / "static"
 
+def get_static_asset(rel_path: str):
+    rel_clean = rel_path.lstrip("/")
+    candidates = [
+        (STATIC_DIR / rel_clean).resolve(),
+        (ROOT_DIR / "public" / "static" / rel_clean).resolve(),
+        (Path.cwd() / "static" / rel_clean).resolve(),
+        (Path.cwd() / "public" / "static" / rel_clean).resolve(),
+        (Path("/var/task/static") / rel_clean).resolve(),
+        (Path("/var/task/public/static") / rel_clean).resolve()
+    ]
+    for p in candidates:
+        if p.is_file():
+            mime, _ = mimetypes.guess_type(str(p))
+            try:
+                with open(p, "rb") as f:
+                    return f.read(), (mime or "application/octet-stream")
+            except Exception:
+                pass
+
+    # In-memory fail-safe fallback
+    try:
+        from server.routes_web import _get_embedded_css, _get_embedded_js
+        if rel_clean.endswith(".css"):
+            css = _get_embedded_css()
+            if css:
+                return css.encode("utf-8"), "text/css; charset=utf-8"
+        if rel_clean.endswith(".js"):
+            js = _get_embedded_js()
+            if js:
+                return js.encode("utf-8"), "application/javascript; charset=utf-8"
+    except Exception:
+        pass
+    return None, None
+
 class handler(BaseHTTPRequestHandler):
     """BaseHTTPRequestHandler interface supported by @vercel/python."""
     
@@ -105,12 +139,10 @@ class handler(BaseHTTPRequestHandler):
 
         if path.startswith("/static/"):
             rel_path = path[len("/static/"):].lstrip("/")
-            file_path = (STATIC_DIR / rel_path).resolve()
-            if STATIC_DIR in file_path.parents and file_path.is_file():
-                mime, _ = mimetypes.guess_type(str(file_path))
+            body_bytes, mime = get_static_asset(rel_path)
+            if body_bytes is not None:
                 self._set_headers(200, mime or "application/octet-stream")
-                with open(file_path, "rb") as f:
-                    self.wfile.write(f.read())
+                self.wfile.write(body_bytes)
                 return
             else:
                 self._set_headers(404, "text/plain")
@@ -244,13 +276,11 @@ def app(environ, start_response):
 
         if path.startswith("/static/"):
             rel_path = path[len("/static/"):].lstrip("/")
-            file_path = (STATIC_DIR / rel_path).resolve()
-            if STATIC_DIR in file_path.parents and file_path.is_file():
-                mime, _ = mimetypes.guess_type(str(file_path))
+            body_bytes, mime = get_static_asset(rel_path)
+            if body_bytes is not None:
                 headers.append(("Content-Type", mime or "application/octet-stream"))
                 start_response("200 OK", headers)
-                with open(file_path, "rb") as f:
-                    return [f.read()]
+                return [body_bytes]
             headers.append(("Content-Type", "text/plain"))
             start_response("404 Not Found", headers)
             return [b"404 Not Found"]

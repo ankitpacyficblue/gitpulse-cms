@@ -3,6 +3,53 @@ GitPulse CMS - Web Dashboard & Authentication Template Renderer
 Serves the responsive single-page management dashboard and secure login view.
 """
 
+from pathlib import Path
+
+_STATIC_CSS_CACHE = None
+_STATIC_JS_CACHE = None
+
+def _get_embedded_css() -> str:
+    global _STATIC_CSS_CACHE
+    if _STATIC_CSS_CACHE is None:
+        candidates = [
+            Path(__file__).resolve().parent.parent / "static" / "css" / "dashboard.css",
+            Path(__file__).resolve().parent.parent / "public" / "static" / "css" / "dashboard.css",
+            Path("/var/task/static/css/dashboard.css"),
+            Path("/var/task/public/static/css/dashboard.css")
+        ]
+        for p in candidates:
+            if p.is_file():
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        _STATIC_CSS_CACHE = f.read()
+                        break
+                except Exception:
+                    pass
+        if _STATIC_CSS_CACHE is None:
+            _STATIC_CSS_CACHE = ""
+    return _STATIC_CSS_CACHE
+
+def _get_embedded_js() -> str:
+    global _STATIC_JS_CACHE
+    if _STATIC_JS_CACHE is None:
+        candidates = [
+            Path(__file__).resolve().parent.parent / "static" / "js" / "app.js",
+            Path(__file__).resolve().parent.parent / "public" / "static" / "js" / "app.js",
+            Path("/var/task/static/js/app.js"),
+            Path("/var/task/public/static/js/app.js")
+        ]
+        for p in candidates:
+            if p.is_file():
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        _STATIC_JS_CACHE = f.read()
+                        break
+                except Exception:
+                    pass
+        if _STATIC_JS_CACHE is None:
+            _STATIC_JS_CACHE = ""
+    return _STATIC_JS_CACHE
+
 def render_login_html() -> str:
     return """<!DOCTYPE html>
 <html lang="en">
@@ -10,9 +57,30 @@ def render_login_html() -> str:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sign In - GitPulse CMS</title>
+    <!-- Tailwind CSS Framework CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        slate: {
+                            950: '#020617',
+                            900: '#0f172a',
+                            800: '#1e293b',
+                            700: '#334155',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
     <link rel="stylesheet" href="/static/css/dashboard.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+""" + _get_embedded_css() + """
+    </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex items-center justify-center p-4">
     <div class="w-full max-w-md">
@@ -174,10 +242,31 @@ def render_dashboard_html() -> str:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GitPulse CMS - Automated Multi-Project GitHub Blog Engine</title>
+    <!-- Tailwind CSS Framework CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        slate: {
+                            950: '#020617',
+                            900: '#0f172a',
+                            800: '#1e293b',
+                            700: '#334155',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
     <link rel="stylesheet" href="/static/css/dashboard.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+""" + _get_embedded_css() + """
+    </style>
 </head>
 <body class="bg-slate-950 text-slate-100">
     <!-- Top Navigation Bar -->
@@ -857,6 +946,12 @@ def render_dashboard_html() -> str:
     <div id="toast" class="toast hidden"></div>
 
     <script src="/static/js/app.js"></script>
+    <script>
+        // Automatic runtime fallback if external script failed to load
+        if (typeof initApp !== 'function') {
+""" + _get_embedded_js() + """
+        }
+    </script>
 </body>
 </html>
 """
