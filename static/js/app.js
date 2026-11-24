@@ -223,17 +223,8 @@ function isScoped(endpoint) {
     return ACCOUNT_SCOPED.some(p => endpoint.startsWith(p));
 }
 
-function scopeUrl(endpoint) {
-    const acct = getActiveAccountId();
-    if (!acct || !isScoped(endpoint) || /[?&]client_id=/.test(endpoint)) return endpoint;
-    return endpoint + (endpoint.includes('?') ? '&' : '?') + 'client_id=' + encodeURIComponent(acct);
-}
-
-function scopeBody(endpoint, data) {
-    const acct = getActiveAccountId();
-    if (!acct || !isScoped(endpoint) || !data || Array.isArray(data) || data.client_id) return data;
-    return { ...data, client_id: acct };
-}
+function scopeUrl(endpoint) { return endpoint; }
+function scopeBody(endpoint, data) { return data; }
 
 function getAuthHeaders(customHeaders = {}) {
     const headers = { ...customHeaders };
@@ -404,7 +395,7 @@ async function loadStatus() {
 // --- Projects Management ---
 async function loadProjects() {
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
-    const url = clientFilter ? `/api/projects?client_id=${clientFilter}` : '/api/projects';
+    const url = '/api/projects';
     const data = await apiGet(url);
     if (!data || !data.projects) return;
 
@@ -1062,7 +1053,6 @@ async function submitWizardProject() {
     btn.innerText = 'Connecting Website...';
 
     const payload = {
-        client_id: document.getElementById('wizard-client-id').value || null,
         name: name,
         github_repo: repo,
         github_branch: document.getElementById('wizard-branch').value || 'main',
@@ -1245,7 +1235,7 @@ let currentConversationsList = [];
 
 async function loadWhatsAppInbox(selectConvId = null) {
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
-    const url = clientFilter ? `/api/whatsapp/conversations?client_id=${clientFilter}` : '/api/whatsapp/conversations';
+    const url = '/api/whatsapp/conversations';
     
     const data = await apiGet(url);
     if (!data || !data.conversations) return;
@@ -1412,7 +1402,6 @@ async function loadWhatsAppContacts() {
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
     
     let url = `/api/whatsapp/contacts?search=${encodeURIComponent(search)}&tag=${encodeURIComponent(tag)}`;
-    if (clientFilter) url += `&client_id=${clientFilter}`;
     
     const data = await apiGet(url);
     if (!data || !data.contacts) return;
@@ -1502,7 +1491,7 @@ async function deleteContactFromUI(id, name) {
 
 async function loadWhatsAppDeals() {
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
-    const url = clientFilter ? `/api/whatsapp/deals?client_id=${clientFilter}` : '/api/whatsapp/deals';
+    const url = '/api/whatsapp/deals';
     
     const data = await apiGet(url);
     if (!data || !data.deals) return;
@@ -1583,7 +1572,7 @@ async function deleteDealFromUI(dealId) {
 
 async function loadWhatsAppBroadcasts() {
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
-    const url = clientFilter ? `/api/whatsapp/broadcasts?client_id=${clientFilter}` : '/api/whatsapp/broadcasts';
+    const url = '/api/whatsapp/broadcasts';
     
     const data = await apiGet(url);
     if (!data || !data.broadcasts) return;
@@ -1659,7 +1648,7 @@ async function runBroadcastFromUI(broadcastId) {
 
 async function loadWhatsAppAutomations() {
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
-    const url = clientFilter ? `/api/whatsapp/automations?client_id=${clientFilter}` : '/api/whatsapp/automations';
+    const url = '/api/whatsapp/automations';
     
     const data = await apiGet(url);
     if (!data || !data.automations) return;
@@ -1738,7 +1727,7 @@ async function deleteAutomationRule(id) {
 
 async function loadWhatsAppConfig() {
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
-    const url = clientFilter ? `/api/whatsapp/config?client_id=${clientFilter}` : '/api/whatsapp/config';
+    const url = '/api/whatsapp/config';
     
     const cfg = await apiGet(url);
     if (!cfg) return;

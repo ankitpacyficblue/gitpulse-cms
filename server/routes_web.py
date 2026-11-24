@@ -87,7 +87,7 @@ def render_login_html() -> str:
                 const token = localStorage.getItem('gitpulse_token');
                 if (token && !document.cookie.includes('session_token=')) {
                     const isHttps = window.location.protocol === 'https:';
-                    document.cookie = `session_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                    document.cookie = `session_token=${token}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
                 }
             } catch (e) {}
         })();
@@ -154,16 +154,6 @@ def render_login_html() -> str:
                 </button>
             </form>
 
-            <!-- Initial Credentials Helper Notice -->
-            <div class="mt-6 p-3 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] text-slate-400 space-y-1">
-                <div class="text-indigo-400 font-semibold flex items-center gap-1">
-                    <span>🔑 Initial Setup Credentials</span>
-                </div>
-                <div>Username: <code class="text-slate-200">admin</code></div>
-                <div>Password: <code class="text-slate-200">GitPulse@Admin2026!</code></div>
-                <div class="text-[10px] text-slate-500 pt-1">You can change your password inside Settings after logging in.</div>
-            </div>
-
             <!-- Security Footprint -->
             <div class="mt-6 pt-4 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-500">
                 <span class="flex items-center gap-1">🛡️ Rate-Limit Protected</span>
@@ -217,7 +207,7 @@ def render_login_html() -> str:
                     try {
                         localStorage.setItem('gitpulse_token', data.token);
                         const isHttps = window.location.protocol === 'https:';
-                        document.cookie = `session_token=${encodeURIComponent(data.token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                        document.cookie = `session_token=${data.token}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
                     } catch (e) {
                         console.error('Local token store error', e);
                     }
@@ -256,7 +246,7 @@ def render_login_html() -> str:
                 const token = localStorage.getItem('gitpulse_token');
                 if (token) {
                     const isHttps = window.location.protocol === 'https:';
-                    document.cookie = `session_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                    document.cookie = `session_token=${token}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
                     const res = await fetch('/api/auth/me', {
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
@@ -314,7 +304,7 @@ def render_dashboard_html() -> str:
                 const token = localStorage.getItem('gitpulse_token');
                 if (token && !document.cookie.includes('session_token=')) {
                     const isHttps = window.location.protocol === 'https:';
-                    document.cookie = `session_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                    document.cookie = `session_token=${token}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
                 }
             } catch (e) {}
         })();
