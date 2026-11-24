@@ -1,0 +1,7 @@
+---
+slug: {slug}
+title: "{title}"
+authors: [{author}]
+tags: {tags_json}
+date: {date}
+---

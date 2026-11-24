@@ -1,0 +1,7 @@
+---
+title: "{title}"
+date: {date_iso}
+draft: false
+tags: {tags_json}
+summary: "{excerpt}"
+---

@@ -1,0 +1,53 @@
+# ====================================================================
+# GitPulse Daily Blog Automation Workflow
+# Drop this into your repository at: .github/workflows/daily-blog.yml
+# ====================================================================
+
+name: GitPulse Daily Blog Automation
+
+on:
+  schedule:
+    # Runs daily at 09:00 UTC (modify to your desired time)
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      force_publish:
+        description: 'Force immediate publication'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  publish-blog:
+    name: Generate & Publish Daily Blog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Trigger GitPulse CMS API
+        env:
+          CMS_URL: ${{ secrets.GITPULSE_CMS_URL || 'https://your-gitpulse-instance.com' }}
+          PROJECT_ID: ${{ secrets.GITPULSE_PROJECT_ID || '1' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🚀 Triggering GitPulse publication pipeline for project ${PROJECT_ID}..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${CMS_URL}/api/projects/${PROJECT_ID}/trigger" \
+            -H "Content-Type: application/json" \
+            -d '{"force_publish": true}')
+          
+          HTTP_BODY=$(echo "$RESPONSE" | sed '$d')
+          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+          
+          echo "HTTP Status: $HTTP_STATUS"
+          echo "Response: $HTTP_BODY"
+          
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "❌ Pipeline failed to trigger"
+            exit 1
+          fi
+          
+          echo "✅ Daily blog generated and published successfully!"

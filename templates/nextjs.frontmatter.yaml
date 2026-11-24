@@ -1,0 +1,9 @@
+---
+title: "{title}"
+description: "{excerpt}"
+date: "{date}"
+author: "{author}"
+tags: {tags_json}
+coverImage: "/images/blog/{slug}.jpg"
+published: true
+---

@@ -1,0 +1,8 @@
+---
+title: "{title}"
+description: "{excerpt}"
+pubDate: "{date}"
+heroImage: "/blog-placeholder.jpg"
+tags: {tags_json}
+draft: false
+---
