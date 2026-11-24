@@ -1049,6 +1049,32 @@ def render_dashboard_html() -> str:
                     </form>
                     <p class="text-[11px] text-slate-500">Deleting hides the account and its data from everyone. Type the account name to confirm.</p>
                 </section>
+                <section id="account-keys-card" class="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-3" aria-labelledby="keys-h" data-requires="account.manage">
+                    <h2 id="keys-h" class="text-base font-semibold text-white">Blog AI, GitHub and currency</h2>
+                    <p class="text-[11px] text-slate-500">Keys are stored encrypted and never shown again. Leave a field blank to keep what is saved.</p>
+                    <form onsubmit="saveAccountSettings(event)" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                            <label for="set-ai-provider" class="block text-xs font-medium text-slate-300 mb-1">AI provider</label>
+                            <select id="set-ai-provider" class="input-text text-xs"><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="mock">Built-in template (no key)</option></select>
+                            <p id="set-ai-source" class="text-[11px] text-slate-500 mt-1"></p>
+                        </div>
+                        <div>
+                            <label for="set-currency" class="block text-xs font-medium text-slate-300 mb-1">Default deal currency</label>
+                            <select id="set-currency" class="input-text text-xs"><option value="INR">INR ₹</option><option value="USD">USD $</option><option value="EUR">EUR €</option><option value="GBP">GBP £</option><option value="AED">AED</option></select>
+                        </div>
+                        <div>
+                            <label for="set-ai-key" class="block text-xs font-medium text-slate-300 mb-1">AI API key</label>
+                            <input type="password" id="set-ai-key" autocomplete="new-password" class="input-text text-xs font-mono" placeholder="Paste a key">
+                            <label class="text-[11px] text-slate-400 flex items-center gap-1 mt-1"><input type="checkbox" id="set-ai-clear"> Remove the saved key</label>
+                        </div>
+                        <div>
+                            <label for="set-gh-token" class="block text-xs font-medium text-slate-300 mb-1">GitHub token</label>
+                            <input type="password" id="set-gh-token" autocomplete="new-password" class="input-text text-xs font-mono" placeholder="Paste a token">
+                            <label class="text-[11px] text-slate-400 flex items-center gap-1 mt-1"><input type="checkbox" id="set-gh-clear"> Remove the saved token</label>
+                        </div>
+                        <div class="md:col-span-2"><button type="submit" class="btn-primary text-xs py-2 px-3">Save settings</button></div>
+                    </form>
+                </section>
                 <section id="users-invite-card" class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-4" aria-labelledby="invite-h" data-requires="users.manage">
                     <h2 id="invite-h" class="text-base font-semibold text-white">Add a person</h2>
                     <form onsubmit="submitInviteUser(event)" class="space-y-3">

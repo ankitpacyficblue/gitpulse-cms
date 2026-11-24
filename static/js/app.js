@@ -899,6 +899,17 @@ async function refreshMe() {
         const m = (me.memberships || []).find(x => String(x.account_id) === String(acct));
         if (m) currentUser.role = m.role;
     }
+    const acctId = getActiveAccountId();
+    if (acctId) {
+        const d = await apiGet(`/api/accounts/${encodeURIComponent(acctId)}`);
+        if (d && d.default_currency) {
+            window.__acctCurrency = d.default_currency;
+            const dc = document.getElementById('new-deal-currency');
+            if (dc) dc.value = d.default_currency;
+            const sc = document.getElementById('set-currency');
+            if (sc) sc.value = d.default_currency;
+        }
+    }
 }
 
 function reloadAccountData() {
@@ -2020,6 +2031,7 @@ async function loadUsersAndRoles() {
     const acct = getActiveAccountId();
     const body = document.getElementById('users-table-body');
     const empty = document.getElementById('users-empty');
+    if (can('account.manage')) loadAccountSettings();
     const an = document.getElementById('acct-name');
     if (an) { const sl = document.getElementById('client-select-filter'); an.value = sl && sl.selectedOptions[0] ? sl.selectedOptions[0].text : ''; }
     const nameEl = document.getElementById('users-account-name');
@@ -2276,5 +2288,40 @@ function copyTempPassword() {
         const note = document.getElementById('invite-result');
         if (note) note.innerText = 'Password copied. It is no longer shown.';
     });
+}
+
+
+async function loadAccountSettings() {
+    const cfg = await apiGet('/api/account/settings');
+    if (!cfg || cfg.error) return;
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+    if (cfg.ai_provider) set('set-ai-provider', cfg.ai_provider);
+    const key = document.getElementById('set-ai-key');
+    if (key) { key.value = ''; key.placeholder = cfg.has_ai_api_key ? `Saved (${cfg.ai_api_key_masked || 'hidden'})` : 'Paste a key'; }
+    const gh = document.getElementById('set-gh-token');
+    if (gh) { gh.value = ''; gh.placeholder = cfg.has_github_token ? `Saved (${cfg.github_token_masked || 'hidden'})` : 'Paste a token'; }
+    const src = document.getElementById('set-ai-source');
+    if (src) src.innerText = cfg.ai_key_source === 'account' ? 'Using this account\'s own key.' : 'Using the platform key until you add one.';
+    const acct = (window.__accounts || []).find(a => String(a.id) === String(getActiveAccountId()));
+    if (window.__acctCurrency) { set('set-currency', window.__acctCurrency); set('new-deal-currency', window.__acctCurrency); }
+}
+
+async function saveAccountSettings(e) {
+    e.preventDefault();
+    const val = id => (document.getElementById(id) || {}).value || '';
+    const body = { ai_provider: val('set-ai-provider') };
+    if (val('set-ai-key')) body.ai_api_key = val('set-ai-key');
+    if (val('set-gh-token')) body.github_token = val('set-gh-token');
+    if ((document.getElementById('set-ai-clear') || {}).checked) body.clear_ai_key = true;
+    if ((document.getElementById('set-gh-clear') || {}).checked) body.clear_github_token = true;
+    const res = await apiPost('/api/account/settings', body);
+    const cur = await apiPatch(`/api/accounts/${encodeURIComponent(getActiveAccountId())}`, { default_currency: val('set-currency') });
+    if (res && !res.error && cur && !cur.error) {
+        showToast('Settings saved.', 'success');
+        ['set-ai-clear', 'set-gh-clear'].forEach(i => { const c = document.getElementById(i); if (c) c.checked = false; });
+        await loadClients();
+        await refreshMe();
+        loadAccountSettings();
+    } else showToast(errorText(res && res.error ? res : cur, 'Could not save settings.'), 'error');
 }
 
