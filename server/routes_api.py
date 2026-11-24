@@ -381,7 +381,7 @@ def status(ctx, m, q, body):
     posts = db.list_posts_for_account(ctx.account_id, limit=100)
     return 200, {"status": "online", "scheduler_active": scheduler.is_alive(), "projects_count": len(projects),
                  "total_posts": len(posts), "published_posts": sum(1 for p in posts if p.get("status") == "published"),
-                 "ai_provider": db.get_setting("ai_provider", DEFAULT_AI_PROVIDER)}
+                 "ai_provider": db.get_setting("ai_provider", DEFAULT_AI_PROVIDER), "mock_mode": mock_enabled()}
 
 
 @route("POST", r"/api/github/verify", "acct:content.publish")
@@ -552,6 +552,7 @@ def _wa_public(account_id: str, host: str = "") -> Dict[str, Any]:
     import os
     cfg = cs.get_whatsapp_public(account_id)
     cfg["webhook_path"] = "/api/webhook/whatsapp"
+    cfg["mock_mode"] = mock_enabled()
     base = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
     if not base and host:
         scheme = "http" if host.startswith(("127.0.0.1", "localhost")) else "https"
@@ -663,7 +664,7 @@ def conv_send(ctx, m, q, body):
     if not conv:
         return 404, {"error": "Conversation not found."}
     res = WhatsAppClient(ctx.account_id).send_text_message(conv["contact_phone"], text)
-    status = ("delivered" if res.get("mock") else "sent") if res.get("success") else "failed"
+    status = ("mock" if res.get("mock") else "sent") if res.get("success") else "failed"
     msg_id = cs.create_message(ctx.account_id, conv["id"], conv["contact_id"], "outbound", text,
                                wa_message_id=res.get("message_id", ""), status=status, error_message=res.get("error", ""))
     return (200 if res.get("success") else 502), {"success": bool(res.get("success")), "message_id": msg_id,

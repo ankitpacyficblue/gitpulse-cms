@@ -81,7 +81,7 @@ class WhatsAppClient:
         if not conv:
             return None
         if res.get("success"):
-            status = "delivered" if res.get("mock") else "sent"
+            status = "mock" if res.get("mock") else "sent"
         else:
             status = "failed"
         return cs.create_message(self.account_id, conv["id"], contact["id"], "outbound", text,
@@ -109,14 +109,11 @@ class WhatsAppClient:
             res = self.send_text_message(contact["phone"], text)
             self._record_outbound(contact, text, res)
             if res.get("success"):
-                sent += 1
-                delivered += 1
-                if res.get("mock"):
-                    read += 1
+                sent += 1   # delivered/read stay 0: nothing in mock mode, and real receipts come from Meta callbacks
         cs.update_broadcast_stats(self.account_id, broadcast_id, total=len(contacts), sent=sent,
                                   delivered=delivered, read=read, status="completed")
         return {"success": True, "total_recipients": len(contacts), "sent_count": sent,
-                "delivered_count": delivered, "read_count": read}
+                "delivered_count": delivered, "read_count": read, "mock": mock_enabled()}
 
     # ------------------------------------------------------- inbound webhooks
 
