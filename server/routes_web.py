@@ -850,10 +850,10 @@ def render_dashboard_html() -> str:
                         <!-- Canned Quick Replies -->
                         <div class="px-4 py-2 border-t border-slate-800/80 bg-slate-950/40 flex items-center gap-1.5 overflow-x-auto">
                             <span class="text-[10px] text-slate-500 uppercase font-semibold mr-1 flex-shrink-0">Quick Replies:</span>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply('Hi! 👋 Thanks for reaching out to GitPulse. How can our autonomous blog publishing and CRM help your company grow?')">👋 Welcome</button>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply('Here is our pricing: Starter $49/mo (3 Repos), Pro $149/mo (10 Repos, Unlimited WA CRM). Reply demo to schedule a call!')">📊 Pricing</button>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply('We would love to show you the zero-redeploy 1-click blog embed! Are you free for a 15-minute demo this week?')">⚡ 1-Click Embed Demo</button>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply('Thanks for your message! Our engineering team has received this and will follow up shortly.')">🙏 Thank You</button>
+                            <button type="button" class="quick-chip" onclick="insertCannedReply(this.dataset.text)" data-text="Hi! Thanks for getting in touch. How can we help?">👋 Welcome</button>
+                            <button type="button" class="quick-chip" onclick="insertCannedReply(this.dataset.text)" data-text="Thanks for your message. We have received it and will reply shortly.">🙏 Received</button>
+                            <button type="button" class="quick-chip" onclick="insertCannedReply(this.dataset.text)" data-text="Could you share a few more details so we can help you better?">❓ More details</button>
+                            <button type="button" class="quick-chip" onclick="insertCannedReply(this.dataset.text)" data-text="Thank you! Is there anything else we can help with?">✅ Wrap up</button>
                         </div>
 
                         <!-- Message Composer Input -->
@@ -1158,18 +1158,18 @@ def render_dashboard_html() -> str:
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
                                     <label class="block text-xs font-medium text-slate-400 mb-1">Sender Name</label>
-                                    <input type="text" id="wa-sim-name" value="Michael Chang" class="input-text text-xs">
+                                    <input type="text" id="wa-sim-name" value="Test Contact" class="input-text text-xs">
                                 </div>
                                 <div>
                                     <label class="block text-xs font-medium text-slate-400 mb-1">Sender Phone</label>
-                                    <input type="text" id="wa-sim-phone" value="+12065554321" class="input-text text-xs font-mono">
+                                    <input type="text" id="wa-sim-phone" value="+15550100000" class="input-text text-xs font-mono">
                                 </div>
                             </div>
 
                             <div>
                                 <label class="block text-xs font-medium text-slate-400 mb-1">Incoming Message Body</label>
                                 <div class="flex gap-2">
-                                    <input type="text" id="wa-sim-message" value="Hi! Can you share your pricing and schedule a demo?" class="input-text text-xs flex-1">
+                                    <input type="text" id="wa-sim-message" value="Hello, this is a test message." class="input-text text-xs flex-1">
                                     <button type="submit" class="btn-primary text-xs py-2 px-3 whitespace-nowrap shadow-cyan-500/20">
                                         Test Message
                                     </button>
@@ -1712,7 +1712,7 @@ def render_dashboard_html() -> str:
             <form onsubmit="submitAddAutomation(event)" class="space-y-4">
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Rule Name *</label>
-                    <input type="text" id="new-auto-name" required class="input-text" placeholder="e.g. Schedule Demo Auto-Responder">
+                    <input type="text" id="new-auto-name" required class="input-text" placeholder="e.g. Opening hours reply">
                 </div>
                 <div class="grid grid-cols-2 gap-3">
                     <div>
@@ -1725,12 +1725,12 @@ def render_dashboard_html() -> str:
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-300 mb-1">Keywords (Comma-separated)</label>
-                        <input type="text" id="new-auto-keyword" class="input-text text-xs" placeholder="e.g. demo, call, talk, meet">
+                        <input type="text" id="new-auto-keyword" class="input-text text-xs" placeholder="e.g. hours, price, book">
                     </div>
                 </div>
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Outbound Reply Message Template *</label>
-                    <textarea id="new-auto-template" required rows="4" class="input-text text-xs font-mono resize-none" placeholder="Hey {{name}}! 📅 We would love to show you a demo. Book a time here: https://cal.com/gitpulse or reply with your preferred day!"></textarea>
+                    <textarea id="new-auto-template" required rows="4" class="input-text text-xs font-mono resize-none" placeholder="Hi {{name}}! Thanks for your message. We will get back to you shortly."></textarea>
                     <p class="text-[11px] text-slate-500 mt-1">Variables: <code>{{name}}</code>, <code>{{phone}}</code>, <code>{{title}}</code>, <code>{{url}}</code></p>
                 </div>
                 <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
