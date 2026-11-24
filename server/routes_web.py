@@ -790,7 +790,7 @@ def render_dashboard_html() -> str:
 
         <!-- TAB: WHATSAPP SHARED TEAM INBOX -->
         <div id="tab-wa-inbox" class="tab-content hidden">
-            <div class="flex justify-between items-center mb-4">
+            <div class="flex flex-wrap justify-between items-center gap-3 mb-4">
                 <div>
                     <h2 class="text-lg font-semibold text-white flex items-center gap-2">
                         <span>💬 WhatsApp Shared Team Inbox</span>
@@ -798,7 +798,12 @@ def render_dashboard_html() -> str:
                     </h2>
                     <p class="text-sm text-slate-400">Two-way threaded WhatsApp messaging for this client account.</p>
                 </div>
-                <div class="flex items-center gap-2">
+                <div class="flex flex-wrap items-center gap-2">
+                    <label class="sr-only" for="wa-assigned-filter">Show conversations</label>
+                    <select id="wa-assigned-filter" class="input-select text-xs py-1.5" onchange="loadWhatsAppInbox()">
+                        <option value="">All conversations</option>
+                        <option value="me">Assigned to me</option>
+                    </select>
                     <button onclick="loadWhatsAppInbox()" class="btn-secondary text-xs">🔄 Refresh Chats</button>
                     <button onclick="openAddContactModal()" class="btn-primary text-xs">+ New Lead</button>
                 </div>
@@ -821,7 +826,7 @@ def render_dashboard_html() -> str:
                     <!-- Active State -->
                     <div id="wa-chat-active-state" class="flex flex-col h-full">
                         <!-- Chat Header -->
-                        <div class="p-3.5 border-b border-slate-800 bg-slate-950/60 flex justify-between items-center">
+                        <div class="p-3.5 border-b border-slate-800 bg-slate-950/60 flex flex-wrap justify-between items-center gap-2">
                             <div class="flex items-center space-x-3">
                                 <div class="w-9 h-9 rounded-full bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center font-bold text-sm text-indigo-300">
                                     WA
@@ -835,7 +840,9 @@ def render_dashboard_html() -> str:
                                 </div>
                             </div>
 
-                            <div class="flex items-center space-x-2">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <label class="sr-only" for="wa-assign-select">Assign conversation</label>
+                                <select id="wa-assign-select" data-requires="crm.write" class="input-select text-xs py-1 min-w-[9rem]" onchange="assignConversation(this.value)"></select>
                                 <button onclick="openAddDealModal(activeConversationId)" class="btn-secondary text-xs py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
                                     💰 + Create Deal
                                 </button>
@@ -1710,12 +1717,10 @@ def render_dashboard_html() -> str:
                 </div>
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Target Audience Tag</label>
-                    <select id="new-broadcast-tag" class="input-select text-xs">
-                        <option value="all">All Contacts</option>
-                        <option value="VIP">VIP Contacts</option>
-                        <option value="Customer">Current Customers</option>
-                        <option value="Lead">Inbound Leads</option>
+                    <select id="new-broadcast-tag" class="input-select text-xs" onchange="updateBroadcastAudience()">
+                        <option value="all">All contacts</option>
                     </select>
+                    <p id="new-broadcast-count" class="text-[11px] text-slate-400 mt-1" aria-live="polite"></p>
                 </div>
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Message Template *</label>

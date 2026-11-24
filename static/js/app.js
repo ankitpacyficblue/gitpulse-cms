@@ -1247,6 +1247,8 @@ function errorText(res, fallback) {
     if (res.error === 'already_member') return 'This person is already in the account.';
     if (res.error === 'duplicate_phone') return 'A contact with this phone number already exists in this account.';
     if (res.error === 'phone_number_in_use') return 'This WhatsApp number is already connected to another account.';
+    if (res.error === 'keyword_required') return 'A keyword rule needs at least one keyword.';
+    if (res.error === 'not_a_member') return 'That person is not in this account.';
     if (res.error === 'last_owner') return 'An account must keep at least one owner.';
     if (res.error === 'account_required') return 'Choose a client account first.';
     return res.error || fallback;
@@ -1284,7 +1286,8 @@ let currentConversationsList = [];
 
 async function loadWhatsAppInbox(selectConvId = null) {
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
-    const url = '/api/whatsapp/conversations';
+    const af = document.getElementById('wa-assigned-filter');
+    const url = '/api/whatsapp/conversations' + (af && af.value === 'me' ? '?assigned=me' : '');
     
     const data = await apiGet(url);
     if (!data || !data.conversations) return;
@@ -1326,6 +1329,7 @@ async function loadWhatsAppInbox(selectConvId = null) {
                     <span class="font-semibold text-xs text-slate-200 truncate">${escapeHtml(conv.contact_name)}</span>
                     <span class="text-[10px] text-slate-500">${timeStr}</span>
                 </div>
+                ${conv.assigned_user_id ? `<div class="text-[10px] text-indigo-300 truncate">${conv.assigned_user_id === (currentUser && currentUser.id) ? 'Assigned to you' : 'Assigned: ' + escapeHtml(conv.assigned_to || '')}</div>` : ''}
                 <div class="flex justify-between items-center">
                     <p class="text-[11px] text-slate-400 truncate">${escapeHtml(conv.last_message_preview || 'No messages')}</p>
                     ${unreadBadge}
@@ -1354,6 +1358,7 @@ async function selectConversation(convId, force = false) {
     
     const conv = currentConversationsList.find(c => c.id === convId);
     if (conv) {
+        renderAssignSelect(conv);
         document.getElementById('wa-chat-empty-state').classList.add('hidden');
         document.getElementById('wa-chat-active-state').classList.remove('hidden');
         
@@ -1374,6 +1379,43 @@ async function selectConversation(convId, force = false) {
     }
     
     await loadConversationMessages(convId);
+}
+
+let accountMembersCache = { acct: null, users: [] };
+async function renderAssignSelect(conv) {
+    const sel = document.getElementById('wa-assign-select');
+    if (!sel) return;
+    const myId = currentUser && currentUser.id;
+    let members = [];
+    if (can('users.manage')) {
+        const acct = getActiveAccountId();
+        if (accountMembersCache.acct !== acct) {
+            const d = await apiGet(`/api/accounts/${encodeURIComponent(acct)}/users`);
+            accountMembersCache = { acct, users: (d && d.users) || [] };
+        }
+        members = accountMembersCache.users;
+    }
+    if (activeConversationId !== conv.id) return;
+    sel.innerHTML = '';
+    sel.add(new Option('Unassigned', ''));
+    if (myId) sel.add(new Option('Me', String(myId)));
+    members.filter(u => u.user_id !== myId).forEach(u => sel.add(new Option(u.username, String(u.user_id))));
+    const cur = conv.assigned_user_id ? String(conv.assigned_user_id) : '';
+    if (cur && ![...sel.options].some(o => o.value === cur)) sel.add(new Option(conv.assigned_to || 'Teammate', cur));
+    sel.value = cur;
+}
+
+async function assignConversation(userId) {
+    if (!activeConversationId) return;
+    const res = await apiPut(`/api/whatsapp/conversations/${activeConversationId}/assign`, { user_id: userId ? parseInt(userId, 10) : null });
+    if (res && res.success) {
+        showToast(userId ? 'Conversation assigned.' : 'Conversation unassigned.', 'success');
+        loadWhatsAppInbox(activeConversationId);
+    } else {
+        showToast(errorText(res, 'Could not assign this conversation'), 'error');
+        const conv = currentConversationsList.find(c => c.id === activeConversationId);
+        if (conv) renderAssignSelect(conv);
+    }
 }
 
 async function loadConversationMessages(convId, silent = false) {
@@ -1635,6 +1677,7 @@ async function loadWhatsAppBroadcasts() {
         container.innerHTML = emptyStateHtml('No broadcasts yet', 'Create a broadcast to message a tagged group of contacts in this account.');
         return;
     }
+    window.lastBroadcasts = data.broadcasts;
     data.broadcasts.forEach(b => {
         const card = document.createElement('div');
         card.className = "bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-3";
@@ -1684,7 +1727,12 @@ async function loadWhatsAppBroadcasts() {
 }
 
 async function runBroadcastFromUI(broadcastId) {
-    if (!confirm('Send this broadcast now to everyone in its audience?')) return;
+    const bc = (window.lastBroadcasts || []).find(x => x.id === broadcastId);
+    const cd = await apiGet('/api/whatsapp/contacts');
+    broadcastContacts = (cd && cd.contacts) || [];
+    const n = bc ? broadcastAudienceCount(bc.target_tag) : null;
+    if (n === 0) { showToast('No contacts match this audience, so nothing would be sent.', 'error'); return; }
+    if (!confirm(n === null ? 'Send this broadcast now to everyone in its audience?' : `Send this broadcast now to ${n} contact${n === 1 ? '' : 's'}?`)) return;
     showToast('Executing WhatsApp broadcast campaign...', 'info');
     const res = await apiPost(`/api/whatsapp/broadcasts/${broadcastId}/run`, {});
     if (res && res.success) {
@@ -1913,8 +1961,30 @@ async function submitAddDeal(e) {
     }
 }
 
-function openAddBroadcastModal() {
+let broadcastContacts = [];
+async function openAddBroadcastModal() {
     document.getElementById('modal-add-broadcast').classList.remove('hidden');
+    const d = await apiGet('/api/whatsapp/contacts');
+    broadcastContacts = (d && d.contacts) || [];
+    const sel = document.getElementById('new-broadcast-tag');
+    const prev = sel.value;
+    sel.innerHTML = '';
+    sel.add(new Option('All contacts', 'all'));
+    const tags = [...new Set(broadcastContacts.flatMap(c => c.tags || []))].sort((a, b) => a.localeCompare(b));
+    tags.forEach(t => sel.add(new Option(t, t)));
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+    updateBroadcastAudience();
+}
+function broadcastAudienceCount(tag) {
+    if (!tag || tag === 'all') return broadcastContacts.length;
+    return broadcastContacts.filter(c => (c.tags || []).some(t => String(t).toLowerCase() === tag.toLowerCase())).length;
+}
+function updateBroadcastAudience() {
+    const el = document.getElementById('new-broadcast-count');
+    const sel = document.getElementById('new-broadcast-tag');
+    if (!el || !sel) return;
+    const n = broadcastAudienceCount(sel.value);
+    el.innerText = n === 1 ? '1 contact will receive this.' : `${n} contacts will receive this.`;
 }
 function closeAddBroadcastModal() {
     document.getElementById('modal-add-broadcast').classList.add('hidden');
@@ -1925,7 +1995,11 @@ async function submitAddBroadcast(e) {
     const target_tag = document.getElementById('new-broadcast-tag').value;
     const template_body = document.getElementById('new-broadcast-template').value;
     const auto_send = document.getElementById('new-broadcast-send-now').checked;
-    
+    if (auto_send) {
+        const n = broadcastAudienceCount(target_tag);
+        if (n === 0) { showToast('No contacts match this audience, so nothing would be sent.', 'error'); return; }
+        if (!confirm(`Send this now to ${n} contact${n === 1 ? '' : 's'}?`)) return;
+    }
     const res = await apiPost('/api/whatsapp/broadcasts', { name, target_tag, template_body, auto_send });
     if (res && res.success) {
         showToast(`Broadcast "${name}" created${auto_send ? ' & sent!' : '.'}`, 'success');
@@ -1933,7 +2007,7 @@ async function submitAddBroadcast(e) {
         loadWhatsAppBroadcasts();
         loadStatus();
     } else {
-        showToast(res ? res.error : 'Failed to create broadcast', 'error');
+        showToast(errorText(res, 'Failed to create broadcast'), 'error');
     }
 }
 
@@ -1957,7 +2031,7 @@ async function submitAddAutomation(e) {
         loadWhatsAppAutomations();
         loadStatus();
     } else {
-        showToast(res ? res.error : 'Failed to create automation', 'error');
+        showToast(errorText(res, 'Failed to create automation'), 'error');
     }
 }
 
