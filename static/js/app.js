@@ -1149,6 +1149,7 @@ async function syncAllToSupabaseFromUI() {
 
 // --- Activity Logs ---
 async function loadLogs() {
+    if (!can('audit.read')) return;
     const data = await apiGet('/api/logs?limit=40');
     if (!data || !data.logs) return;
 
