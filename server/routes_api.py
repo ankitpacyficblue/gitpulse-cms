@@ -43,10 +43,13 @@ Response = Tuple[int, Dict[str, Any]]
 
 class Ctx:
     """Who is calling and for which account. Built only by the access checks."""
-    def __init__(self, user, account_id=None, role=None, ip="", user_agent="", token=None):
+    def __init__(self, user, account_id=None, role=None, ip="", user_agent="", token=None, host=""):
         self.user, self.account_id, self.role, self.ip, self.user_agent = user, account_id, role, ip, user_agent
         self.token = token
+        self.host = host
 
+
+PASSWORD_CHANGE_OK = {"/api/auth/change-password", "/api/auth/me", "/api/auth/logout"}
 
 ROUTES: List[Tuple[str, "re.Pattern", str, Callable]] = []
 
@@ -80,7 +83,17 @@ def _int(v, default=None):
 # Dispatcher
 # ==========================================================================
 
-def handle_api_request(method: str, path: str, query_params: Dict[str, str], body_data: Optional[Dict[str, Any]],
+def handle_api_request(method: str, path: str, *args, **kwargs) -> Response:
+    """Catch-all: a handler bug returns a JSON 500, never a dropped connection."""
+    try:
+        return _handle_api_request(method, path, *args, **kwargs)
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger("gitpulse").exception("API handler failed: %s %s", method, path)
+        return 500, {"error": "Internal server error", "code": "INTERNAL"}
+
+
+def _handle_api_request(method: str, path: str, query_params: Dict[str, str], body_data: Optional[Dict[str, Any]],
                        current_user: Optional[Dict[str, Any]] = None, client_ip: str = "127.0.0.1",
                        user_agent: str = "", headers: Optional[Dict[str, str]] = None) -> Response:
     body = body_data if isinstance(body_data, dict) else {}
@@ -98,7 +111,11 @@ def handle_api_request(method: str, path: str, query_params: Dict[str, str], bod
 
         if not current_user:
             return 401, {"error": "Authentication required. Please log in.", "code": "UNAUTHORIZED"}
-        ctx = Ctx(current_user, ip=client_ip, user_agent=user_agent, token=current_user.get("token"))
+        if current_user.get("must_change_password") and path not in PASSWORD_CHANGE_OK:
+            return 403, {"error": "password_change_required", "code": "password_change_required",
+                         "message": "Change your temporary password to continue."}
+        ctx = Ctx(current_user, ip=client_ip, user_agent=user_agent, token=current_user.get("token"),
+                  host=hdrs.get("x-forwarded-host") or hdrs.get("host", ""))
 
         if access == "session":
             ctx.account_id = hdrs.get("x-account-id") or None   # optional here (used by /api/auth/me)
@@ -162,7 +179,8 @@ def login(ctx, m, q, body):
     ok, token, user, err = authenticate_user(username, password, ctx.ip, ctx.user_agent)
     if not ok:
         return 401, {"error": err or "Authentication failed.", "locked": "locked" in (err or "").lower()}
-    return 200, {"token": token, "user": user, "message": "Login successful."}
+    return 200, {"token": token, "user": user, "must_change_password": bool(user.get("must_change_password")),
+                 "message": "Login successful."}
 
 
 @route("POST", r"/api/auth/logout", "public")
@@ -185,7 +203,8 @@ def me(ctx, m, q, body):
                    for a in cs.list_accounts_for_user(ctx.user["id"])]
     return 200, {
         "user": {"id": ctx.user["id"], "username": ctx.user["username"], "email": ctx.user.get("email", ""),
-                 "is_platform_admin": ctx.user["is_platform_admin"], "totp_enabled": bool(full.get("totp_enabled"))},
+                 "is_platform_admin": ctx.user["is_platform_admin"],
+                 "must_change_password": bool(ctx.user.get("must_change_password")), "totp_enabled": bool(full.get("totp_enabled"))},
         "memberships": memberships,
         "active_account_id": ctx.account_id,
         "permissions": sorted(permissions_for(ctx.role)) if ctx.account_id else [],
@@ -229,6 +248,8 @@ def change_password(ctx, m, q, body):
     full = get_user_by_username(ctx.user["username"])
     if not verify_password(cur, full["salt"], full["password_hash"]):
         return 400, {"error": "Current password is incorrect."}
+    if new == cur:
+        return 400, {"error": "New password must be different from the current one."}
     update_user_password(ctx.user["id"], new)
     return 200, {"message": "Password changed successfully. Please log in again."}
 
@@ -256,15 +277,19 @@ def accounts_create(ctx, m, q, body):
 @route("GET", r"/api/accounts/(?P<aid>[0-9a-f]{32})", "member")
 def account_get(ctx, m, q, body):
     a = cs.get_account(ctx.account_id)
-    return 200, {"id": a["id"], "name": a["name"], "role": ctx.role, "permissions": sorted(permissions_for(ctx.role))}
+    return 200, {"id": a["id"], "name": a["name"], "default_currency": a.get("default_currency", "INR"), "role": ctx.role, "permissions": sorted(permissions_for(ctx.role))}
 
 
 @route("PATCH", r"/api/accounts/(?P<aid>[0-9a-f]{32})", "path:account.manage")
 def account_rename(ctx, m, q, body):
+    ok = False
     try:
-        ok = cs.rename_account(ctx.account_id, body.get("name", ""))
+        if "default_currency" in body:
+            ok = cs.set_default_currency(ctx.account_id, body["default_currency"])
+        if "name" in body or "default_currency" not in body:
+            ok = cs.rename_account(ctx.account_id, body.get("name", ""))
     except ValueError as e:
-        return 400, {"error": "name_required", "message": str(e)}
+        return 400, {"error": "invalid_input", "message": str(e)}
     return 200, {"success": ok}
 
 
@@ -272,6 +297,25 @@ def account_rename(ctx, m, q, body):
 def account_delete(ctx, m, q, body):
     svc.delete_account(ctx.account_id, ctx.role, body.get("confirm_name", ""))
     return 200, {"success": True, "message": "Account deleted. Its data is retained and stays private to it."}
+
+
+@route("GET", r"/api/account/settings", "acct:account.manage")
+def account_settings_get(ctx, m, q, body):
+    return 200, cs.get_account_settings_public(ctx.account_id)
+
+
+@route("POST", r"/api/account/settings", "acct:account.manage")
+def account_settings_save(ctx, m, q, body):
+    if (body.get("ai_api_key") or body.get("github_token")) and not secrets_box.is_configured():
+        return 500, _NO_ENC
+    provider = body.get("ai_provider")
+    if provider is not None and provider not in AI_PROVIDERS:
+        return 400, {"error": "invalid_ai_provider", "allowed": sorted(AI_PROVIDERS)}
+    cs.save_account_settings(ctx.account_id, ai_provider=provider, ai_api_key=body.get("ai_api_key") or "",
+                             github_token=body.get("github_token") or "",
+                             clear_ai_key=bool(body.get("clear_ai_key")), clear_github_token=bool(body.get("clear_github_token")))
+    db.log_event("Account AI/GitHub settings updated.", "INFO", account_id=ctx.account_id)
+    return 200, {"success": True, "settings": cs.get_account_settings_public(ctx.account_id)}
 
 
 @route("GET", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users", "path:users.manage")
@@ -292,6 +336,13 @@ def users_role(ctx, m, q, body):
     svc.change_role(ctx.account_id, ctx.role, int(m.group("uid")), body.get("role", ""))
     db.log_event(f"Role of user #{m.group('uid')} changed to {body.get('role')}.", "INFO", account_id=ctx.account_id)
     return 200, {"success": True}
+
+
+@route("POST", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)/reset-password", "path:users.manage")
+def users_reset_password(ctx, m, q, body):
+    temp = svc.reset_password(ctx.account_id, ctx.role, ctx.user["id"], int(m.group("uid")))
+    db.log_event(f"Password reset for user #{m.group('uid')}.", "INFO", account_id=ctx.account_id)
+    return 200, {"temporary_password": temp, "expires_in_hours": 72, "must_change_password": True}
 
 
 @route("DELETE", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)", "path:users.manage")
@@ -355,7 +406,7 @@ def status(ctx, m, q, body):
     posts = db.list_posts_for_account(ctx.account_id, limit=100)
     return 200, {"status": "online", "scheduler_active": scheduler.is_alive(), "projects_count": len(projects),
                  "total_posts": len(posts), "published_posts": sum(1 for p in posts if p.get("status") == "published"),
-                 "ai_provider": db.get_setting("ai_provider", DEFAULT_AI_PROVIDER)}
+                 "ai_provider": db.get_setting("ai_provider", DEFAULT_AI_PROVIDER), "mock_mode": mock_enabled()}
 
 
 @route("POST", r"/api/github/verify", "acct:content.publish")
@@ -376,7 +427,18 @@ def projects_list(ctx, m, q, body):
 def projects_create(ctx, m, q, body):
     if not body.get("name") or not body.get("github_repo") or not body.get("topic"):
         return 400, {"error": "Missing required fields: 'name', 'github_repo', and 'topic' are mandatory."}
+    if body.get("github_token") and not secrets_box.is_configured():
+        return 500, _NO_ENC
     return 201, {"id": db.create_project(body, ctx.account_id), "message": "Project registered successfully."}
+
+
+_NO_ENC = {"error": "encryption_not_configured",
+           "message": "The server has no CREDENTIAL_ENC_KEY, so credentials cannot be stored."}
+
+
+def _gh_token(ctx, project) -> str:
+    """Project token first, then the account's default token. Never the platform-wide token."""
+    return project.get("github_token") or cs.get_account_github_token(ctx.account_id)
 
 
 def _own_project(ctx, project_id: int) -> Optional[Dict[str, Any]]:
@@ -396,6 +458,8 @@ def project_update(ctx, m, q, body):
     for k in ("github_token", "webhook_secret"):      # empty keeps the stored value
         if not data.get(k):
             data.pop(k, None)
+    if data.get("github_token") and not secrets_box.is_configured():
+        return 500, _NO_ENC
     if not db.update_project(int(m.group("pid")), data, ctx.account_id):
         return 404, {"error": "Project not found or no changes made."}
     return 200, {"message": "Project updated successfully."}
@@ -424,7 +488,7 @@ def project_test_github(ctx, m, q, body):
     proj = _own_project(ctx, int(m.group("pid")))
     if not proj:
         return 404, {"error": "Project not found."}
-    ok, msg = GitHubClient(token=proj.get("github_token") or "").test_connection(proj["github_repo"])
+    ok, msg = GitHubClient(token=_gh_token(ctx, proj)).test_connection(proj["github_repo"])
     return (200 if ok else 400), {"connected": ok, "message": msg}
 
 
@@ -434,7 +498,7 @@ def project_install_blog(ctx, m, q, body):
     proj = _own_project(ctx, pid)
     if not proj:
         return 404, {"error": "Project not found."}
-    token = proj.get("github_token") or ""
+    token = _gh_token(ctx, proj)
     page_path = proj.get("blog_page_path", "public/blog/index.html")
     html = generate_one_time_blog_html(pid, proj["name"], body.get("cms_base_url", ""))
     if not token:
@@ -486,7 +550,7 @@ def _publish_post(ctx, post_id: int, approve: bool) -> Response:
         return 404, {"error": "Post not found."}
     project = _own_project(ctx, post["project_id"])
     from engine.formatters import assemble_post_document
-    res = GitHubClient(token=project.get("github_token") or "").publish_post(
+    res = GitHubClient(token=_gh_token(ctx, project)).publish_post(
         repo=project["github_repo"], branch=project["github_branch"], target_path=post["target_path"],
         file_content=assemble_post_document(post["frontmatter_yaml"], post["content_markdown"]),
         post_title=post["title"], post_excerpt=post["excerpt"],
@@ -522,15 +586,22 @@ def logs(ctx, m, q, body):
 # WhatsApp: configuration (per account)
 # ==========================================================================
 
-def _wa_public(account_id: str) -> Dict[str, Any]:
+def _wa_public(account_id: str, host: str = "") -> Dict[str, Any]:
+    import os
     cfg = cs.get_whatsapp_public(account_id)
     cfg["webhook_path"] = "/api/webhook/whatsapp"
+    cfg["mock_mode"] = mock_enabled()
+    base = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if not base and host:
+        scheme = "http" if host.startswith(("127.0.0.1", "localhost")) else "https"
+        base = f"{scheme}://{host}"
+    cfg["webhook_url"] = base + cfg["webhook_path"] if base else ""
     return cfg
 
 
 @route("GET", r"/api/whatsapp/config", "acct:crm.read")
 def wa_config_get(ctx, m, q, body):
-    return 200, _wa_public(ctx.account_id)
+    return 200, _wa_public(ctx.account_id, ctx.host)
 
 
 @route("POST", r"/api/whatsapp/config", "acct:wa.config")
@@ -540,15 +611,15 @@ def wa_config_save(ctx, m, q, body):
                      "message": "The server has no CREDENTIAL_ENC_KEY, so credentials cannot be stored."}
     try:
         verify = cs.save_whatsapp_account(
-            ctx.account_id, phone_number_id=body.get("phone_number_id", ""), waba_id=body.get("waba_id", ""),
-            business_name=body.get("business_name", ""), phone_number=body.get("phone_number", ""),
+            ctx.account_id, phone_number_id=body.get("phone_number_id"), waba_id=body.get("waba_id"),
+            business_name=body.get("business_name"), phone_number=body.get("phone_number"),
             access_token=body.get("access_token") or "", app_secret=body.get("app_secret") or "")
     except Exception as e:
         if "UNIQUE" in str(e):
             return 409, {"error": "phone_number_in_use", "message": "That WhatsApp phone number id is already connected to another account."}
         raise
     db.log_event("WhatsApp configuration updated.", "INFO", account_id=ctx.account_id)
-    out = {"success": True, "config": _wa_public(ctx.account_id)}
+    out = {"success": True, "config": _wa_public(ctx.account_id, ctx.host)}
     if verify:
         out["verify_token"] = verify          # shown once
     return 200, out
@@ -605,7 +676,20 @@ def contacts_delete(ctx, m, q, body):
 
 @route("GET", r"/api/whatsapp/conversations", "acct:crm.read")
 def conv_list(ctx, m, q, body):
-    return 200, {"conversations": cs.list_conversations(ctx.account_id, status=q.get("status", ""))}
+    mine = ctx.user["id"] if q.get("assigned") == "me" else None
+    return 200, {"conversations": cs.list_conversations(ctx.account_id, status=q.get("status", ""), assigned_user_id=mine)}
+
+
+@route("PUT", r"/api/whatsapp/conversations/(?P<id>\d+)/assign", "acct:crm.write")
+def conversation_assign(ctx, m, q, body):
+    raw = body.get("user_id")
+    uid = None if raw in (None, "", 0) else _int(raw)
+    if raw not in (None, "", 0) and uid is None:
+        return 400, {"error": "invalid_user_id"}
+    if uid is not None and not cs.get_membership_role(ctx.account_id, uid):
+        return 400, {"error": "not_a_member", "message": "That user is not in this account."}
+    ok = cs.assign_conversation(ctx.account_id, int(m.group("id")), uid)
+    return (200, {"success": True}) if ok else (404, {"error": "Conversation not found."})
 
 
 @route("GET", r"/api/whatsapp/conversations/(?P<id>\d+)", "acct:crm.read")
@@ -631,7 +715,7 @@ def conv_send(ctx, m, q, body):
     if not conv:
         return 404, {"error": "Conversation not found."}
     res = WhatsAppClient(ctx.account_id).send_text_message(conv["contact_phone"], text)
-    status = ("delivered" if res.get("mock") else "sent") if res.get("success") else "failed"
+    status = ("mock" if res.get("mock") else "sent") if res.get("success") else "failed"
     msg_id = cs.create_message(ctx.account_id, conv["id"], conv["contact_id"], "outbound", text,
                                wa_message_id=res.get("message_id", ""), status=status, error_message=res.get("error", ""))
     return (200 if res.get("success") else 502), {"success": bool(res.get("success")), "message_id": msg_id,
@@ -658,9 +742,11 @@ def deals_create(ctx, m, q, body):
         value = float(body.get("value", 0.0))
     except (TypeError, ValueError):
         return 400, {"error": "Deal value must be a number."}
+    if str(body.get("stage", "lead")) not in DEAL_STAGES:
+        return 400, {"error": "invalid_stage", "allowed": DEAL_STAGES}
     try:
         did = cs.create_deal(ctx.account_id, title, value, stage=body.get("stage", "lead"),
-                             contact_id=_int(body.get("contact_id")), currency=body.get("currency", "USD"),
+                             contact_id=_int(body.get("contact_id")), currency=(body.get("currency") or None),
                              expected_close=body.get("expected_close", ""), notes=body.get("notes", ""))
     except ValueError:
         return 404, {"error": "Contact not found."}
@@ -672,6 +758,8 @@ def deals_stage(ctx, m, q, body):
     stage = str(body.get("stage", "")).strip()
     if not stage:
         return 400, {"error": "Stage is required."}
+    if stage not in DEAL_STAGES:
+        return 400, {"error": "invalid_stage", "allowed": DEAL_STAGES}
     ok = cs.update_deal_stage(ctx.account_id, int(m.group("id")), stage)
     return (200, {"success": True}) if ok else (404, {"error": "Deal not found."})
 
@@ -707,6 +795,11 @@ def bc_run(ctx, m, q, body):
     return 200, {"success": True, "stats": stats}
 
 
+AI_PROVIDERS = {"gemini", "openai", "mock"}
+TRIGGER_TYPES = {"welcome", "keyword", "blog_publish"}
+DEAL_STAGES = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
+
+
 @route("GET", r"/api/whatsapp/automations", "acct:crm.read")
 def auto_list(ctx, m, q, body):
     return 200, {"automations": cs.list_automations(ctx.account_id)}
@@ -717,6 +810,10 @@ def auto_create(ctx, m, q, body):
     name, trig, tpl = (str(body.get(k, "")).strip() for k in ("name", "trigger_type", "message_template"))
     if not name or not trig or not tpl:
         return 400, {"error": "Name, trigger type, and message template are required."}
+    if trig not in TRIGGER_TYPES:
+        return 400, {"error": "invalid_trigger", "allowed": sorted(TRIGGER_TYPES)}
+    if trig == "keyword" and not str(body.get("trigger_keyword", "")).strip():
+        return 400, {"error": "keyword_required", "message": "A keyword rule needs trigger_keyword."}
     aid = cs.create_automation(ctx.account_id, name, trig, tpl, trigger_keyword=body.get("trigger_keyword", ""),
                                action_type=body.get("action_type", "send_message"),
                                is_active=bool(body.get("is_active", True)))

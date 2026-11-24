@@ -141,6 +141,105 @@ class TestCrossAccountIsolationViaApi(Base):
         self.assertTrue(cs.list_automations(self.other)[0]["is_active"])
         self.assertEqual(cs.list_messages(self.other, conv["id"]), [])
 
+    def test_delete_contact_keeps_deal_unlinked_and_drops_conversation(self):
+        cid = cs.create_contact(self.acct, "Gone", "+15559990009")
+        did = cs.create_deal(self.acct, "Keep me", 5, contact_id=cid)
+        cs.get_or_create_conversation(self.acct, cid)
+        code, _ = self.users["admin"]("DELETE", f"/api/whatsapp/contacts/{cid}")
+        self.assertEqual(code, 200)
+        deals = [d for d in cs.list_deals(self.acct) if d["id"] == did]
+        self.assertEqual(len(deals), 1)
+        self.assertIsNone(deals[0]["contact_id"])
+        self.assertNotIn(cid, [c["contact_id"] for c in cs.list_conversations(self.acct)])
+
+    def test_handler_exception_returns_json_500(self):
+        from unittest import mock
+        with mock.patch.object(cs, "delete_deal", side_effect=RuntimeError("boom")):
+            code, body = self.users["admin"]("DELETE", "/api/whatsapp/deals/1")
+        self.assertEqual(code, 500)
+        self.assertEqual(body["code"], "INTERNAL")
+
+    def test_validation_and_partial_config_save(self):
+        o = self.users["owner"]
+        code, b = o("POST", "/api/whatsapp/automations", {"name": "x", "trigger_type": "new_contact", "message_template": "hi"})
+        self.assertEqual((code, b["error"]), (400, "invalid_trigger"))
+        code, b = o("POST", "/api/whatsapp/automations", {"name": "x", "trigger_type": "keyword", "message_template": "hi"})
+        self.assertEqual((code, b["error"]), (400, "keyword_required"))
+        code, b = o("POST", "/api/whatsapp/deals", {"title": "d", "stage": "bogus"})
+        self.assertEqual((code, b["error"]), (400, "invalid_stage"))
+        did = cs.create_deal(self.acct, "S", 1)
+        self.assertEqual(o("PUT", f"/api/whatsapp/deals/{did}/stage", {"stage": "bogus"})[0], 400)
+        self.assertEqual(o("PUT", f"/api/whatsapp/deals/{did}/stage", {"stage": "won"})[0], 200)
+        self.assertEqual(o("POST", "/api/whatsapp/config", {"phone_number_id": "pn-b10", "waba_id": "W1", "business_name": "A"})[0], 200)
+        self.assertEqual(o("POST", "/api/whatsapp/config", {"business_name": "B"})[0], 200)
+        from unittest import mock
+        with mock.patch.dict("os.environ", {"PUBLIC_BASE_URL": "https://preview.example.com/"}):
+            cfg = o("GET", "/api/whatsapp/config")[1]
+        self.assertEqual(cfg["webhook_url"], "https://preview.example.com/api/webhook/whatsapp")
+        self.assertEqual((cfg["waba_id"], cfg["phone_number_id"], cfg["business_name"]), ("W1", "pn-b10", "B"))
+
+    def test_conversation_assignment(self):
+        cid = cs.create_contact(self.acct, "Assignee", "+15559990077")
+        conv = cs.get_or_create_conversation(self.acct, cid)
+        base = f"/api/whatsapp/conversations/{conv['id']}/assign"
+        agent_id = self.users["agent"].user["id"]
+        self.assertEqual(self.users["admin"]("PUT", base, {"user_id": agent_id})[0], 200)
+        mine = self.users["agent"]("GET", "/api/whatsapp/conversations", query={"assigned": "me"})[1]["conversations"]
+        self.assertEqual([c["id"] for c in mine], [conv["id"]])
+        self.assertEqual(self.users["admin"]("GET", "/api/whatsapp/conversations", query={"assigned": "me"})[1]["conversations"], [])
+        self.assertEqual(self.users["admin"]("PUT", base, {"user_id": self.outsider_user["id"]})[0], 400)
+        self.assertEqual(self.users["admin"]("PUT", base, {"user_id": "abc"})[0], 400)
+        self.assertEqual(self.users["viewer"]("PUT", base, {"user_id": agent_id})[0], 403)
+        self.assertEqual(self.outsider("PUT", base, {"user_id": self.outsider_user["id"]})[0], 404)
+        self.assertEqual(self.users["admin"]("PUT", base, {"user_id": None})[0], 200)
+        self.assertEqual(cs.get_conversation(self.acct, conv["id"])["assigned_to"], "Team")
+
+    def test_default_currency_is_inr_and_editable(self):
+        acct = new_account()
+        from tests.apihelpers import new_user as nu, join as jn
+        u = nu("cur"); jn(acct, u, "owner")
+        c = Caller(u, acct)
+        did = cs.create_deal(acct, "D1", 10)
+        self.assertEqual([d["currency"] for d in cs.list_deals(acct) if d["id"] == did], ["INR"])
+        self.assertEqual(c("PATCH", f"/api/accounts/{acct}", {"default_currency": "usd"})[0], 200)
+        self.assertEqual(c("GET", f"/api/accounts/{acct}")[1]["default_currency"], "USD")
+        self.assertEqual(c("PATCH", f"/api/accounts/{acct}", {"default_currency": "rupees"})[0], 400)
+        did2 = c("POST", "/api/whatsapp/deals", {"title": "D2"})[1]["id"]
+        self.assertEqual([d["currency"] for d in cs.list_deals(acct) if d["id"] == did2], ["USD"])
+        self.assertEqual(self.users["admin"]("PATCH", f"/api/accounts/{self.acct}", {"default_currency": "EUR"})[0], 403)
+
+    def test_account_settings_are_owner_only_write_only_and_encrypted(self):
+        o = self.users["owner"]
+        self.assertEqual(self.users["admin"]("GET", "/api/account/settings")[0], 403)
+        self.assertEqual(o("POST", "/api/account/settings", {"ai_provider": "claude"})[0], 400)
+        code, out = o("POST", "/api/account/settings", {"ai_provider": "gemini", "ai_api_key": "AIza-secret-9999",
+                                                       "github_token": "ghp_acct_token_1234"})
+        self.assertEqual(code, 200)
+        body = o("GET", "/api/account/settings")[1]
+        self.assertTrue(body["has_ai_api_key"] and body["has_github_token"])
+        self.assertNotIn("secret", str(body))
+        self.assertEqual(body["ai_key_source"], "account")
+        self.assertEqual(cs.get_account_ai(self.acct), ("gemini", "AIza-secret-9999"))
+        self.assertEqual(cs.get_account_ai(self.other), ("", ""))          # other account untouched
+        with cs.get_connection() as conn:
+            raw = conn.execute("SELECT ai_api_key_enc, github_token_enc FROM account_settings WHERE account_id = ?",
+                               (self.acct,)).fetchone()
+        self.assertTrue(raw[0].startswith("v1:") and raw[1].startswith("v1:"))
+        o("POST", "/api/account/settings", {"ai_provider": "openai"})        # absent key keeps stored one
+        self.assertEqual(cs.get_account_ai(self.acct)[1], "AIza-secret-9999")
+        o("POST", "/api/account/settings", {"clear_ai_key": True})
+        self.assertFalse(o("GET", "/api/account/settings")[1]["has_ai_api_key"])
+
+    def test_project_github_token_is_encrypted_at_rest(self):
+        o = self.users["owner"]
+        pid = o("POST", "/api/projects", {"name": "Enc", "github_repo": "o/r", "topic": "t",
+                                          "github_token": "ghp_plain_9876"})[1]["id"]
+        with cs.get_connection() as conn:
+            raw = conn.execute("SELECT github_token FROM projects WHERE id = ?", (pid,)).fetchone()[0]
+        self.assertTrue(raw.startswith("v1:"))
+        from database import get_project
+        self.assertEqual(get_project(pid)["github_token"], "ghp_plain_9876")
+
     def test_deal_cannot_link_foreign_contact(self):
         cid = cs.create_contact(self.other, "Foreign", "+15559990002")
         code, _ = self.users["owner"]("POST", "/api/whatsapp/deals", {"title": "Steal", "contact_id": cid})

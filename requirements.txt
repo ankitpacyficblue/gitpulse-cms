@@ -2,3 +2,5 @@
 # Core app uses the Python 3 standard library only.
 # cryptography: AES-256-GCM encryption of per-account WhatsApp credentials (CREDENTIAL_ENC_KEY).
 cryptography>=43
+# pg8000: pure-Python Postgres driver, used when DATABASE_URL is set (Supabase).
+pg8000>=1.31

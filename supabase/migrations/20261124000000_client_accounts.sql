@@ -201,6 +201,23 @@ CREATE POLICY "Public can view active projects" ON public.projects FOR SELECT US
 ALTER TABLE public.whatsapp_configs ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.whatsapp_configs FROM anon, authenticated;
 
+-- 8b. UAT additions ----------------------------------------------------------
+ALTER TABLE public.users         ADD COLUMN IF NOT EXISTS must_change_password  BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE public.users         ADD COLUMN IF NOT EXISTS temp_password_expires TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.accounts      ADD COLUMN IF NOT EXISTS default_currency      TEXT NOT NULL DEFAULT 'INR';
+ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS assigned_user_id      BIGINT;
+
+-- Per-account blog settings: AI provider/key and GitHub token (keys are AES-GCM ciphertext).
+CREATE TABLE IF NOT EXISTS public.account_settings (
+    account_id       UUID PRIMARY KEY REFERENCES public.accounts(id) ON DELETE RESTRICT,
+    ai_provider      TEXT NOT NULL DEFAULT '',
+    ai_api_key_enc   TEXT NOT NULL DEFAULT '',
+    github_token_enc TEXT NOT NULL DEFAULT '',
+    updated_at       TEXT NOT NULL
+);
+ALTER TABLE public.account_settings ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.account_settings FROM anon, authenticated;
+
 -- 9. After review, an operator grants access, for example (NOT run here):
 --   INSERT INTO public.memberships (account_id, user_id, role) VALUES ('<account uuid>', <user id>, 'owner');
 --   UPDATE public.users SET is_platform_admin = true WHERE username = '<operator>';

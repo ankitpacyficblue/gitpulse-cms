@@ -213,6 +213,11 @@ class TestSendingAndAutomations(Base):
         code, out = self.api_a("POST", f"/api/whatsapp/broadcasts/{bid}/run")
         self.assertEqual(code, 200)
         self.assertEqual((out["stats"]["total_recipients"], out["stats"]["sent_count"]), (1, 1))
+        self.assertEqual((out["stats"]["delivered_count"], out["stats"]["read_count"]), (0, 0))
+        self.assertTrue(out["stats"]["mock"])
+        conv = cs.list_conversations(self.a)[0]
+        self.assertEqual([m["status"] for m in cs.list_messages(self.a, conv["id"])], ["mock"])
+        self.assertTrue(self.api_a("GET", "/api/whatsapp/config")[1]["mock_mode"])
         self.assertEqual(cs.list_conversations(self.b), [])
 
     def test_broadcast_without_config_fails_cleanly(self):

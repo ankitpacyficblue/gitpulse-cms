@@ -10,7 +10,7 @@ import hashlib
 import hmac
 import base64
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple
 from database import get_connection, log_event
 
@@ -111,12 +111,26 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""SELECT id, username, COALESCE(email, '') AS email, COALESCE(is_active, 1) AS is_active,
-                                 COALESCE(is_platform_admin, 0) AS is_platform_admin, created_at
+                                 COALESCE(is_platform_admin, 0) AS is_platform_admin, created_at,
+                                 COALESCE(must_change_password, 0) AS must_change_password
                           FROM users WHERE id = ?""", (user_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
-def create_user(username: str, password: str, email: str = "", is_platform_admin: bool = False) -> int:
+TEMP_PASSWORD_HOURS = 72
+
+
+def _temp_expiry() -> str:
+    return (datetime.utcnow() + timedelta(hours=TEMP_PASSWORD_HOURS)).isoformat()
+
+
+def temp_password_expired(user: Dict[str, Any]) -> bool:
+    exp = user.get("temp_password_expires") or ""
+    return bool(user.get("must_change_password") and exp and exp < datetime.utcnow().isoformat())
+
+
+def create_user(username: str, password: str, email: str = "", is_platform_admin: bool = False,
+                temporary: bool = False) -> int:
     """Create a login. Roles live on account memberships, not on the user."""
     username = username.strip().lower()
     if not username or len(password) < 8:
@@ -126,9 +140,11 @@ def create_user(username: str, password: str, email: str = "", is_platform_admin
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO users (username, password_hash, salt, role, email, is_active, is_platform_admin, created_at)
-            VALUES (?, ?, ?, 'member', ?, 1, ?, ?)
-        """, (username, hash_hex, salt_hex, email.strip().lower(), 1 if is_platform_admin else 0, now))
+            INSERT INTO users (username, password_hash, salt, role, email, is_active, is_platform_admin, created_at,
+                               must_change_password, temp_password_expires)
+            VALUES (?, ?, ?, 'member', ?, 1, ?, ?, ?, ?)
+        """, (username, hash_hex, salt_hex, email.strip().lower(), 1 if is_platform_admin else 0, now,
+              1 if temporary else 0, _temp_expiry() if temporary else ""))
         conn.commit()
         return cursor.lastrowid
 
@@ -141,13 +157,15 @@ def set_user_active(user_id: int, active: bool) -> bool:
         conn.commit()
         return cursor.rowcount > 0
 
-def update_user_password(user_id: int, new_password: str) -> bool:
+def update_user_password(user_id: int, new_password: str, temporary: bool = False) -> bool:
+    """temporary=True (admin reset): user must change it at next login, and it expires in 72 h."""
     salt_hex, hash_hex = hash_password(new_password)
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            UPDATE users SET password_hash = ?, salt = ? WHERE id = ?
-        """, (hash_hex, salt_hex, user_id))
+            UPDATE users SET password_hash = ?, salt = ?, must_change_password = ?, temp_password_expires = ?
+            WHERE id = ?
+        """, (hash_hex, salt_hex, 1 if temporary else 0, _temp_expiry() if temporary else "", user_id))
         updated = cursor.rowcount > 0
         # Invalidate all existing sessions for this user on password change
         cursor.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
@@ -226,7 +244,8 @@ def validate_session(token: str) -> Optional[Dict[str, Any]]:
     if not user or not user["is_active"]:
         return None
     return {"id": user["id"], "username": user["username"], "email": user["email"],
-            "is_platform_admin": bool(user["is_platform_admin"]), "token": token}
+            "is_platform_admin": bool(user["is_platform_admin"]),
+            "must_change_password": bool(user["must_change_password"]), "token": token}
 
 def revoke_session(token: str):
     """Revoke a session (logout) by recording a tombstone for the token."""
@@ -281,6 +300,9 @@ def authenticate_user(username: str, password: str, ip_address: str = "", user_a
         record_login_attempt(ip_address, clean_user, success=False)
         log_event(f"Failed password attempt for '{clean_user}' from {ip_address}.", "WARN")
         return False, None, None, "Invalid username or password."
+    if temp_password_expired(user):
+        record_login_attempt(ip_address, clean_user, success=False)
+        return False, None, None, "This temporary password has expired. Ask an admin for a new one."
 
     # 4. Successful login
     record_login_attempt(ip_address, clean_user, success=True)
@@ -290,5 +312,6 @@ def authenticate_user(username: str, password: str, ip_address: str = "", user_a
     return True, token, {
         "id": user["id"],
         "username": user["username"],
-        "is_platform_admin": bool(user.get("is_platform_admin", 0))
+        "is_platform_admin": bool(user.get("is_platform_admin", 0)),
+        "must_change_password": bool(user.get("must_change_password", 0)),
     }, None

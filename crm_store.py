@@ -142,6 +142,18 @@ def init_schema(conn) -> None:
         is_active INTEGER NOT NULL DEFAULT 1, executions_count INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )""")
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS account_settings (
+        account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE RESTRICT,
+        ai_provider TEXT NOT NULL DEFAULT '', ai_api_key_enc TEXT NOT NULL DEFAULT '',
+        github_token_enc TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL
+    )""")
+    acct_cols = {r[1] for r in cur.execute("PRAGMA table_info(accounts)").fetchall()}
+    if "default_currency" not in acct_cols:
+        cur.execute("ALTER TABLE accounts ADD COLUMN default_currency TEXT NOT NULL DEFAULT 'INR'")
+    conv_cols = {r[1] for r in cur.execute("PRAGMA table_info(conversations)").fetchall()}
+    if "assigned_user_id" not in conv_cols:
+        cur.execute("ALTER TABLE conversations ADD COLUMN assigned_user_id INTEGER")
     for stmt in (
         "CREATE INDEX IF NOT EXISTS idx_contacts_acct ON contacts (account_id, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_conv_acct ON conversations (account_id, last_message_at)",
@@ -176,6 +188,17 @@ def get_account(account_id: str) -> Optional[Dict[str, Any]]:
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM accounts WHERE id = ? AND status != 'deleted'", (account_id,)).fetchone()
         return dict(row) if row else None
+
+
+def set_default_currency(account_id: str, currency: str) -> bool:
+    cur_code = (currency or "").strip().upper()
+    if not (len(cur_code) == 3 and cur_code.isalpha()):
+        raise ValueError("Currency must be a 3-letter code such as INR or USD.")
+    with get_connection() as conn:
+        cur = conn.execute("UPDATE accounts SET default_currency = ? WHERE id = ? AND status != 'deleted'",
+                           (cur_code, account_id))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def rename_account(account_id: str, name: str) -> bool:
@@ -239,9 +262,15 @@ def set_membership_role(account_id: str, user_id: int, role: str) -> bool:
         return cur.rowcount > 0
 
 
+def _unassign_for_removed(conn, account_id: str, user_id: int) -> None:
+    conn.execute("UPDATE conversations SET assigned_user_id = NULL, assigned_to = 'Team' "
+                 "WHERE account_id = ? AND assigned_user_id = ?", (account_id, user_id))
+
+
 def remove_membership(account_id: str, user_id: int) -> bool:
     with get_connection() as conn:
         cur = conn.execute("DELETE FROM memberships WHERE account_id = ? AND user_id = ?", (account_id, user_id))
+        _unassign_for_removed(conn, account_id, user_id)
         conn.commit()
         return cur.rowcount > 0
 
@@ -264,22 +293,24 @@ def _hash_verify(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def save_whatsapp_account(account_id: str, phone_number_id: str = "", waba_id: str = "",
-                          business_name: str = "", phone_number: str = "",
+def save_whatsapp_account(account_id: str, phone_number_id: Optional[str] = None, waba_id: Optional[str] = None,
+                          business_name: Optional[str] = None, phone_number: Optional[str] = None,
                           access_token: str = "", app_secret: str = "") -> Optional[str]:
     """Create/update this account's WhatsApp config. Empty access_token/app_secret keep the stored
     values. Returns a new verify token (shown once) when the row is first created, else None."""
     now = _now()
-    phone_number_id = (phone_number_id or "").strip()
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM whatsapp_accounts WHERE account_id = ?", (account_id,)).fetchone()
         token_enc = secrets_box.encrypt(access_token.strip(), account_id) if access_token.strip() else None
         secret_enc = secrets_box.encrypt(app_secret.strip(), account_id) if app_secret.strip() else None
+        def keep(new, old):  # absent field (None) keeps the stored value
+            return old if new is None else new.strip()
         if row:
             conn.execute("""UPDATE whatsapp_accounts SET phone_number_id=?, waba_id=?, business_name=?,
                             phone_number=?, access_token_enc=?, app_secret_enc=?, is_active=1, updated_at=?
                             WHERE account_id=?""",
-                         (phone_number_id, waba_id.strip(), business_name.strip(), phone_number.strip(),
+                         (keep(phone_number_id, row["phone_number_id"]), keep(waba_id, row["waba_id"]),
+                          keep(business_name, row["business_name"]), keep(phone_number, row["phone_number"]),
                           token_enc if token_enc is not None else row["access_token_enc"],
                           secret_enc if secret_enc is not None else row["app_secret_enc"], now, account_id))
             conn.commit()
@@ -288,10 +319,72 @@ def save_whatsapp_account(account_id: str, phone_number_id: str = "", waba_id: s
         conn.execute("""INSERT INTO whatsapp_accounts (account_id, phone_number_id, waba_id, business_name,
                         phone_number, access_token_enc, app_secret_enc, verify_token_hash, is_active,
                         created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?)""",
-                     (account_id, phone_number_id, waba_id.strip(), business_name.strip(), phone_number.strip(),
+                     (account_id, (phone_number_id or "").strip(), (waba_id or "").strip(),
+                      (business_name or "").strip(), (phone_number or "").strip(),
                       token_enc or "", secret_enc or "", _hash_verify(verify), now, now))
         conn.commit()
         return verify
+
+
+def _settings_row(account_id: str):
+    with get_connection() as conn:
+        return conn.execute("SELECT * FROM account_settings WHERE account_id = ?", (account_id,)).fetchone()
+
+
+def save_account_settings(account_id: str, ai_provider: Optional[str] = None, ai_api_key: str = "",
+                          github_token: str = "", clear_ai_key: bool = False, clear_github_token: bool = False) -> None:
+    """Per-account blog settings. Empty key/token keep the stored value; clear_* removes it."""
+    row = _settings_row(account_id)
+    provider = (row["ai_provider"] if row else "") if ai_provider is None else ai_provider.strip()
+    key_enc = row["ai_api_key_enc"] if row else ""
+    gh_enc = row["github_token_enc"] if row else ""
+    if clear_ai_key:
+        key_enc = ""
+    if ai_api_key.strip():
+        key_enc = secrets_box.encrypt(ai_api_key.strip(), account_id)
+    if clear_github_token:
+        gh_enc = ""
+    if github_token.strip():
+        gh_enc = secrets_box.encrypt(github_token.strip(), account_id)
+    with get_connection() as conn:
+        if row:
+            conn.execute("""UPDATE account_settings SET ai_provider=?, ai_api_key_enc=?, github_token_enc=?, updated_at=?
+                            WHERE account_id=?""", (provider, key_enc, gh_enc, _now(), account_id))
+        else:
+            conn.execute("""INSERT INTO account_settings (account_id, ai_provider, ai_api_key_enc, github_token_enc, updated_at)
+                            VALUES (?,?,?,?,?)""", (account_id, provider, key_enc, gh_enc, _now()))
+        conn.commit()
+
+
+def _open_setting(enc: str, account_id: str) -> str:
+    try:
+        return secrets_box.decrypt(enc, account_id) if enc else ""
+    except secrets_box.SecretsBoxError:
+        return ""
+
+
+def get_account_ai(account_id: str):
+    """(provider, api_key) this account chose, or ('', '') so the caller falls back to the platform setting."""
+    row = _settings_row(account_id)
+    if not row:
+        return "", ""
+    return row["ai_provider"], _open_setting(row["ai_api_key_enc"], account_id)
+
+
+def get_account_github_token(account_id: str) -> str:
+    row = _settings_row(account_id)
+    return _open_setting(row["github_token_enc"], account_id) if row else ""
+
+
+def get_account_settings_public(account_id: str) -> Dict[str, Any]:
+    """Write-only secrets: the API reports only whether a value is set and its last 4 characters."""
+    row = _settings_row(account_id)
+    key = _open_setting(row["ai_api_key_enc"], account_id) if row else ""
+    gh = _open_setting(row["github_token_enc"], account_id) if row else ""
+    return {"ai_provider": (row["ai_provider"] if row else ""), "has_ai_api_key": bool(key),
+            "ai_api_key_masked": secrets_box.mask(key), "has_github_token": bool(gh),
+            "github_token_masked": secrets_box.mask(gh),
+            "ai_key_source": "account" if key else "platform"}
 
 
 def rotate_verify_token(account_id: str) -> Optional[str]:
@@ -438,6 +531,9 @@ def update_contact(account_id: str, contact_id: int, **kwargs) -> bool:
 
 def delete_contact(account_id: str, contact_id: int) -> bool:
     with get_connection() as conn:
+        # Unlink deals first: the composite FK's SET NULL would also null account_id.
+        conn.execute("UPDATE deals SET contact_id = NULL WHERE contact_id = ? AND account_id = ?",
+                     (contact_id, account_id))
         cur = conn.execute("DELETE FROM contacts WHERE id = ? AND account_id = ?", (contact_id, account_id))
         conn.commit()
         return cur.rowcount > 0
@@ -458,14 +554,32 @@ def _conv(row) -> Dict[str, Any]:
     return d
 
 
-def list_conversations(account_id: str, status: str = "") -> List[Dict[str, Any]]:
+def list_conversations(account_id: str, status: str = "", assigned_user_id: Optional[int] = None) -> List[Dict[str, Any]]:
     q, p = _CONV_SELECT + " WHERE conv.account_id = ?", [account_id]
+    if assigned_user_id is not None:
+        q += " AND conv.assigned_user_id = ?"
+        p.append(assigned_user_id)
     if status:
         q += " AND conv.status = ?"
         p.append(status)
     q += " ORDER BY conv.last_message_at DESC, conv.id DESC"
     with get_connection() as conn:
         return [_conv(r) for r in conn.execute(q, p).fetchall()]
+
+
+def assign_conversation(account_id: str, conversation_id: int, user_id: Optional[int]) -> bool:
+    """Assign to a member of this account (or None to unassign). Caller has checked membership."""
+    label = "Team"
+    if user_id is not None:
+        with get_connection() as conn:
+            row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+        label = row["username"] if row else "Team"
+    with get_connection() as conn:
+        cur = conn.execute("""UPDATE conversations SET assigned_user_id = ?, assigned_to = ?, updated_at = ?
+                              WHERE id = ? AND account_id = ?""",
+                           (user_id, label, _now(), conversation_id, account_id))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def get_conversation(account_id: str, conversation_id: int) -> Optional[Dict[str, Any]]:
@@ -552,7 +666,9 @@ def list_deals(account_id: str) -> List[Dict[str, Any]]:
 
 
 def create_deal(account_id: str, title: str, value: float, stage: str = "lead", contact_id: Optional[int] = None,
-                currency: str = "USD", expected_close: str = "", notes: str = "") -> int:
+                currency: Optional[str] = None, expected_close: str = "", notes: str = "") -> int:
+    if not currency:
+        currency = (get_account(account_id) or {}).get("default_currency") or "INR"
     if contact_id is not None and not get_contact(account_id, contact_id):
         raise ValueError("contact_not_found")
     now = _now()
