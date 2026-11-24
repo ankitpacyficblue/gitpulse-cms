@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler
 import io
+import logging
 
 # Add parent directory to sys.path so modules resolve on Vercel
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -30,8 +31,8 @@ try:
     init_db()
     from engine.auth import bootstrap_platform_admin_from_env
     bootstrap_platform_admin_from_env()
-except Exception as e:
-    pass
+except Exception:
+    logging.getLogger("gitpulse").exception("init_db/bootstrap failed")
 
 STATIC_DIR = ROOT_DIR / "static"
 
