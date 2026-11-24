@@ -28,6 +28,8 @@ from server.routes_whatsapp import handle_whatsapp_webhook_get, handle_whatsapp_
 # Initialize DB on cold start
 try:
     init_db()
+    from engine.auth import bootstrap_platform_admin_from_env
+    bootstrap_platform_admin_from_env()
 except Exception as e:
     pass
 

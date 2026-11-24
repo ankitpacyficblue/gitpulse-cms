@@ -154,6 +154,18 @@ def update_user_password(user_id: int, new_password: str) -> bool:
         conn.commit()
         return updated
 
+def bootstrap_platform_admin_from_env() -> Optional[int]:
+    """For hosts with no shell (Vercel): create the first platform admin from environment variables
+    BOOTSTRAP_ADMIN_USERNAME / BOOTSTRAP_ADMIN_PASSWORD (min 12 chars). Does nothing if either is
+    missing or the user already exists. There is no built-in default login."""
+    username = (os.environ.get("BOOTSTRAP_ADMIN_USERNAME") or "").strip().lower()
+    password = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD") or ""
+    if not username or len(password) < 12 or get_user_by_username(username):
+        return None
+    user_id = create_user(username, password, is_platform_admin=True)
+    log_event(f"Platform admin '{username}' created from environment.", "INFO")
+    return user_id
+
 def generate_temporary_password() -> str:
     return secrets.token_urlsafe(12)
 

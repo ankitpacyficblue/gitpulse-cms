@@ -74,6 +74,28 @@ class TestSessions(Base):
             os.environ.pop("VERCEL") if old_v is None else os.environ.__setitem__("VERCEL", old_v)
 
 
+class TestBootstrap(Base):
+    def test_bootstrap_from_env_only_with_strong_password_and_is_idempotent(self):
+        import os
+        name = "boot" + str(time.time_ns())
+        os.environ["BOOTSTRAP_ADMIN_USERNAME"] = name
+        try:
+            os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "short"
+            self.assertIsNone(auth.bootstrap_platform_admin_from_env())
+            os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "a-long-bootstrap-password"
+            uid = auth.bootstrap_platform_admin_from_env()
+            self.assertTrue(auth.get_user_by_id(uid)["is_platform_admin"])
+            self.assertIsNone(auth.bootstrap_platform_admin_from_env())
+            ok, *_ = auth.authenticate_user(name, "a-long-bootstrap-password", "7.7.7.7")
+            self.assertTrue(ok)
+        finally:
+            os.environ.pop("BOOTSTRAP_ADMIN_USERNAME", None)
+            os.environ.pop("BOOTSTRAP_ADMIN_PASSWORD", None)
+
+    def test_nothing_without_env(self):
+        self.assertIsNone(auth.bootstrap_platform_admin_from_env())
+
+
 class TestAccountCreation(Base):
     def test_only_platform_admin_creates_accounts(self):
         with self.assertRaises(ServiceError) as cm:

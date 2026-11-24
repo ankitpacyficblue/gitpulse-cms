@@ -16,6 +16,8 @@ def main():
     
     # 1. Initialize SQLite Database & Schema (no sample data, no default login)
     init_db()
+    from engine.auth import bootstrap_platform_admin_from_env
+    bootstrap_platform_admin_from_env()
     print("No accounts are created automatically. Create the first owner with:")
     print("   python3 cli.py create-owner --account \"Account name\" --username NAME")
 

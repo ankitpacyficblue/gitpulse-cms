@@ -195,3 +195,24 @@ All **29 tests** pass in under 0.7 seconds with zero external pip dependencies.
 ## 🛡️ License
 
 MIT License. Built for modern software engineering teams and technical blogs.
+
+## Client accounts, roles and per-account WhatsApp
+
+Every CRM, WhatsApp and blog row belongs to one **account** (a client business). Users join accounts as
+`owner`, `admin`, `agent` or `viewer`; the server checks the role on every route. The browser names the active
+account with the `X-Account-Id` header. There is no sample data and no default login.
+
+Environment (set in Vercel project settings, never in git):
+
+| Variable | Needed for |
+|---|---|
+| `SESSION_SECRET` | Signs session tokens. Required on Vercel. |
+| `CREDENTIAL_ENC_KEY` | 32 random bytes, base64 (`python3 -c "from engine.secrets_box import generate_key as g; print(g())"`). Encrypts WhatsApp tokens. Losing it means owners must re-enter tokens. |
+| `BOOTSTRAP_ADMIN_USERNAME`, `BOOTSTRAP_ADMIN_PASSWORD` (12+ chars) | Creates the first platform admin where there is no shell. |
+| `WHATSAPP_APP_SECRET` | Optional platform-wide Meta app secret for webhook signatures (accounts may store their own). |
+| `WHATSAPP_MOCK=1` | Dev/tests only: simulated sends and the simulate-incoming endpoint. |
+
+Local setup: `python3 cli.py create-platform-admin --username you`, then `python3 cli.py create-owner --account "Acme" --username acme-owner`.
+Meta webhook: one URL for all accounts, `/api/webhook/whatsapp`; each account has its own verify token (shown once) and is routed by its phone number id.
+Tests: `pip install -r requirements.txt && python3 -m unittest discover -s tests -t .`
+Database changes for Supabase are in `supabase/migrations/` (review before applying; not applied automatically).
