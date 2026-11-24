@@ -114,6 +114,9 @@ class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self._set_headers(204, "text/plain")
 
+    def do_HEAD(self):
+        self.do_GET()
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
