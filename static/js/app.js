@@ -16,7 +16,7 @@ async function initApp() {
         const token = localStorage.getItem('gitpulse_token');
         if (token && !document.cookie.includes('session_token=')) {
             const isHttps = window.location.protocol === 'https:';
-            document.cookie = `session_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+            document.cookie = `session_token=${token}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
         }
     } catch (e) {}
 
@@ -58,8 +58,7 @@ async function initApp() {
     await loadWhatsAppAutomations();
     await loadWhatsAppConfig();
     await loadLogs();
-    await loadSettings();
-    await loadSupabaseStatus();
+    if (isPlatformAdmin()) { await loadSettings(); await loadSupabaseStatus(); }
     applyRolePermissions();
     updateAccountBanner();
 
@@ -122,9 +121,9 @@ function switchTab(tabName) {
     if (tabName === 'wa-automations') loadWhatsAppAutomations();
     if (tabName === 'wa-config') loadWhatsAppConfig();
     if (tabName === 'users') loadUsersAndRoles();
-    if (tabName === 'supabase') loadSupabaseStatus();
+    if (tabName === 'supabase' && isPlatformAdmin()) loadSupabaseStatus();
     if (tabName === 'logs') loadLogs();
-    if (tabName === 'settings') loadSettings();
+    if (tabName === 'settings' && isPlatformAdmin()) loadSettings();
 }
 
 // --- Authentication & Session Actions ---
@@ -814,14 +813,8 @@ function closePostModal() {
 async function loadClients() {
     // Final contract: GET /api/accounts -> {accounts:[{id,name,role}]}. Falls back to the old /api/clients list.
     let data = await apiGet('/api/accounts');
-    if (data && Array.isArray(data.accounts)) {
-        accountsMode = true;
-        data = { clients: data.accounts };
-    } else {
-        accountsMode = false;
-        data = await apiGet('/api/clients');
-    }
-    if (!data || !data.clients) return;
+    accountsMode = !!(data && Array.isArray(data.accounts));
+    data = { clients: accountsMode ? data.accounts : [] };
     window.__accounts = data.clients;
 
     // Header client filter
@@ -872,6 +865,7 @@ async function refreshMe() {
         currentUser = me.user;
         window.__perms = Array.isArray(me.permissions) ? me.permissions : null;
         window.__memberships = me.memberships || [];
+        window.__platformAdmin = !!me.user.is_platform_admin;
         const acct = getActiveAccountId();
         const m = (me.memberships || []).find(x => String(x.account_id) === String(acct));
         if (m) currentUser.role = m.role;
@@ -911,21 +905,21 @@ function closeAddClientModal() {
 
 async function submitAddClient(e) {
     e.preventDefault();
-    const name = document.getElementById('new-client-name').value;
-    const email = document.getElementById('new-client-email').value;
-
-    const res = accountsMode ? await apiPost('/api/accounts', { name }) : await apiPost('/api/clients', { name, contact_email: email });
-    if (res && res.id) {
-        showToast('Client created successfully!', 'success');
-        closeAddClientModal();
+    const name = document.getElementById('new-client-name').value.trim();
+    const owner = (document.getElementById('new-client-owner') || {}).value || '';
+    const email = document.getElementById('new-client-email').value.trim();
+    const res = await apiPost('/api/accounts', { name, owner_username: owner.trim() || undefined, owner_email: email || undefined });
+    if (res && res.id && !res.error) {
+        const box = document.getElementById('new-client-result');
+        const pw = res.owner_temporary_password;
+        if (box) box.innerHTML = `Account <strong>${escapeHtml(res.name)}</strong> created.` + (pw ? ` Owner temporary password, shown once: <code class="text-emerald-300">${escapeHtml(pw)}</code>. Share it privately.` : ' The owner can sign in with their existing login.');
+        showToast('Account created.', 'success');
         document.getElementById('new-client-name').value = '';
         document.getElementById('new-client-email').value = '';
+        if (document.getElementById('new-client-owner')) document.getElementById('new-client-owner').value = '';
         await loadClients();
-        if (accountsMode) { const f = document.getElementById('client-select-filter'); if (f) { f.value = String(res.id); onClientFilterChange(); } }
-        const wizardClient = document.getElementById('wizard-client-id');
-        if (wizardClient) wizardClient.value = res.id;
     } else {
-        showToast(res ? res.error : 'Failed to create client', 'error');
+        showToast(errorText(res, 'Failed to create account'), 'error');
     }
 }
 
@@ -1210,6 +1204,9 @@ async function saveSettings() {
 function errorText(res, fallback) {
     if (!res) return fallback;
     if (res.error === 'forbidden') return res.required ? `Your role does not allow this (needs ${res.required}).` : 'Your role does not allow this.';
+    if (res.error === 'already_member') return 'This person is already in the account.';
+    if (res.error === 'duplicate_phone') return 'A contact with this phone number already exists in this account.';
+    if (res.error === 'phone_number_in_use') return 'This WhatsApp number is already connected to another account.';
     if (res.error === 'last_owner') return 'An account must keep at least one owner.';
     if (res.error === 'account_required') return 'Choose a client account first.';
     return res.error || fallback;
@@ -1752,10 +1749,15 @@ async function loadWhatsAppConfig() {
         document.getElementById('wa-cfg-token').placeholder = (cfg.has_token || cfg.access_token) ? `Saved (${cfg.token_masked || 'hidden'}). Leave blank to keep it` : 'Paste the access token from Meta';
     }
     if (document.getElementById('wa-cfg-verify-token')) document.getElementById('wa-cfg-verify-token').value = cfg.verify_token || '';
-    if (cfg.webhook_url) {
-        const hint = document.getElementById('wa-cfg-webhook-url');
-        if (hint) hint.innerText = cfg.webhook_url;
+    const hint = document.getElementById('wa-webhook-url-display');
+    if (hint) {
+        const path = cfg.webhook_path || cfg.webhook_url || '';
+        hint.value = path ? (path.startsWith('http') ? path : window.location.origin + path) : window.location.origin + '/api/webhook/whatsapp';
     }
+    const sec = document.getElementById('wa-cfg-app-secret');
+    if (sec) { sec.value = ''; sec.placeholder = cfg.has_app_secret ? 'Saved. Leave blank to keep it' : 'Paste the Meta app secret'; }
+    const st = document.getElementById('wa-cfg-status');
+    if (st) st.innerText = !cfg.configured ? 'Not set up yet.' : (cfg.has_app_secret ? 'Connected. Webhook signatures are checked.' : 'Needs the app secret: Meta messages are rejected without it.');
     if (document.getElementById('wa-cfg-biz-name')) document.getElementById('wa-cfg-biz-name').value = cfg.business_name || '';
 }
 
@@ -1765,6 +1767,7 @@ async function saveWhatsAppConfig(e) {
         phone_number_id: document.getElementById('wa-cfg-phone-id').value,
         waba_id: document.getElementById('wa-cfg-waba-id').value,
         access_token: document.getElementById('wa-cfg-token').value,
+        app_secret: (document.getElementById('wa-cfg-app-secret') || {}).value || '',
         business_name: document.getElementById('wa-cfg-biz-name').value
     };
     
@@ -1933,7 +1936,15 @@ function can(permission) {
     return list.includes(permission);
 }
 
+function isPlatformAdmin() { return !!window.__platformAdmin; }
+
 function applyRolePermissions() {
+    // Create-account, Settings and Supabase belong to the platform admin only.
+    document.querySelectorAll('[data-platform-admin]').forEach(el => el.classList.toggle('hidden', !isPlatformAdmin()));
+    ['settings', 'supabase'].forEach(t => {
+        const n = document.querySelector(`.sidebar-nav-item[onclick*="switchTab('${t}')"]`);
+        if (n) n.classList.toggle('hidden', !isPlatformAdmin());
+    });
     document.querySelectorAll('[data-requires]').forEach(el => {
         el.classList.toggle('hidden', !can(el.getAttribute('data-requires')));
     });
@@ -1941,8 +1952,15 @@ function applyRolePermissions() {
     if (nav) nav.classList.toggle('hidden', !can('users.manage'));
     const cfgNav = document.querySelector("[onclick*=\"switchTab('wa-config')\"]");
     if (cfgNav) cfgNav.classList.toggle('hidden', !can('wa.config'));
+    const navGate = { logs: 'audit.read', zeroredeploy: 'content.publish' };
+    Object.keys(navGate).forEach(t => {
+        const n = document.querySelector(`.sidebar-nav-item[onclick*="switchTab('${t}')"]`);
+        if (n) n.classList.toggle('hidden', !can(navGate[t]));
+    });
+    document.querySelectorAll('header [onclick^="openAddProjectModal"]').forEach(b => b.classList.toggle('hidden', !can('content.publish')));
+    document.querySelectorAll('header [onclick^="openAddBroadcastModal"]').forEach(b => b.classList.toggle('hidden', !can('broadcasts.run')));
     const write = can('crm.write');
-    ['openAddContactModal', 'openAddDealModal', 'openAddBroadcastModal'].forEach(fn => {
+    ['openAddContactModal', 'openAddDealModal'].forEach(fn => {
         document.querySelectorAll(`header [onclick^="${fn}"]`).forEach(b => b.classList.toggle('hidden', !write));
     });
     const roleEl = document.querySelector('.sidebar-footer .text-slate-400');
@@ -1985,7 +2003,8 @@ async function loadUsersAndRoles() {
     data.users.forEach(u => {
         const tr = document.createElement('tr');
         const uid = u.user_id != null ? u.user_id : u.id;
-        const locked = u.role === 'owner' && !can('account.manage');
+        const isSelf = currentUser && Number(uid) === Number(currentUser.id);
+        const locked = isSelf || (u.role === 'owner' && !can('account.manage'));
         const opts = ['owner', 'admin', 'agent', 'viewer'].filter(r => r !== 'owner' || can('account.manage') || u.role === 'owner').map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r}</option>`).join('');
         tr.innerHTML = `
             <td class="px-5 py-3 text-white">${escapeHtml(u.username || u.email || '')}${u.email && u.username ? `<div class="text-[11px] text-slate-400">${escapeHtml(u.email)}</div>` : ''}${u.is_active === false ? '<span class="ml-2 text-[10px] text-amber-300">inactive</span>' : ''}</td>
@@ -2051,3 +2070,13 @@ document.addEventListener('keydown', ev => {
         document.querySelectorAll('[id^="modal-"]:not(.hidden)').forEach(m => m.classList.add('hidden'));
     }
 });
+
+async function rotateVerifyToken() {
+    if (!confirm('Create a new webhook verify token? Update it in Meta, or Meta will stop sending messages.')) return;
+    const res = await apiPost('/api/whatsapp/config/verify-token', {});
+    if (res && res.verify_token) {
+        const el = document.getElementById('wa-cfg-verify-token');
+        if (el) el.value = res.verify_token;
+        showToast('New verify token created. Copy it now; it is shown once.', 'success');
+    } else showToast(errorText(res, 'Could not create a new token.'), 'error');
+}

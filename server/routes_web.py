@@ -347,7 +347,7 @@ def render_dashboard_html() -> str:
                 <div class="bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
                     <div class="flex justify-between items-center mb-1">
                         <label for="client-select-filter" class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Client account</label>
-                        <button onclick="openAddClientModal()" class="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold">+ Add</button>
+                        <button data-platform-admin onclick="openAddClientModal()" class="hidden text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold">+ New account</button>
                     </div>
                     <select id="client-select-filter" onchange="onClientFilterChange()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-slate-200 outline-none">
                         <option value="">All accounts (admin view)</option>
@@ -1106,6 +1106,13 @@ def render_dashboard_html() -> str:
                         </div>
 
                         <div>
+                            <label for="wa-cfg-app-secret" class="block text-xs font-medium text-slate-300 mb-1">Meta App Secret</label>
+                            <input type="password" id="wa-cfg-app-secret" autocomplete="new-password" class="input-text font-mono text-xs" placeholder="Paste the Meta app secret">
+                            <p class="text-[11px] text-slate-500 mt-1">Needed to check that incoming messages really come from Meta. Without it they are rejected.</p>
+                            <p id="wa-cfg-status" class="text-[11px] text-slate-300 mt-1" role="status"></p>
+                        </div>
+
+                        <div>
                             <label class="block text-xs font-medium text-slate-300 mb-1">Business Display Name</label>
                             <input type="text" id="wa-cfg-biz-name" class="input-text text-xs" placeholder="e.g. GitPulse Business">
                         </div>
@@ -1131,7 +1138,7 @@ def render_dashboard_html() -> str:
                             <div>
                                 <label class="block font-medium text-slate-400 mb-1">Callback URL (GET / POST)</label>
                                 <div class="flex gap-2">
-                                    <input type="text" id="wa-webhook-url-display" readonly value="https://gitpulse-cms.vercel.app/api/webhook/whatsapp" class="input-text font-mono text-xs bg-slate-950 flex-1">
+                                    <input type="text" id="wa-webhook-url-display" readonly value="" class="input-text font-mono text-xs bg-slate-950 flex-1">
                                     <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('wa-webhook-url-display').value); showToast('Webhook URL copied to clipboard!', 'success')" class="btn-secondary text-xs">Copy</button>
                                 </div>
                             </div>
@@ -1140,7 +1147,7 @@ def render_dashboard_html() -> str:
                                 <label class="block font-medium text-slate-400 mb-1">Verify Token</label>
                                 <div class="flex gap-2">
                                     <input type="text" id="wa-cfg-verify-token" readonly placeholder="Created by the server and shown once when you first save" class="input-text font-mono text-xs bg-slate-950 flex-1">
-                                    <span id="wa-cfg-webhook-url" class="sr-only"></span>
+                                    <button type="button" onclick="rotateVerifyToken()" class="btn-secondary text-xs">New token</button>
                                     <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('wa-cfg-verify-token').value); showToast('Verify token copied!', 'success')" class="btn-secondary text-xs">Copy</button>
                                 </div>
                             </div>
@@ -1555,7 +1562,7 @@ def render_dashboard_html() -> str:
     <div id="modal-add-client" class="modal-backdrop hidden">
         <div class="modal-dialog max-w-md">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-base font-bold text-white">Add New Client or Business</h3>
+                <h3 class="text-base font-bold text-white">New client account</h3>
                 <button onclick="closeAddClientModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <form onsubmit="submitAddClient(event)" class="space-y-4">
@@ -1564,13 +1571,16 @@ def render_dashboard_html() -> str:
                     <input type="text" id="new-client-name" required class="input-text" placeholder="e.g. Acme Digital or Fintech Labs">
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-slate-300 mb-1">Contact Email (Optional)</label>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Owner username</label>
+                    <input type="text" id="new-client-owner" class="input-text mb-3" placeholder="Existing or new login for the account owner">
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Owner email (optional)</label>
                     <input type="email" id="new-client-email" class="input-text" placeholder="team@business.com">
                 </div>
                 <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
                     <button type="button" onclick="closeAddClientModal()" class="btn-secondary text-xs">Cancel</button>
                     <button type="submit" class="btn-primary text-xs">Save Client</button>
                 </div>
+            <p id="new-client-result" class="text-xs text-slate-300 mt-3" role="status" aria-live="polite"></p>
             </form>
         </div>
     </div>
