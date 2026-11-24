@@ -76,6 +76,28 @@ class TestTempPasswords(unittest.TestCase):
         code, body = self.admin_c("POST", f"/api/accounts/{self.acct}/users/{self.agent['id']}/reset-password")
         self.assertEqual((code, body["error"]), (403, "shared_login"))
 
+    def test_change_password_revokes_other_sessions(self):
+        uid = self._add("fresh4")["user_id"]
+        auth.update_user_password(uid, "ChosenPass123")
+        _, t1, _ = login("fresh4", "ChosenPass123")
+        _, t2, _ = login("fresh4", "ChosenPass123")
+        c = Caller(auth.validate_session(t1), self.acct)
+        self.assertEqual(c("POST", "/api/auth/change-password",
+                           {"current_password": "ChosenPass123", "new_password": "AnotherPass456"})[0], 200)
+        self.assertIsNone(auth.validate_session(t1))
+        self.assertIsNone(auth.validate_session(t2))
+        self.assertIsNotNone(auth.validate_session(login("fresh4", "AnotherPass456")[1]))
+
+    def test_deactivation_revokes_sessions(self):
+        uid = self._add("fresh5")["user_id"]
+        _, t, _ = login("fresh5", self._pw(uid))
+        auth.set_user_active(uid, False)
+        self.assertIsNone(auth.validate_session(t))
+
+    def _pw(self, uid):
+        auth.update_user_password(uid, "ChosenPass789")
+        return "ChosenPass789"
+
     def test_agent_cannot_reset(self):
         c = Caller(self.agent, self.acct)
         self.assertEqual(c("POST", f"/api/accounts/{self.acct}/users/{self.admin['id']}/reset-password")[0], 403)
