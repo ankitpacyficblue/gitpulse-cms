@@ -1,0 +1,123 @@
+"""SQL translation and the Postgres connection wrapper (no live Postgres needed)."""
+import unittest
+
+import tests._env  # noqa: F401
+import dbcompat
+from dbcompat import PGConnection, translate
+
+
+class FakeRaw:
+    """Stands in for a pg8000 DB-API cursor."""
+    def __init__(self):
+        self.calls, self.rowcount, self.description, self._rows = [], 1, None, []
+
+    def execute(self, sql, params=()):
+        self.calls.append((sql, params))
+        if sql.upper().startswith("INSERT") and "RETURNING id" in sql:
+            self.description, self._rows = [("id",)], [(42,)]
+        elif sql.upper().startswith("SELECT"):
+            self.description, self._rows = [("id",), ("name",)], [(1, "a"), (2, "b")]
+        else:
+            self.description, self._rows = None, []
+
+    def fetchall(self):
+        return self._rows
+
+    def close(self):
+        pass
+
+
+class FakeConn:
+    def __init__(self):
+        self.raw, self.events = FakeRaw(), []
+
+    def cursor(self):
+        return self.raw
+
+    def commit(self):
+        self.events.append("commit")
+
+    def rollback(self):
+        self.events.append("rollback")
+
+    def close(self):
+        self.events.append("close")
+
+
+class TranslateTests(unittest.TestCase):
+    def test_placeholders_and_percent(self):
+        self.assertEqual(translate("SELECT * FROM t WHERE a = ? AND b LIKE ?"),
+                         "SELECT * FROM t WHERE a = %s AND b ILIKE %s")
+        self.assertEqual(translate("SELECT '100%' , ?"), "SELECT '100%%' , %s")
+
+    def test_question_mark_inside_literal_is_kept(self):
+        self.assertEqual(translate("SELECT 'what?' WHERE a = ?"), "SELECT 'what?' WHERE a = %s")
+
+    def test_ddl(self):
+        out = translate("CREATE TABLE x (id INTEGER PRIMARY KEY AUTOINCREMENT, v REAL NOT NULL)")
+        self.assertIn("SERIAL PRIMARY KEY", out)
+        self.assertIn("DOUBLE PRECISION", out)
+        self.assertNotIn("AUTOINCREMENT", out)
+
+    def test_add_column_is_idempotent(self):
+        self.assertIn("ADD COLUMN IF NOT EXISTS", translate("ALTER TABLE users ADD COLUMN email TEXT"))
+
+    def test_pragma(self):
+        self.assertIsNone(translate("PRAGMA journal_mode=WAL"))
+        info = translate("PRAGMA table_info(users)")
+        self.assertIn("information_schema.columns", info)
+        self.assertIn("'users'", info)
+
+    def test_insert_table_detection(self):
+        self.assertEqual(dbcompat.insert_table("INSERT INTO contacts (a) VALUES (?)"), "contacts")
+        self.assertIsNone(dbcompat.insert_table("INSERT INTO accounts (id) VALUES (?)"))
+        self.assertIsNone(dbcompat.insert_table("INSERT INTO contacts (a) VALUES (?) RETURNING id"))
+
+
+class WrapperTests(unittest.TestCase):
+    def test_insert_returns_lastrowid(self):
+        c = FakeConn()
+        cur = PGConnection(c).execute("INSERT INTO contacts (name) VALUES (?)", ("x",))
+        self.assertEqual(cur.lastrowid, 42)
+        self.assertTrue(c.raw.calls[0][0].endswith("RETURNING id"))
+
+    def test_rows_support_index_name_and_dict(self):
+        c = FakeConn()
+        rows = PGConnection(c).execute("SELECT id, name FROM t").fetchall()
+        self.assertEqual(rows[0][0], 1)
+        self.assertEqual(rows[0]["name"], "a")
+        self.assertEqual(dict(rows[1]), {"id": 2, "name": "b"})
+        self.assertEqual(tuple(rows[1]), (2, "b"))
+
+    def test_context_commits_then_closes_and_rolls_back_on_error(self):
+        c = FakeConn()
+        with PGConnection(c) as conn:
+            conn.execute("SELECT 1")
+        self.assertEqual(c.events, ["commit", "close"])
+        c2 = FakeConn()
+        with self.assertRaises(ValueError):
+            with PGConnection(c2):
+                raise ValueError("boom")
+        self.assertEqual(c2.events, ["rollback", "close"])
+
+    def test_sqlite_is_default_without_database_url(self):
+        import os
+        old = os.environ.pop("DATABASE_URL", None)
+        try:
+            self.assertFalse(dbcompat.is_postgres())
+        finally:
+            if old is not None:
+                os.environ["DATABASE_URL"] = old
+
+
+class RlsTests(unittest.TestCase):
+    def test_every_table_the_app_creates_is_in_the_rls_list(self):
+        import re, database, crm_store, inspect
+        src = inspect.getsource(database.init_db) + inspect.getsource(crm_store.init_schema)
+        created = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", src))
+        covered = dbcompat.AUTOID_TABLES | {"accounts", "memberships", "sessions", "settings"}
+        self.assertEqual(created - covered, set(), "tables created without an RLS entry")
+
+
+if __name__ == "__main__":
+    unittest.main()

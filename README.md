@@ -216,3 +216,10 @@ Local setup: `python3 cli.py create-platform-admin --username you`, then `python
 Meta webhook: one URL for all accounts, `/api/webhook/whatsapp`; each account has its own verify token (shown once) and is routed by its phone number id.
 Tests: `pip install -r requirements.txt && python3 -m unittest discover -s tests -t .`
 Database changes for Supabase are in `supabase/migrations/` (review before applying; not applied automatically).
+
+
+## Storage: SQLite or Postgres (Supabase)
+
+- No `DATABASE_URL`: SQLite at `GITPULSE_DB_PATH` (local runs and tests). On Vercel this is `/tmp` and is wiped on cold start, so do not use it for a preview people test on.
+- `DATABASE_URL=postgresql://...` (Supabase connection string, secret): all storage goes to Postgres through `pg8000`. `init_db()` creates the tables on first start and turns on row level security with no policies, so the Supabase REST API cannot read them. Use a NEW project, not the live one.
+- `dbcompat.py` translates the app's SQL for Postgres. It is covered by unit tests and a syntax check, but has not been run against a live Postgres yet.

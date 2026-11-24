@@ -3,21 +3,18 @@ GitPulse CMS - SQLite Database Layer
 Handles persistent storage with WAL mode, robust transaction management, and ORM-like accessors.
 """
 
-import sqlite3
+import dbcompat
 import json
 import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from config import DATABASE_PATH, FRAMEWORK_PRESETS
 
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DATABASE_PATH), timeout=20.0)
-    conn.row_factory = sqlite3.Row
-    # Enable WAL mode for high concurrency
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+def get_connection():
+    """SQLite by default; Postgres when DATABASE_URL is set (see dbcompat)."""
+    if dbcompat.is_postgres():
+        return dbcompat.connect_postgres()
+    return dbcompat.connect_sqlite(DATABASE_PATH)
 
 def init_db():
     """Create tables if they do not exist."""
@@ -212,6 +209,13 @@ def init_db():
         crm_store.init_schema(conn)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_account ON projects (account_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_account ON system_logs (account_id, id)")
+
+        if dbcompat.is_postgres():
+            # Supabase exposes the public schema over its REST API. Row level security
+            # with no policies denies anon/authenticated roles; the app connects as the
+            # database owner, which bypasses RLS. Never leave a table without it.
+            for table in sorted(dbcompat.AUTOID_TABLES | {"accounts", "memberships", "sessions", "settings"}):
+                cursor.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
 
         conn.commit()
 
