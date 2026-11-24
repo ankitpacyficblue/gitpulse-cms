@@ -141,6 +141,24 @@ class TestCrossAccountIsolationViaApi(Base):
         self.assertTrue(cs.list_automations(self.other)[0]["is_active"])
         self.assertEqual(cs.list_messages(self.other, conv["id"]), [])
 
+    def test_delete_contact_keeps_deal_unlinked_and_drops_conversation(self):
+        cid = cs.create_contact(self.acct, "Gone", "+15559990009")
+        did = cs.create_deal(self.acct, "Keep me", 5, contact_id=cid)
+        cs.get_or_create_conversation(self.acct, cid)
+        code, _ = self.users["admin"]("DELETE", f"/api/whatsapp/contacts/{cid}")
+        self.assertEqual(code, 200)
+        deals = [d for d in cs.list_deals(self.acct) if d["id"] == did]
+        self.assertEqual(len(deals), 1)
+        self.assertIsNone(deals[0]["contact_id"])
+        self.assertEqual(cs.list_conversations(self.acct), [])
+
+    def test_handler_exception_returns_json_500(self):
+        from unittest import mock
+        with mock.patch.object(cs, "delete_deal", side_effect=RuntimeError("boom")):
+            code, body = self.users["admin"]("DELETE", "/api/whatsapp/deals/1")
+        self.assertEqual(code, 500)
+        self.assertEqual(body["code"], "INTERNAL")
+
     def test_deal_cannot_link_foreign_contact(self):
         cid = cs.create_contact(self.other, "Foreign", "+15559990002")
         code, _ = self.users["owner"]("POST", "/api/whatsapp/deals", {"title": "Steal", "contact_id": cid})

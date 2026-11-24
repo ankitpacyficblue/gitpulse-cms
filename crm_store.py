@@ -438,6 +438,9 @@ def update_contact(account_id: str, contact_id: int, **kwargs) -> bool:
 
 def delete_contact(account_id: str, contact_id: int) -> bool:
     with get_connection() as conn:
+        # Unlink deals first: the composite FK's SET NULL would also null account_id.
+        conn.execute("UPDATE deals SET contact_id = NULL WHERE contact_id = ? AND account_id = ?",
+                     (contact_id, account_id))
         cur = conn.execute("DELETE FROM contacts WHERE id = ? AND account_id = ?", (contact_id, account_id))
         conn.commit()
         return cur.rowcount > 0

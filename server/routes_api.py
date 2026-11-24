@@ -80,7 +80,17 @@ def _int(v, default=None):
 # Dispatcher
 # ==========================================================================
 
-def handle_api_request(method: str, path: str, query_params: Dict[str, str], body_data: Optional[Dict[str, Any]],
+def handle_api_request(method: str, path: str, *args, **kwargs) -> Response:
+    """Catch-all: a handler bug returns a JSON 500, never a dropped connection."""
+    try:
+        return _handle_api_request(method, path, *args, **kwargs)
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger("gitpulse").exception("API handler failed: %s %s", method, path)
+        return 500, {"error": "Internal server error", "code": "INTERNAL"}
+
+
+def _handle_api_request(method: str, path: str, query_params: Dict[str, str], body_data: Optional[Dict[str, Any]],
                        current_user: Optional[Dict[str, Any]] = None, client_ip: str = "127.0.0.1",
                        user_agent: str = "", headers: Optional[Dict[str, str]] = None) -> Response:
     body = body_data if isinstance(body_data, dict) else {}
