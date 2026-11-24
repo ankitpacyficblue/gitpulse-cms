@@ -179,7 +179,8 @@ def login(ctx, m, q, body):
     ok, token, user, err = authenticate_user(username, password, ctx.ip, ctx.user_agent)
     if not ok:
         return 401, {"error": err or "Authentication failed.", "locked": "locked" in (err or "").lower()}
-    return 200, {"token": token, "user": user, "message": "Login successful."}
+    return 200, {"token": token, "user": user, "must_change_password": bool(user.get("must_change_password")),
+                 "message": "Login successful."}
 
 
 @route("POST", r"/api/auth/logout", "public")
@@ -202,7 +203,8 @@ def me(ctx, m, q, body):
                    for a in cs.list_accounts_for_user(ctx.user["id"])]
     return 200, {
         "user": {"id": ctx.user["id"], "username": ctx.user["username"], "email": ctx.user.get("email", ""),
-                 "is_platform_admin": ctx.user["is_platform_admin"], "totp_enabled": bool(full.get("totp_enabled"))},
+                 "is_platform_admin": ctx.user["is_platform_admin"],
+                 "must_change_password": bool(ctx.user.get("must_change_password")), "totp_enabled": bool(full.get("totp_enabled"))},
         "memberships": memberships,
         "active_account_id": ctx.account_id,
         "permissions": sorted(permissions_for(ctx.role)) if ctx.account_id else [],

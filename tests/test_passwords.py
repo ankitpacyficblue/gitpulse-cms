@@ -35,7 +35,10 @@ class TestTempPasswords(unittest.TestCase):
         c = Caller(user, self.acct)
         code, body = c("GET", "/api/whatsapp/contacts")
         self.assertEqual((code, body["code"]), (403, "password_change_required"))
-        self.assertEqual(c("GET", "/api/auth/me")[0], 200)
+        self.assertTrue(c("GET", "/api/auth/me")[1]["user"]["must_change_password"])
+        from server.routes_api import handle_api_request
+        code, body = handle_api_request("POST", "/api/auth/login", {}, {"username": "fresh1", "password": out["temporary_password"]})
+        self.assertTrue(body["must_change_password"])
         self.assertEqual(c("POST", "/api/auth/change-password",
                            {"current_password": out["temporary_password"], "new_password": "BrandNewPass1"})[0], 200)
         ok, token, _ = login("fresh1", "BrandNewPass1")
