@@ -16,6 +16,8 @@ from typing import Dict, Any, Optional
 from config import BASE_DIR
 from server.routes_api import handle_api_request
 from server.routes_web import render_dashboard_html, render_login_html
+from server.routes_public import handle_public_request
+from server.routes_webhook import handle_github_webhook
 from engine.auth import validate_session
 
 STATIC_DIR = BASE_DIR / "static"
@@ -125,7 +127,15 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b"404 Not Found")
                 return
 
-        # 4. API Routes
+        # 4. Public Headless Content API (CORS enabled, no auth required)
+        if path.startswith("/api/public/"):
+            client_ip = self._get_client_ip()
+            code, ctype, resp_body = handle_public_request(path, query, client_ip)
+            self._set_headers(code, ctype)
+            self.wfile.write(resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body)
+            return
+
+        # 5. Protected Admin API Routes
         if path.startswith("/api/"):
             client_ip = self._get_client_ip()
             user_agent = self.headers.get("User-Agent", "")
@@ -156,13 +166,24 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
         user_agent = self.headers.get("User-Agent", "")
 
         content_length = int(self.headers.get("Content-Length", 0))
+        raw_body_bytes = b""
         body_data = None
         if content_length > 0:
             try:
-                raw_body = self.rfile.read(content_length).decode("utf-8")
+                raw_body_bytes = self.rfile.read(content_length)
+                raw_body = raw_body_bytes.decode("utf-8")
                 body_data = json.loads(raw_body) if raw_body else {}
             except Exception:
                 body_data = {}
+
+        # GitHub Bi-Directional Webhook Receiver
+        if path == "/api/webhook/github" and method == "POST":
+            event_type = self.headers.get("X-GitHub-Event", "ping")
+            signature = self.headers.get("X-Hub-Signature-256", "")
+            code, resp = handle_github_webhook(event_type, signature, raw_body_bytes, body_data or {})
+            self._set_headers(code, "application/json")
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
 
         if path.startswith("/api/"):
             status_code, resp_data = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent)

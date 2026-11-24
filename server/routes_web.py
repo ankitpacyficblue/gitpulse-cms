@@ -63,6 +63,13 @@ def render_login_html() -> str:
                     </div>
                 </div>
 
+                <!-- 2FA TOTP Field (Shown when 2FA is active) -->
+                <div id="totp-container" class="hidden">
+                    <label class="block text-xs font-medium text-indigo-300 mb-1">2-Factor Authentication Code (6 Digits)</label>
+                    <input type="text" id="login-totp" maxlength="6" class="input-text font-mono text-center tracking-widest text-lg" placeholder="000000" autocomplete="one-time-code">
+                    <p class="text-[11px] text-slate-400 mt-1">Enter the 6-digit verification code from your authenticator app.</p>
+                </div>
+
                 <button type="submit" id="login-btn" class="w-full btn-primary py-2.5 text-sm font-semibold flex items-center justify-center gap-2 mt-2">
                     <span id="btn-text">Authenticate & Continue</span>
                 </button>
@@ -116,18 +123,26 @@ def render_login_html() -> str:
 
             const username = document.getElementById('login-username').value;
             const password = document.getElementById('login-password').value;
+            const totpCode = document.getElementById('login-totp').value;
 
             try {
                 const res = await fetch('/api/auth/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
+                    body: JSON.stringify({ username, password, totp_code: totpCode })
                 });
                 const data = await res.json();
 
                 if (res.ok && data.token) {
                     btnText.innerText = 'Success! Redirecting...';
                     window.location.href = '/';
+                } else if (data.requires_2fa) {
+                    btn.disabled = false;
+                    btnText.innerText = 'Verify 2FA Code & Sign In';
+                    document.getElementById('totp-container').classList.remove('hidden');
+                    document.getElementById('login-username').disabled = true;
+                    document.getElementById('login-password').disabled = true;
+                    document.getElementById('login-totp').focus();
                 } else {
                     btn.disabled = false;
                     btnText.innerText = 'Authenticate & Continue';
@@ -162,6 +177,7 @@ def render_dashboard_html() -> str:
     <link rel="stylesheet" href="/static/css/dashboard.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body class="bg-slate-950 text-slate-100">
     <!-- Top Navigation Bar -->
@@ -231,12 +247,19 @@ def render_dashboard_html() -> str:
         </div>
 
         <!-- Tab Navigation -->
-        <div class="flex border-b border-slate-800 space-x-8 mb-6">
+        <div class="flex border-b border-slate-800 space-x-6 mb-6 overflow-x-auto pb-1">
             <button class="nav-tab active" onclick="switchTab('repos')">Connected Projects</button>
+            <button class="nav-tab flex items-center gap-1.5" onclick="switchTab('staging')">
+                <span>Editorial Staging</span>
+                <span id="badge-staging-count" class="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">0</span>
+            </button>
             <button class="nav-tab" onclick="switchTab('posts')">Blog Feed & Articles</button>
-            <button class="nav-tab" onclick="switchTab('integration')">Plug into Repo (Guide)</button>
+            <button class="nav-tab flex items-center gap-1.5" onclick="switchTab('zeroredeploy')">
+                <span>Zero-Redeploy Setup</span>
+                <span class="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-500/20 text-indigo-300">1-Time Install</span>
+            </button>
             <button class="nav-tab" onclick="switchTab('logs')">Activity Logs</button>
-            <button class="nav-tab" onclick="switchTab('settings')">Settings & Security</button>
+            <button class="nav-tab" onclick="switchTab('settings')">Settings & 2FA</button>
         </div>
 
         <!-- TAB: REPOSITORIES -->
@@ -253,12 +276,27 @@ def render_dashboard_html() -> str:
             </div>
         </div>
 
+        <!-- TAB: EDITORIAL STAGING QUEUE -->
+        <div id="tab-staging" class="tab-content hidden">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-white">Editorial Staging & Review Queue</h2>
+                    <p class="text-sm text-slate-400">Review, edit, and approve AI-generated drafts with live SEO pre-flight scoring before publishing to GitHub.</p>
+                </div>
+                <button onclick="loadStagingPosts()" class="btn-secondary text-xs">Refresh Queue</button>
+            </div>
+
+            <div id="staging-cards-container" class="space-y-4">
+                <!-- Dynamically populated -->
+            </div>
+        </div>
+
         <!-- TAB: POSTS & ARTICLES -->
         <div id="tab-posts" class="tab-content hidden">
             <div class="flex justify-between items-center mb-4">
                 <div>
                     <h2 class="text-lg font-semibold text-white">Generated Blog Posts</h2>
-                    <p class="text-sm text-slate-400">Review generated articles, inspect markdown, and follow GitHub Pull Requests.</p>
+                    <p class="text-sm text-slate-400">Review published articles, inspect markdown, and follow GitHub Pull Requests.</p>
                 </div>
                 <div class="flex space-x-2">
                     <select id="post-filter-project" onchange="loadPosts()" class="input-select text-xs">
@@ -273,6 +311,7 @@ def render_dashboard_html() -> str:
                         <tr>
                             <th class="px-5 py-3">Article Title & Target Path</th>
                             <th class="px-5 py-3">Repository</th>
+                            <th class="px-5 py-3">SEO Score</th>
                             <th class="px-5 py-3">Status</th>
                             <th class="px-5 py-3">GitHub Delivery</th>
                             <th class="px-5 py-3 text-right">Actions</th>
@@ -285,83 +324,53 @@ def render_dashboard_html() -> str:
             </div>
         </div>
 
-        <!-- TAB: INTEGRATION GUIDE -->
-        <div id="tab-integration" class="tab-content hidden">
+        <!-- TAB: ZERO-REDEPLOY SETUP & PUBLIC API -->
+        <div id="tab-zeroredeploy" class="tab-content hidden">
             <div class="max-w-4xl bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
                 <div>
-                    <h2 class="text-xl font-bold text-white">How to Plug GitPulse into Any GitHub Project</h2>
-                    <p class="text-sm text-slate-400 mt-1">GitPulse CMS supports any static site generator or web framework. Connect using central scheduling or drop-in GitHub Actions.</p>
+                    <h2 class="text-xl font-bold text-white">Zero-Redeploy "One-Time Blog Page" Architecture</h2>
+                    <p class="text-sm text-slate-400 mt-1">
+                        Connect any GitHub website repo once. GitPulse commits a single dynamic blog page. Future daily posts publish instantly with <strong>ZERO builds, ZERO CI/CD runs, and ZERO redeployments</strong>.
+                    </p>
                 </div>
 
-                <div class="space-y-4">
-                    <div class="step-card">
-                        <div class="step-badge">1</div>
-                        <div>
-                            <h3 class="font-semibold text-white text-base">Framework Auto-Detection</h3>
-                            <p class="text-sm text-slate-400 mt-1">GitPulse matches your exact repository directory and frontmatter schema:</p>
-                            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
-                                <div class="bg-slate-950 p-2.5 rounded border border-slate-800 text-xs">
-                                    <span class="text-indigo-400 font-semibold">Next.js</span>
-                                    <div class="text-slate-400 text-[11px] mt-0.5"><code>content/posts/*.mdx</code></div>
-                                </div>
-                                <div class="bg-slate-950 p-2.5 rounded border border-slate-800 text-xs">
-                                    <span class="text-orange-400 font-semibold">Astro</span>
-                                    <div class="text-slate-400 text-[11px] mt-0.5"><code>src/content/blog/*.md</code></div>
-                                </div>
-                                <div class="bg-slate-950 p-2.5 rounded border border-slate-800 text-xs">
-                                    <span class="text-pink-400 font-semibold">Hugo</span>
-                                    <div class="text-slate-400 text-[11px] mt-0.5"><code>content/posts/*.md</code></div>
-                                </div>
-                                <div class="bg-slate-950 p-2.5 rounded border border-slate-800 text-xs">
-                                    <span class="text-emerald-400 font-semibold">Docusaurus</span>
-                                    <div class="text-slate-400 text-[11px] mt-0.5"><code>blog/*.md</code></div>
-                                </div>
-                            </div>
-                        </div>
+                <!-- 1-Click Installer Card -->
+                <div class="bg-slate-950 p-5 rounded-xl border border-indigo-500/30 space-y-4">
+                    <h3 class="text-base font-semibold text-indigo-300 flex items-center gap-2">
+                        <span>⚡ 1-Click GitHub Repository Installer</span>
+                    </h3>
+                    <p class="text-xs text-slate-400">Select any connected project to commit the standalone dynamic blog page to its repository:</p>
+
+                    <div class="flex flex-col sm:flex-row gap-3 items-center">
+                        <select id="zeroredeploy-project-select" class="input-select text-xs flex-1">
+                            <!-- Populated dynamically -->
+                        </select>
+                        <button onclick="installZeroRedeployBlog()" id="btn-install-blog" class="btn-primary text-xs whitespace-nowrap">
+                            Install Blog Page to Repository
+                        </button>
                     </div>
+                    <div id="install-result" class="hidden text-xs p-3 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-300"></div>
+                </div>
 
-                    <div class="step-card">
-                        <div class="step-badge">2</div>
-                        <div>
-                            <h3 class="font-semibold text-white text-base">Method A: Central Server Scheduling (Zero Repo Config)</h3>
-                            <p class="text-sm text-slate-400 mt-1">Simply configure your GitHub Personal Access Token in Settings and register your repo. GitPulse will run the cron daemon and push commits or open Pull Requests automatically every day at your chosen time.</p>
+                <!-- Headless Public Endpoints -->
+                <div class="space-y-3">
+                    <h3 class="text-sm font-semibold text-slate-200">Public Headless Content API Endpoints</h3>
+                    <div class="space-y-2 text-xs font-mono">
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
+                            <span class="text-cyan-400">GET /api/public/projects/{id}/posts</span>
+                            <span class="text-slate-500">Paginated JSON feed of published posts</span>
                         </div>
-                    </div>
-
-                    <div class="step-card">
-                        <div class="step-badge">3</div>
-                        <div>
-                            <h3 class="font-semibold text-white text-base">Method B: Reusable GitHub Action Workflow</h3>
-                            <p class="text-sm text-slate-400 mt-1">Prefer to run daily blogging inside the target repo itself? Drop this file into <code>.github/workflows/daily-blog.yml</code>:</p>
-                            <div class="relative mt-2">
-                                <pre class="bg-slate-950 p-4 rounded-lg border border-slate-800 text-xs font-mono text-slate-300 overflow-x-auto"><code>name: GitPulse Daily Blog Automation
-
-on:
-  schedule:
-    - cron: '0 9 * * *' # Every day at 09:00 UTC
-  workflow_dispatch:
-
-permissions:
-  contents: write
-  pull-requests: write
-
-jobs:
-  publish-daily-blog:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Trigger GitPulse Publishing Engine
-        env:
-          CMS_URL: ${{ secrets.GITPULSE_CMS_URL }}
-          PROJECT_ID: ${{ secrets.GITPULSE_PROJECT_ID }}
-        run: |
-          curl -sSL -X POST "${CMS_URL}/api/projects/${PROJECT_ID}/trigger" \\
-            -H "Content-Type: application/json" \\
-            -d '{"force_publish": true}'
-</code></pre>
-                            </div>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
+                            <span class="text-cyan-400">GET /api/public/projects/{id}/posts/{slug}</span>
+                            <span class="text-slate-500">Full post markdown, frontmatter, & view counter</span>
+                        </div>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
+                            <span class="text-cyan-400">GET /api/public/projects/{id}/posts/{slug}/og-image.svg</span>
+                            <span class="text-slate-500">Dynamic 1200x630 OpenGraph hero banner</span>
+                        </div>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
+                            <span class="text-cyan-400">GET /api/public/projects/{id}/rss.xml</span>
+                            <span class="text-slate-500">Auto-generated RSS 2.0 XML feed</span>
                         </div>
                     </div>
                 </div>
@@ -373,7 +382,7 @@ jobs:
             <div class="flex justify-between items-center mb-4">
                 <div>
                     <h2 class="text-lg font-semibold text-white">System & Generation Logs</h2>
-                    <p class="text-sm text-slate-400">Real-time audit log of topic planning, AI text generation, authentication attempts, and GitHub API transactions.</p>
+                    <p class="text-sm text-slate-400">Real-time audit log of topic planning, AI text generation, authentication attempts, webhooks, and GitHub API transactions.</p>
                 </div>
                 <button onclick="loadLogs()" class="btn-secondary text-xs">Refresh Logs</button>
             </div>
@@ -382,10 +391,10 @@ jobs:
             </div>
         </div>
 
-        <!-- TAB: SETTINGS & SECURITY -->
+        <!-- TAB: SETTINGS & 2FA -->
         <div id="tab-settings" class="tab-content hidden">
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <!-- Global Secrets -->
+                <!-- Global Secrets & AI Provider -->
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-5">
                     <h2 class="text-lg font-semibold text-white">Global Configuration & Tokens</h2>
                     <div class="space-y-4">
@@ -414,50 +423,50 @@ jobs:
                             <input type="password" id="setting-openai-key" class="input-text" placeholder="sk-proj-...">
                         </div>
 
+                        <div>
+                            <label class="block text-xs font-medium text-slate-400 mb-1">GitHub Webhook Secret (HMAC-SHA256)</label>
+                            <input type="text" id="setting-webhook-secret" class="input-text" placeholder="whsec_xxxxxxxx">
+                            <p class="text-[11px] text-slate-500 mt-1">Point GitHub repo webhook to <code>https://&lt;domain&gt;/api/webhook/github</code> (Payload: JSON, Events: Pull Requests).</p>
+                        </div>
+
                         <button onclick="saveSettings()" class="btn-primary text-sm">Save Configuration</button>
                     </div>
                 </div>
 
-                <!-- Security & Password Change -->
+                <!-- Two-Factor Authentication & Security -->
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-5">
-                    <h2 class="text-lg font-semibold text-white">Administrator Security</h2>
-                    <p class="text-xs text-slate-400">Update your administrative credentials. Changing your password immediately revokes active sessions across other devices.</p>
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-lg font-semibold text-white">Two-Factor Authentication (2FA)</h2>
+                        <span id="badge-2fa-status" class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">Disabled</span>
+                    </div>
+                    <p class="text-xs text-slate-400">Protect write access to your GitHub repositories by requiring a TOTP code (Google Authenticator, 1Password) at sign-in.</p>
 
-                    <form onsubmit="handleChangePassword(event)" class="space-y-4">
-                        <div>
-                            <label class="block text-xs font-medium text-slate-400 mb-1">Current Password *</label>
-                            <input type="password" id="change-current-pw" required class="input-text" placeholder="••••••••••••">
+                    <div id="totp-setup-container" class="space-y-3 bg-slate-950 p-4 rounded-lg border border-slate-800 text-xs">
+                        <button onclick="initiate2FASetup()" id="btn-setup-2fa" class="btn-secondary text-xs">Set Up Authenticator App</button>
+                        
+                        <div id="totp-setup-details" class="hidden space-y-3 pt-2">
+                            <div>
+                                <span class="text-slate-400">Authenticator Secret:</span>
+                                <code id="totp-secret-display" class="block font-mono bg-slate-900 p-2 rounded text-indigo-300 select-all mt-1"></code>
+                            </div>
+                            <div>
+                                <label class="block text-slate-400 mb-1">Verify 6-Digit Code:</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="totp-verify-input" maxlength="6" class="input-text text-center font-mono text-base tracking-widest w-36" placeholder="000000">
+                                    <button onclick="confirmEnable2FA()" class="btn-primary text-xs">Activate 2FA</button>
+                                </div>
+                            </div>
                         </div>
+                    </div>
 
-                        <div>
-                            <label class="block text-xs font-medium text-slate-400 mb-1">New Password (Min 8 chars) *</label>
-                            <input type="password" id="change-new-pw" minlength="8" required class="input-text" placeholder="••••••••••••">
-                        </div>
-
-                        <div>
-                            <label class="block text-xs font-medium text-slate-400 mb-1">Confirm New Password *</label>
-                            <input type="password" id="change-confirm-pw" minlength="8" required class="input-text" placeholder="••••••••••••">
-                        </div>
-
-                        <button type="submit" id="change-pw-btn" class="btn-secondary text-sm font-semibold">
-                            Update Admin Password
-                        </button>
-                    </form>
-
-                    <div class="pt-4 border-t border-slate-800 text-xs text-slate-400 space-y-1.5">
-                        <div class="font-semibold text-slate-300">Active Defenses:</div>
-                        <div class="flex items-center gap-2 text-[11px]">
-                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                            <span>Brute-force lockout active (5 failed attempts locks IP for 15m)</span>
-                        </div>
-                        <div class="flex items-center gap-2 text-[11px]">
-                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                            <span>PBKDF2-HMAC-SHA256 password hashing with individual salt</span>
-                        </div>
-                        <div class="flex items-center gap-2 text-[11px]">
-                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                            <span>Timing-attack protected comparison (constant-time verification)</span>
-                        </div>
+                    <div class="pt-4 border-t border-slate-800">
+                        <h3 class="text-sm font-semibold text-white mb-2">Change Admin Password</h3>
+                        <form onsubmit="handleChangePassword(event)" class="space-y-3">
+                            <input type="password" id="change-current-pw" required class="input-text" placeholder="Current Password">
+                            <input type="password" id="change-new-pw" minlength="8" required class="input-text" placeholder="New Password (Min 8 chars)">
+                            <input type="password" id="change-confirm-pw" minlength="8" required class="input-text" placeholder="Confirm New Password">
+                            <button type="submit" id="change-pw-btn" class="btn-secondary text-xs">Update Password</button>
+                        </form>
                     </div>
                 </div>
             </div>
@@ -486,6 +495,58 @@ jobs:
                 <div>
                     <label class="text-xs font-medium text-slate-400 uppercase">Article Markdown</label>
                     <textarea id="modal-post-content" class="w-full bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs font-mono text-slate-200 mt-1 h-96 resize-none focus:outline-none" readonly></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Split Screen Editorial Staging Editor Modal -->
+    <div id="modal-staging-editor" class="modal-backdrop hidden">
+        <div class="modal-dialog max-w-6xl">
+            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
+                <div class="flex items-center gap-3">
+                    <h3 class="text-lg font-bold text-white">Editorial Staging & Split Markdown Editor</h3>
+                    <span id="editor-seo-badge" class="text-xs px-2.5 py-0.5 rounded-full font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">SEO: 100/100</span>
+                </div>
+                <button onclick="closeStagingEditor()" class="text-slate-400 hover:text-white">&times;</button>
+            </div>
+            
+            <input type="hidden" id="edit-post-id">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                <!-- Left: Markdown & Metadata Inputs -->
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Title</label>
+                        <input type="text" id="edit-post-title" class="input-text text-sm font-semibold" oninput="updateSplitPreview()">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Excerpt / Meta Description</label>
+                        <textarea id="edit-post-excerpt" rows="2" class="input-text text-xs resize-none" oninput="updateSplitPreview()"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Content Markdown</label>
+                        <textarea id="edit-post-markdown" class="w-full bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs font-mono text-slate-200 h-96 resize-none focus:outline-none focus:border-indigo-500" oninput="updateSplitPreview()"></textarea>
+                    </div>
+                </div>
+
+                <!-- Right: Real-Time Rendered Preview & SEO Issues -->
+                <div class="flex flex-col space-y-3">
+                    <div id="editor-seo-issues-box" class="p-3 rounded-lg bg-slate-950 border border-slate-800 text-xs space-y-1 max-h-24 overflow-y-auto">
+                        <span class="text-slate-400 font-semibold">SEO & Brand Safety Guardrails:</span>
+                        <div id="editor-issues-list" class="text-[11px] text-slate-400">All checks passed.</div>
+                    </div>
+
+                    <div class="flex-1 bg-slate-950 p-4 rounded-lg border border-slate-800 overflow-y-auto max-h-[420px] text-slate-200 text-xs leading-relaxed" id="editor-live-preview">
+                        <!-- Rendered Markdown -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex justify-between items-center pt-4 border-t border-slate-800 mt-4">
+                <button type="button" onclick="closeStagingEditor()" class="btn-secondary text-xs">Close</button>
+                <div class="flex gap-2">
+                    <button type="button" onclick="saveStagedDraft()" class="btn-secondary text-xs">Save Changes</button>
+                    <button type="button" onclick="approveAndPublishStagedPost()" id="btn-approve-post" class="btn-primary text-xs">Approve & Publish to GitHub 🚀</button>
                 </div>
             </div>
         </div>

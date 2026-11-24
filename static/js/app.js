@@ -2,6 +2,8 @@
 
 let globalPresets = {};
 let currentUser = null;
+let currentStagingPost = null;
+let generated2FASecret = "";
 
 document.addEventListener('DOMContentLoaded', () => {
     initApp();
@@ -11,7 +13,6 @@ async function initApp() {
     // 1. Verify user session
     const authData = await apiGet('/api/auth/me');
     if (!authData || !authData.user) {
-        // If unauthenticated, redirect to login page
         window.location.href = '/login';
         return;
     }
@@ -19,17 +20,30 @@ async function initApp() {
     const userEl = document.getElementById('header-username');
     if (userEl) userEl.innerText = currentUser.username;
 
+    // Update 2FA status badge
+    const badge2fa = document.getElementById('badge-2fa-status');
+    if (badge2fa) {
+        if (currentUser.totp_enabled) {
+            badge2fa.innerText = "Active (Protected)";
+            badge2fa.className = "text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30";
+            const btn2fa = document.getElementById('btn-setup-2fa');
+            if (btn2fa) btn2fa.innerText = "2FA Already Enabled";
+        }
+    }
+
     // 2. Load Dashboard Components
     await fetchPresets();
     await loadStatus();
     await loadProjects();
+    await loadStagingPosts();
     await loadPosts();
     await loadLogs();
     await loadSettings();
 
-    // Auto-refresh metrics and logs every 15 seconds
+    // Auto-refresh metrics, staging queue, and logs every 15 seconds
     setInterval(() => {
         loadStatus();
+        loadStagingPosts();
         loadLogs();
     }, 15000);
 }
@@ -47,6 +61,7 @@ function switchTab(tabName) {
     );
     if (clickedBtn) clickedBtn.classList.add('active');
 
+    if (tabName === 'staging') loadStagingPosts();
     if (tabName === 'posts') loadPosts();
     if (tabName === 'logs') loadLogs();
 }
@@ -82,7 +97,7 @@ async function handleChangePassword(e) {
     });
 
     btn.disabled = false;
-    btn.innerText = 'Update Admin Password';
+    btn.innerText = 'Update Password';
 
     if (res && res.message) {
         showToast('Password updated! Please log in again.', 'success');
@@ -91,6 +106,41 @@ async function handleChangePassword(e) {
         }, 1500);
     } else {
         showToast(res ? res.error : 'Failed to update password', 'error');
+    }
+}
+
+// --- Two-Factor Authentication (2FA) ---
+async function initiate2FASetup() {
+    const res = await apiGet('/api/auth/2fa/setup');
+    if (!res || !res.secret) {
+        showToast('Failed to initialize 2FA', 'error');
+        return;
+    }
+    generated2FASecret = res.secret;
+    document.getElementById('totp-secret-display').innerText = res.secret;
+    document.getElementById('totp-setup-details').classList.remove('hidden');
+    document.getElementById('totp-verify-input').focus();
+}
+
+async function confirmEnable2FA() {
+    const code = document.getElementById('totp-verify-input').value.trim();
+    if (!code || code.length !== 6) {
+        showToast('Please enter the 6-digit verification code.', 'error');
+        return;
+    }
+
+    const res = await apiPost('/api/auth/2fa/enable', {
+        secret: generated2FASecret,
+        code: code
+    });
+
+    if (res && res.message) {
+        showToast(res.message, 'success');
+        document.getElementById('badge-2fa-status').innerText = "Active (Protected)";
+        document.getElementById('badge-2fa-status').className = "text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30";
+        document.getElementById('totp-setup-details').classList.add('hidden');
+    } else {
+        showToast(res ? res.error : 'Verification failed.', 'error');
     }
 }
 
@@ -117,6 +167,24 @@ async function apiPost(endpoint, data = {}) {
             body: JSON.stringify(data)
         });
         if (res.status === 401 && endpoint !== '/api/auth/login') {
+            window.location.href = '/login';
+            return null;
+        }
+        return await res.json();
+    } catch (err) {
+        showToast(`Request failed: ${err.message}`, 'error');
+        return null;
+    }
+}
+
+async function apiPut(endpoint, data = {}) {
+    try {
+        const res = await fetch(endpoint, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        if (res.status === 401) {
             window.location.href = '/login';
             return null;
         }
@@ -177,12 +245,22 @@ async function loadProjects() {
     const filterSelect = document.getElementById('post-filter-project');
     filterSelect.innerHTML = '<option value="">All Repositories</option>';
 
+    const zeroRedeploySelect = document.getElementById('zeroredeploy-project-select');
+    if (zeroRedeploySelect) zeroRedeploySelect.innerHTML = '';
+
     data.projects.forEach(p => {
-        // Populate filter
+        // Populate filters
         const opt = document.createElement('option');
         opt.value = p.id;
-        opt.innerText = p.name;
+        opt.innerText = `${p.name} (${p.github_repo})`;
         filterSelect.appendChild(opt);
+
+        if (zeroRedeploySelect) {
+            const opt2 = document.createElement('option');
+            opt2.value = p.id;
+            opt2.innerText = `${p.name} (${p.github_repo})`;
+            zeroRedeploySelect.appendChild(opt2);
+        }
 
         // Render card
         const card = document.createElement('div');
@@ -209,17 +287,24 @@ async function loadProjects() {
                 </div>
             </div>
 
-            <div class="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
-                <div class="flex space-x-1.5">
-                    <button onclick="triggerProjectRun(${p.id}, this)" class="btn-primary text-xs py-1 px-2.5">
-                        ⚡ Publish Now
-                    </button>
-                    <button onclick="testGitHubConnection(${p.id}, this)" class="btn-secondary text-xs py-1 px-2">
-                        Verify Repo
+            <div class="mt-4 pt-3 border-t border-slate-800 space-y-2">
+                <div class="flex justify-between items-center">
+                    <div class="flex space-x-1.5">
+                        <button onclick="triggerProjectRun(${p.id}, this)" class="btn-primary text-xs py-1 px-2.5">
+                            ⚡ Publish Now
+                        </button>
+                        <button onclick="testGitHubConnection(${p.id}, this)" class="btn-secondary text-xs py-1 px-2">
+                            Verify Repo
+                        </button>
+                    </div>
+                    <button onclick="deleteProject(${p.id})" class="btn-danger">
+                        Delete
                     </button>
                 </div>
-                <button onclick="deleteProject(${p.id})" class="btn-danger">
-                    Delete
+                
+                <!-- Zero Redeploy Installer button -->
+                <button onclick="installZeroRedeployForProject(${p.id})" class="w-full text-center text-[11px] py-1 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 hover:bg-indigo-500/20">
+                    Commit 1-Time Blog Page to Repo ↗
                 </button>
             </div>
         `;
@@ -241,6 +326,7 @@ async function triggerProjectRun(projectId, btn) {
         loadStatus();
         loadProjects();
         loadPosts();
+        loadStagingPosts();
         loadLogs();
     } else {
         showToast(res ? (res.error || 'Trigger failed') : 'Execution error', 'error');
@@ -273,7 +359,194 @@ async function deleteProject(projectId) {
     }
 }
 
-// --- Posts & Articles ---
+// --- Zero-Redeploy "One-Time Blog Page" Installer ---
+async function installZeroRedeployBlog() {
+    const select = document.getElementById('zeroredeploy-project-select');
+    const projectId = select.value;
+    if (!projectId) return;
+
+    await installZeroRedeployForProject(projectId);
+}
+
+async function installZeroRedeployForProject(projectId) {
+    const btn = document.getElementById('btn-install-blog');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = 'Committing...';
+    }
+
+    const res = await apiPost(`/api/projects/${projectId}/install-blog-page`, {
+        cms_base_url: window.location.origin
+    });
+
+    if (btn) {
+        btn.disabled = false;
+        btn.innerText = 'Install Blog Page to Repository';
+    }
+
+    const resultBox = document.getElementById('install-result');
+    if (res && res.success) {
+        showToast('Zero-redeploy blog page committed to repository!', 'success');
+        if (resultBox) {
+            resultBox.classList.remove('hidden');
+            resultBox.innerHTML = `
+                <strong>Success!</strong> ${res.message}<br>
+                <span class="text-slate-400">Path: <code>${res.path}</code> (Commit: ${res.commit_sha})</span><br>
+                <span class="text-indigo-300">Your other project can now display all published blog posts dynamically with 0 future deployments!</span>
+            `;
+        }
+    } else {
+        showToast(res ? res.error : 'Installation failed', 'error');
+    }
+}
+
+// --- Editorial Staging Queue ---
+async function loadStagingPosts() {
+    const data = await apiGet('/api/posts?limit=50');
+    if (!data || !data.posts) return;
+
+    const stagingContainer = document.getElementById('staging-cards-container');
+    if (!stagingContainer) return;
+
+    const inReviewPosts = data.posts.filter(p => p.status === 'in_review' || p.status === 'draft');
+    const badgeCount = document.getElementById('badge-staging-count');
+    if (badgeCount) badgeCount.innerText = inReviewPosts.length;
+
+    stagingContainer.innerHTML = '';
+    if (inReviewPosts.length === 0) {
+        stagingContainer.innerHTML = `
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400">
+                <svg class="w-10 h-10 mx-auto mb-2 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <div class="text-base font-semibold text-white">Staging Queue is Clear</div>
+                <div class="text-xs text-slate-500 mt-1">All generated articles have been reviewed and published. New scheduled articles requiring manual review will appear here.</div>
+            </div>
+        `;
+        return;
+    }
+
+    inReviewPosts.forEach(post => {
+        const card = document.createElement('div');
+        card.className = 'bg-slate-900 border border-slate-800 rounded-xl p-4 flex justify-between items-center hover:border-slate-700 transition-colors';
+        const seoScore = post.seo_score || 100;
+        const scoreClass = seoScore >= 80 ? 'text-emerald-400 border-emerald-500/30' : 'text-amber-400 border-amber-500/30';
+
+        card.innerHTML = `
+            <div>
+                <div class="flex items-center gap-2">
+                    <span class="font-bold text-white text-base">${escapeHtml(post.title)}</span>
+                    <span class="text-xs px-2 py-0.5 rounded-full font-mono bg-slate-950 border ${scoreClass}">SEO ${seoScore}/100</span>
+                    <span class="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/30 uppercase text-[10px] font-bold">Needs Review</span>
+                </div>
+                <div class="text-xs text-slate-400 mt-1">${escapeHtml(post.excerpt)}</div>
+                <div class="text-[11px] text-slate-500 font-mono mt-1">Target: ${escapeHtml(post.target_path)} • ${escapeHtml(post.project_name || 'Project')}</div>
+            </div>
+
+            <div class="flex items-center gap-2">
+                <button onclick="openStagingEditor(${post.id})" class="btn-primary text-xs py-1.5 px-3">
+                    Edit & Approve &rarr;
+                </button>
+            </div>
+        `;
+        stagingContainer.appendChild(card);
+    });
+}
+
+// --- Split Screen Editorial Editor ---
+async function openStagingEditor(postId) {
+    const post = await apiGet(`/api/posts/${postId}`);
+    if (!post) return;
+    currentStagingPost = post;
+
+    document.getElementById('edit-post-id').value = post.id;
+    document.getElementById('edit-post-title').value = post.title;
+    document.getElementById('edit-post-excerpt').value = post.excerpt;
+    document.getElementById('edit-post-markdown').value = post.content_markdown;
+
+    updateSplitPreview();
+    document.getElementById('modal-staging-editor').classList.remove('hidden');
+}
+
+function closeStagingEditor() {
+    document.getElementById('modal-staging-editor').classList.add('hidden');
+    currentStagingPost = null;
+}
+
+function updateSplitPreview() {
+    const md = document.getElementById('edit-post-markdown').value;
+    const title = document.getElementById('edit-post-title').value;
+    const excerpt = document.getElementById('edit-post-excerpt').value;
+
+    // Render markdown to preview pane
+    const previewEl = document.getElementById('editor-live-preview');
+    if (window.marked) {
+        previewEl.innerHTML = marked.parse(md);
+    } else {
+        previewEl.innerText = md;
+    }
+
+    // Dynamic SEO Pre-Flight Check in UI
+    const titleLen = title.length;
+    const excerptLen = excerpt.length;
+    let score = 100;
+    const issues = [];
+
+    if (titleLen < 30) { score -= 15; issues.push(`Title is too short (${titleLen} chars). Optimal: 40-65 chars.`); }
+    if (excerptLen < 100) { score -= 15; issues.push(`Excerpt is too short (${excerptLen} chars). Optimal: 130-165 chars.`); }
+    if (!md.includes('## ')) { score -= 20; issues.push("Article has no H2 section headers."); }
+
+    const scoreBadge = document.getElementById('editor-seo-badge');
+    scoreBadge.innerText = `SEO: ${score}/100`;
+    scoreBadge.className = `text-xs px-2.5 py-0.5 rounded-full font-semibold ${score >= 80 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/10 text-amber-300 border border-amber-500/30'}`;
+
+    const issuesBox = document.getElementById('editor-issues-list');
+    issuesBox.innerHTML = issues.length ? issues.map(i => `<div class="text-amber-400">• ${i}</div>`).join('') : '<div class="text-emerald-400">✓ All SEO and formatting parameters verified.</div>';
+}
+
+async function saveStagedDraft() {
+    if (!currentStagingPost) return;
+    const postId = currentStagingPost.id;
+    const payload = {
+        title: document.getElementById('edit-post-title').value,
+        excerpt: document.getElementById('edit-post-excerpt').value,
+        content_markdown: document.getElementById('edit-post-markdown').value
+    };
+
+    const res = await apiPut(`/api/posts/${postId}`, payload);
+    if (res && res.message) {
+        showToast('Changes saved to staging draft.', 'success');
+        loadStagingPosts();
+    } else {
+        showToast(res ? res.error : 'Save failed', 'error');
+    }
+}
+
+async function approveAndPublishStagedPost() {
+    if (!currentStagingPost) return;
+    const postId = currentStagingPost.id;
+    const btn = document.getElementById('btn-approve-post');
+    btn.disabled = true;
+    btn.innerText = 'Publishing to GitHub...';
+
+    // 1. Save any pending changes
+    await saveStagedDraft();
+
+    // 2. Approve and trigger GitHub publication
+    const res = await apiPost(`/api/posts/${postId}/approve`, {});
+    btn.disabled = false;
+    btn.innerText = 'Approve & Publish to GitHub 🚀';
+
+    if (res && res.success) {
+        showToast('Article approved and published to GitHub!', 'success');
+        closeStagingEditor();
+        loadStagingPosts();
+        loadPosts();
+        loadStatus();
+    } else {
+        showToast(res ? res.error : 'Approval dispatch failed', 'error');
+    }
+}
+
+// --- Posts & Articles Table ---
 async function loadPosts() {
     const projectId = document.getElementById('post-filter-project').value;
     const url = projectId ? `/api/posts?project_id=${projectId}` : '/api/posts';
@@ -284,7 +557,7 @@ async function loadPosts() {
     tbody.innerHTML = '';
 
     if (data.posts.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" class="px-5 py-6 text-center text-slate-500">No blog posts generated yet. Click "Publish Now" on any project to create your first article!</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="px-5 py-6 text-center text-slate-500">No blog posts found.</td></tr>`;
         return;
     }
 
@@ -295,18 +568,21 @@ async function loadPosts() {
         let statusBadge = '<span class="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-400">Draft</span>';
         if (post.status === 'published') {
             statusBadge = '<span class="px-2 py-0.5 rounded text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">Published</span>';
+        } else if (post.status === 'in_review') {
+            statusBadge = '<span class="px-2 py-0.5 rounded text-xs bg-amber-500/10 text-amber-300 border border-amber-500/30">In Staging</span>';
         } else if (post.status === 'failed') {
             statusBadge = '<span class="px-2 py-0.5 rounded text-xs bg-red-500/10 text-red-400 border border-red-500/30">Failed</span>';
-        } else if (post.status === 'publishing') {
-            statusBadge = '<span class="px-2 py-0.5 rounded text-xs bg-amber-500/10 text-amber-400 border border-amber-500/30">Publishing</span>';
         }
 
-        let githubDelivery = '<span class="text-slate-500 text-xs">Pending commit</span>';
+        let githubDelivery = '<span class="text-slate-500 text-xs">Pending delivery</span>';
         if (post.github_pr_url) {
             githubDelivery = `<a href="${post.github_pr_url}" target="_blank" class="text-cyan-400 hover:underline text-xs flex items-center gap-1">PR #${post.github_pr_number || 'Link'} ↗</a>`;
         } else if (post.github_commit_sha) {
             githubDelivery = `<span class="text-slate-400 font-mono text-xs">Commit: ${post.github_commit_sha.substring(0, 7)}</span>`;
         }
+
+        const seoScore = post.seo_score || 100;
+        const seoBadge = `<span class="text-xs font-mono ${seoScore >= 80 ? 'text-emerald-400' : 'text-amber-400'}">${seoScore}/100</span>`;
 
         tr.innerHTML = `
             <td class="px-5 py-3">
@@ -316,6 +592,7 @@ async function loadPosts() {
             <td class="px-5 py-3 text-xs text-slate-300">
                 ${escapeHtml(post.project_name || 'Repo')}
             </td>
+            <td class="px-5 py-3">${seoBadge}</td>
             <td class="px-5 py-3">${statusBadge}</td>
             <td class="px-5 py-3">${githubDelivery}</td>
             <td class="px-5 py-3 text-right">
@@ -422,6 +699,7 @@ async function loadSettings() {
     if (settings.ai_provider) document.getElementById('setting-ai-provider').value = settings.ai_provider;
     if (settings.gemini_api_key) document.getElementById('setting-gemini-key').value = settings.gemini_api_key;
     if (settings.openai_api_key) document.getElementById('setting-openai-key').value = settings.openai_api_key;
+    if (settings.github_webhook_secret) document.getElementById('setting-webhook-secret').value = settings.github_webhook_secret;
 }
 
 async function saveSettings() {
@@ -429,7 +707,8 @@ async function saveSettings() {
         github_token: document.getElementById('setting-github-token').value,
         ai_provider: document.getElementById('setting-ai-provider').value,
         gemini_api_key: document.getElementById('setting-gemini-key').value,
-        openai_api_key: document.getElementById('setting-openai-key').value
+        openai_api_key: document.getElementById('setting-openai-key').value,
+        github_webhook_secret: document.getElementById('setting-webhook-secret').value
     };
 
     const res = await apiPost('/api/settings', payload);

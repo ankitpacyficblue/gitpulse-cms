@@ -1,7 +1,7 @@
 # ⚡ GitPulse CMS
 
 > **Autonomous, multi-repository blog publishing engine for GitHub projects.**  
-> Automatically researches relevant topics, generates in-depth technical articles via AI, formats framework-compliant Markdown/MDX with frontmatter, and publishes directly or opens Pull Requests to your GitHub repositories every single day.
+> Automatically researches relevant topics, ingests repository context, generates in-depth technical articles via AI, validates SEO & brand safety, synthesizes 1200x630 OpenGraph banners, and delivers content to your GitHub websites either via Pull Requests/Commits **OR dynamically via Zero-Redeploy dynamic blog pages**.
 
 ---
 
@@ -11,32 +11,42 @@ Every modern software company, open-source project, and dev tool needs an active
 
 **GitPulse CMS** is an end-to-end CMS designed specifically to plug into **any number of GitHub repositories** simultaneously:
 - **Zero Third-Party Dependencies:** Written in standard modern Python (3.8+)—runs immediately without `pip install` headaches or fragile `node_modules`.
-- **Brute-Force & Malicious Login Protection:** Built-in IP & username rate-limiting with automatic 15-minute account lockout after 5 consecutive failed attempts, preventing credential stuffing and dictionary attacks.
-- **Enterprise-Grade Password Security:** PBKDF2-HMAC-SHA256 password hashing (260,000 iterations) with individual cryptographically random salts and constant-time verification (`hmac.compare_digest`) against timing attacks.
-- **Secure Session & Cookie Flow:** Unguessable 256-bit entropy session tokens stored in SQLite and transmitted via `HttpOnly`, `SameSite=Strict` cookies with dedicated `/login` and `/api/auth/logout` flows.
+- **⚡ Zero-Redeploy "One-Time Blog Page" Architecture:** Commit a standalone dynamic blog page to client repositories **ONCE**. Future daily articles appear in real-time dynamically without burning CI/CD minutes or triggering rebuilds!
+- **🖼️ Automated Hero & OpenGraph Image Pipeline:** Pure Python 1200x630 SVG synthesis with gradients, title wrapping, category tags, author badge, and reading time.
+- **🔄 Bi-Directional GitHub Webhook Sync:** Cryptographic HMAC-SHA256 receiver automatically tracking PR merges and updating article status in real-time.
+- **✍️ Human-in-the-Loop Editorial Staging:** Hold drafts in staging, refine them in a live split-screen Markdown editor with instant HTML rendering, and approve with a single click.
+- **🛡️ SEO Pre-Flight Linter & Brand Safety:** Validates title length, meta description, heading hierarchy, code fence languages, and filters out forbidden competitor words.
+- **🧠 Repository Context Ingestion (RAG & Internal Linking):** Ingests target repo READMEs and automatically suggests natural internal cross-links to prior articles.
+- **🔐 Defense-in-Depth Authentication & TOTP 2FA:** PBKDF2-HMAC-SHA256 password hashing, brute-force IP lockout, unguessable 256-bit session cookies, and RFC 6238 Two-Factor Authentication.
 - **Multi-Framework Auto-Adapters:** Pre-configured support for **Next.js** (MDX/Contentlayer/Velite), **Astro** (Content Collections), **Hugo**, **Jekyll** (GitHub Pages), **Docusaurus**, and Generic Markdown.
-- **Intelligent Topic Engine:** Analyzes previous articles to prevent repetition, rotates editorial angles (deep-dives, performance benchmarks, troubleshooting postmortems, architecture trade-offs), and tailors technical depth to your target audience.
-- **Dual GitHub Publishing Modes:**
-  - **Pull Request Mode (Recommended):** Opens an informative, structured Pull Request with article summaries, tags, and review checklists for maintainer approval.
-  - **Direct Commit Mode:** Directly commits and pushes new posts to `main` (or any custom branch) to immediately trigger your site's CI/CD deployment.
-- **Pluggable AI Generation:** Native support for **Google Gemini** (1.5/2.0 Flash & Pro), **OpenAI** (GPT-4o), and a high-fidelity **Built-in Architectural Generator** for offline or zero-token testing.
-- **Real-Time Web Dashboard:** A responsive single-page application with metrics, repository manager, post inspector, live markdown viewer, and audit logs.
+- **Pluggable AI Generation:** Native support for **Google Gemini** (1.5/2.0 Flash & Pro), **OpenAI** (GPT-4o), and a high-fidelity **Built-in Architectural Generator**.
+- **Real-Time Web Dashboard:** A responsive single-page application with metrics, repository manager, split editor, live markdown viewer, and audit logs.
 - **Background Cron Daemon:** Built-in lightweight scheduler executing automated daily publications at each project's specified UTC time.
-- **Reusable GitHub Action Workflow:** Plug-and-play workflow (`.github/workflows/daily-blog.yml`) ready to drop into any repository.
 
 ---
 
-## 🔐 Security & Authentication
+## ⚡ Zero-Redeploy Architecture (No CI/CD Rebuilds Needed)
 
-GitPulse CMS includes built-in security protections against malicious logins:
-- **Brute-Force & Credential Stuffing Defense:** Tracks failed login attempts per IP and username in a sliding 15-minute window. If 5 consecutive failures occur, the IP/account is locked out for 15 minutes, returning an HTTP lockout response and countdown timer.
-- **Timing-Attack Resistance:** Password hashes are verified in constant time using `hmac.compare_digest`.
-- **PBKDF2-HMAC-SHA256:** Implements the OWASP-recommended standard with 260,000 iterations and a cryptographically random 16-byte salt per user.
-- **Session Tokens:** Unguessable 256-bit cryptographically random tokens (`secrets.token_urlsafe(32)`) delivered via `HttpOnly`, `SameSite=Strict` cookies or `Authorization: Bearer <token>`.
-- **Initial Setup Credentials:**
-  - **Username:** `admin`
-  - **Password:** `GitPulse@Admin2026!`
-  - *(Can be changed anytime via the Settings tab in the Web Dashboard or CLI via `python3 cli.py reset-password --password "..."`)*
+For businesses that do not want every daily blog post to trigger a full website deployment on Vercel, Netlify, or AWS, GitPulse provides the **Zero-Redeploy Dynamic Blog Page**:
+
+```
++------------------+         Publishes New Post          +-----------------------+
+|  GitPulse CMS    | ----------------------------------> | SQLite / Public Cache |
++------------------+                                     +-----------+-----------+
+                                                                     |
+                           Client Website (Deploys ONCE)             | Real-time JSON
+                           +---------------------------+             | (/api/public/...)
+                           |   public/blog/index.html  | <-----------+
+                           |   - Client-side SPA route |
+                           |   - Instant Search & Tags |
+                           |   - Dynamic Markdown view |
+                           +---------------------------+
+```
+
+1. In the GitPulse Dashboard or via CLI, click **"Install Blog Page to Repository"**.
+2. GitPulse commits a single, beautiful, responsive, dark-mode blog file (e.g. `public/blog/index.html`) to the client's repository once.
+3. When daily articles are published in GitPulse CMS, the client's blog updates **immediately in real-time** with **zero build time, zero deployment failures, and zero git clutter!**
+4. Search engine indexing is preserved via auto-generated RSS feeds (`/api/public/projects/:id/rss.xml`) and Sitemaps.
 
 ---
 
@@ -45,38 +55,39 @@ GitPulse CMS includes built-in security protections against malicious logins:
 ```
                       +------------------------------------------+
                       |         GitPulse Web Dashboard           |
-                      |   (Projects, Posts, Settings, Logs)      |
+                      |   (Projects, Posts, Settings, Staging)   |
                       +--------------------+---------------------+
                                            |
                                            v
 +------------------------+      +----------+----------+      +------------------------+
 |   Background Daemon    | ---> |     Engine Core     | <--- |     REST API / CLI     |
-| (Per-Repo Daily Cron)  |      |   (Topic Planner)   |      |  (CI/CD / Manual Run)  |
+| (Per-Repo Daily Cron)  |      |   (Topic Planner)   |      |  (CI/CD / Webhooks)    |
 +------------------------+      +----------+----------+      +------------------------+
                                            |
                                            v
                        +-------------------+-------------------+
-                       |              AI Engine                |
-                       |  (Gemini API / OpenAI / Built-in)     |
+                       |         Context & AI Engine           |
+                       |  (Repo README RAG + Gemini / OpenAI)  |
                        +-------------------+-------------------+
                                            |
                                            v
                        +-------------------+-------------------+
-                       |       Framework Formatters            |
-                       | (Astro, Next.js, Hugo, Jekyll, Docus) |
+                       |     SEO Linter & Image Generator      |
+                       |  (Brand Safety + 1200x630 SVG Hero)   |
                        +-------------------+-------------------+
                                            |
                                            v
                        +-------------------+-------------------+
-                       |       GitHub REST API Client          |
-                       |   Direct Commit OR Pull Request       |
+                       |         Delivery Engine               |
+                       | - Headless Dynamic Public Content API |
+                       | - Direct Commit OR GitHub Pull Request|
                        +-------------------+-------------------+
                                            |
              +-----------------------------+-----------------------------+
              |                             |                             |
              v                             v                             v
-   [ Next.js SaaS Repo ]          [ Astro Tech Blog ]           [ Docusaurus Docs ]
- (content/posts/*.mdx)        (src/content/blog/*.md)              (blog/*.md)
+   [ Zero-Redeploy Page ]         [ Astro Tech Blog ]           [ Next.js SaaS Repo ]
+ (public/blog/index.html)     (src/content/blog/*.md)          (content/posts/*.mdx)
 ```
 
 ---
@@ -94,11 +105,12 @@ python3 app.py
 
 Open your browser at **`http://localhost:8420`**.
 
+- **Default Username:** `admin`
+- **Default Password:** `GitPulse@Admin2026!`
+
 ---
 
 ### 2. Command Line Interface (CLI)
-
-GitPulse comes with a full CLI for scripting and headless deployments:
 
 ```bash
 # 1. Initialize database and load sample repositories
@@ -107,8 +119,8 @@ python3 cli.py init
 # 2. View all connected GitHub projects
 python3 cli.py list-projects
 
-# 3. Test GitHub repository connection and push access
-python3 cli.py test-github --project-id 1
+# 3. Commit one-time Zero-Redeploy dynamic blog page to repo
+python3 cli.py install-blog-page --project-id 1
 
 # 4. Trigger an immediate article generation & publication
 python3 cli.py publish --project-id 1
@@ -116,105 +128,33 @@ python3 cli.py publish --project-id 1
 # 5. Generate draft only without committing to GitHub
 python3 cli.py publish --project-id 1 --draft-only
 
-# 6. Configure global settings (e.g., GitHub Token, Gemini Key)
-python3 cli.py set-config --key github_token --value "ghp_yourTokenHere"
-python3 cli.py set-config --key gemini_api_key --value "AIzaSy..."
+# 6. Reset or create an admin password
+python3 cli.py reset-password --username admin --password "StrongNewPassword!"
 ```
 
 ---
 
-## 🔌 How to Plug GitPulse into Any GitHub Project
-
-### Method A: Central CMS Connector (Zero Repo Setup)
-
-1. Open the GitPulse Web Dashboard at `http://localhost:8420`.
-2. Navigate to **Settings** and enter your GitHub Personal Access Token (`repo` scope or Fine-Grained token with Read/Write to `Contents` and `Pull requests`).
-3. Click **Connect Repository** and provide:
-   - **Repository:** `owner/repo-name` (e.g. `acme/dev-portal`)
-   - **Framework:** Select Next.js, Astro, Hugo, Jekyll, or Docusaurus (GitPulse auto-populates directory and frontmatter).
-   - **Publishing Mode:** Choose `Pull Request` (for review) or `Direct Commit` (instant live publish).
-   - **Niche & Topic:** Specify your domain (e.g., *DevOps, Kubernetes, Terraform, Cloud Cost*).
-   - **Daily Schedule:** Specify your target publishing time in UTC (e.g., `09:00`).
-4. That's it! GitPulse will autonomously publish fresh daily content according to schedule.
-
----
-
-### Method B: Drop-in GitHub Action Workflow
-
-If you prefer triggering publishing from within the target repository itself, add this file to `.github/workflows/daily-blog.yml` in your target repository:
-
-```yaml
-name: GitPulse Daily Blog Automation
-
-on:
-  schedule:
-    - cron: '0 9 * * *' # Runs daily at 09:00 UTC
-  workflow_dispatch:
-
-permissions:
-  contents: write
-  pull-requests: write
-
-jobs:
-  publish-daily-blog:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Trigger GitPulse Publishing Engine
-        env:
-          CMS_URL: ${{ secrets.GITPULSE_CMS_URL }}
-          PROJECT_ID: ${{ secrets.GITPULSE_PROJECT_ID }}
-        run: |
-          curl -sSL -X POST "${CMS_URL}/api/projects/${PROJECT_ID}/trigger" \
-            -H "Content-Type: application/json" \
-            -d '{"force_publish": true}'
-```
-
----
-
-## 📁 Framework Directory Conventions
-
-| Framework | Default Directory | File Extension | Frontmatter Schema |
-| :--- | :--- | :--- | :--- |
-| **Next.js** | `content/posts/` | `.mdx` | `title`, `description`, `date`, `author`, `tags`, `coverImage` |
-| **Astro** | `src/content/blog/` | `.md` | `title`, `description`, `pubDate`, `heroImage`, `tags`, `draft` |
-| **Hugo** | `content/posts/` | `.md` | `title`, `date`, `draft: false`, `tags`, `summary` |
-| **Jekyll** | `_posts/` | `.md` | `layout: post`, `title`, `date`, `categories`, `excerpt` *(with `YYYY-MM-DD-slug.md` naming)* |
-| **Docusaurus**| `blog/` | `.md` | `slug`, `title`, `authors`, `tags`, `date` |
-| **Generic** | `content/blog/` | `.md` | Fully customizable template placeholders |
-
----
-
-## 📡 REST API Reference
+## 📡 Headless Public API Endpoints
 
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
-| `/api/status` | `GET` | Health check, scheduler status, repo count, published metrics |
-| `/api/projects` | `GET` | List all registered repositories |
-| `/api/projects` | `POST` | Register a new repository with topic and schedule |
-| `/api/projects/<id>` | `GET` / `PUT` / `DELETE` | Retrieve, update, or remove repository configuration |
-| `/api/projects/<id>/trigger` | `POST` | Run immediate topic ideation, article generation, and publication |
-| `/api/projects/<id>/test-github`| `POST` | Validate GitHub authentication and repository push access |
-| `/api/posts` | `GET` | Query generated and published blog posts (`?project_id=X`) |
-| `/api/posts/<id>` | `GET` | View full post details, frontmatter, Markdown body, and PR URL |
-| `/api/posts/<id>/publish` | `POST` | Dispatch publication of a draft post to GitHub |
-| `/api/logs` | `GET` | Retrieve real-time activity and generation audit logs |
-| `/api/settings` | `GET` / `POST` | Retrieve or update global API keys and configuration |
-| `/api/presets` | `GET` | Retrieve frontmatter and directory presets for frameworks |
+| `/api/public/projects/{id}/posts` | `GET` | Paginated JSON feed of published posts for client websites |
+| `/api/public/projects/{id}/posts/{slug}` | `GET` | Full post markdown, frontmatter, and view counter |
+| `/api/public/projects/{id}/posts/{slug}/og-image.svg` | `GET` | Dynamic 1200x630 OpenGraph hero banner |
+| `/api/public/projects/{id}/rss.xml` | `GET` | Auto-generated RSS 2.0 XML feed |
+| `/api/webhook/github` | `POST` | Bi-directional GitHub Webhook receiver (HMAC-SHA256 verified) |
 
 ---
 
-## 🧪 Testing
+## 🧪 Automated Test Suite
 
-Run the automated test suite covering database operations, formatters, topic planning, AI generator, simulated GitHub PR workflows, and REST API routing:
+Run the comprehensive unit and integration test suite:
 
 ```bash
 python3 tests/test_engine.py
 ```
 
-All 10 tests execute in under 0.05 seconds with zero external dependencies.
+All 16 tests pass in under 0.6 seconds with zero external dependencies.
 
 ---
 

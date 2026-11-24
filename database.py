@@ -138,6 +138,46 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_user ON login_attempts (ip_address, username, attempt_time)
         """)
 
+        # Post Views Analytics Table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS post_views (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER NOT NULL,
+            viewed_at TEXT NOT NULL,
+            ip_hash TEXT NOT NULL,
+            FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE
+        )
+        """)
+
+        # Safe Column Migrations for Existing Databases
+        project_cols = [c[1] for c in cursor.execute("PRAGMA table_info(projects)").fetchall()]
+        if "auto_publish" not in project_cols:
+            cursor.execute("ALTER TABLE projects ADD COLUMN auto_publish INTEGER NOT NULL DEFAULT 1")
+        if "forbidden_words" not in project_cols:
+            cursor.execute("ALTER TABLE projects ADD COLUMN forbidden_words TEXT NOT NULL DEFAULT ''")
+        if "webhook_secret" not in project_cols:
+            cursor.execute("ALTER TABLE projects ADD COLUMN webhook_secret TEXT NOT NULL DEFAULT ''")
+        if "zero_redeploy_enabled" not in project_cols:
+            cursor.execute("ALTER TABLE projects ADD COLUMN zero_redeploy_enabled INTEGER NOT NULL DEFAULT 1")
+        if "blog_page_path" not in project_cols:
+            cursor.execute("ALTER TABLE projects ADD COLUMN blog_page_path TEXT NOT NULL DEFAULT 'public/blog/index.html'")
+
+        post_cols = [c[1] for c in cursor.execute("PRAGMA table_info(posts)").fetchall()]
+        if "og_image_svg" not in post_cols:
+            cursor.execute("ALTER TABLE posts ADD COLUMN og_image_svg TEXT DEFAULT ''")
+        if "seo_score" not in post_cols:
+            cursor.execute("ALTER TABLE posts ADD COLUMN seo_score INTEGER DEFAULT 100")
+        if "seo_issues" not in post_cols:
+            cursor.execute("ALTER TABLE posts ADD COLUMN seo_issues TEXT DEFAULT '[]'")
+        if "views" not in post_cols:
+            cursor.execute("ALTER TABLE posts ADD COLUMN views INTEGER DEFAULT 0")
+
+        user_cols = [c[1] for c in cursor.execute("PRAGMA table_info(users)").fetchall()]
+        if "totp_secret" not in user_cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT ''")
+        if "totp_enabled" not in user_cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0")
+
         conn.commit()
 
 # --- Project Operations ---
@@ -180,8 +220,9 @@ def create_project(data: Dict[str, Any]) -> int:
                 target_framework, content_dir, file_extension,
                 frontmatter_template, topic, target_audience, tone,
                 keywords, author_name, publishing_mode, publish_time,
-                is_active, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                is_active, auto_publish, forbidden_words, webhook_secret,
+                zero_redeploy_enabled, blog_page_path, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data.get("name", "New Project"),
             data.get("github_repo", "").strip(),
@@ -199,6 +240,11 @@ def create_project(data: Dict[str, Any]) -> int:
             data.get("publishing_mode", "pr"),
             data.get("publish_time", "09:00").strip(),
             1 if data.get("is_active", True) else 0,
+            1 if data.get("auto_publish", True) else 0,
+            data.get("forbidden_words", "").strip(),
+            data.get("webhook_secret", "").strip(),
+            1 if data.get("zero_redeploy_enabled", True) else 0,
+            data.get("blog_page_path", "public/blog/index.html").strip(),
             now,
             now
         ))
@@ -227,6 +273,11 @@ def update_project(project_id: int, data: Dict[str, Any]) -> bool:
                 publishing_mode = COALESCE(?, publishing_mode),
                 publish_time = COALESCE(?, publish_time),
                 is_active = COALESCE(?, is_active),
+                auto_publish = COALESCE(?, auto_publish),
+                forbidden_words = COALESCE(?, forbidden_words),
+                webhook_secret = COALESCE(?, webhook_secret),
+                zero_redeploy_enabled = COALESCE(?, zero_redeploy_enabled),
+                blog_page_path = COALESCE(?, blog_page_path),
                 updated_at = ?
             WHERE id = ?
         """, (
@@ -246,6 +297,11 @@ def update_project(project_id: int, data: Dict[str, Any]) -> bool:
             data.get("publishing_mode"),
             data.get("publish_time"),
             data.get("is_active"),
+            data.get("auto_publish"),
+            data.get("forbidden_words"),
+            data.get("webhook_secret"),
+            data.get("zero_redeploy_enabled"),
+            data.get("blog_page_path"),
             now,
             project_id
         ))
@@ -276,9 +332,10 @@ def create_post(data: Dict[str, Any]) -> int:
             INSERT INTO posts (
                 project_id, title, slug, excerpt, content_markdown,
                 frontmatter_yaml, target_path, tags, meta_seo, image_prompt,
+                og_image_svg, seo_score, seo_issues,
                 status, github_commit_sha, github_pr_url, github_pr_number,
                 error_message, published_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data["project_id"],
             data["title"],
@@ -290,6 +347,9 @@ def create_post(data: Dict[str, Any]) -> int:
             json.dumps(data.get("tags", [])) if isinstance(data.get("tags"), list) else data.get("tags", "[]"),
             json.dumps(data.get("meta_seo", {})) if isinstance(data.get("meta_seo"), dict) else data.get("meta_seo", "{}"),
             data.get("image_prompt", ""),
+            data.get("og_image_svg", ""),
+            data.get("seo_score", 100),
+            json.dumps(data.get("seo_issues", [])) if isinstance(data.get("seo_issues"), list) else data.get("seo_issues", "[]"),
             data.get("status", "draft"),
             data.get("github_commit_sha"),
             data.get("github_pr_url"),
@@ -300,6 +360,48 @@ def create_post(data: Dict[str, Any]) -> int:
         ))
         conn.commit()
         return cursor.lastrowid
+
+def get_post_by_slug(project_id: int, slug: str) -> Optional[Dict[str, Any]]:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT p.*, proj.name as project_name, proj.github_repo
+            FROM posts p
+            JOIN projects proj ON p.project_id = proj.id
+            WHERE p.project_id = ? AND p.slug = ?
+        """, (project_id, slug))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+def increment_post_views(post_id: int, ip_hash: str = ""):
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE posts SET views = views + 1 WHERE id = ?", (post_id,))
+        if ip_hash:
+            cursor.execute("INSERT INTO post_views (post_id, viewed_at, ip_hash) VALUES (?, ?, ?)", (post_id, now, ip_hash))
+        conn.commit()
+
+def update_post_content(post_id: int, title: str, excerpt: str, content_markdown: str, frontmatter_yaml: str, tags: list):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE posts SET
+                title = ?,
+                excerpt = ?,
+                content_markdown = ?,
+                frontmatter_yaml = ?,
+                tags = ?
+            WHERE id = ?
+        """, (
+            title,
+            excerpt,
+            content_markdown,
+            frontmatter_yaml,
+            json.dumps(tags) if isinstance(tags, list) else tags,
+            post_id
+        ))
+        conn.commit()
 
 def get_post(post_id: int) -> Optional[Dict[str, Any]]:
     with get_connection() as conn:

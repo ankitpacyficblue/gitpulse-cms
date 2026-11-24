@@ -1,7 +1,7 @@
 """
 GitPulse CMS - End-to-End Content Pipeline
-Orchestrates topic ideation, AI generation, frontmatter formatting,
-and automated GitHub commit / PR publication for any connected repository.
+Orchestrates topic ideation, README context ingestion, AI generation,
+SEO & brand safety linting, OpenGraph banner synthesis, and GitHub delivery.
 """
 
 from datetime import datetime
@@ -30,10 +30,14 @@ from engine.formatters import (
     assemble_post_document
 )
 from engine.github_client import GitHubClient
+from engine.doc_ingestion import fetch_repo_readme, summarize_readme_context, get_internal_linking_suggestions
+from engine.seo_linter import lint_article
+from engine.image_generator import generate_hero_svg
 
-def run_publication_pipeline(project_id: int, force_publish: bool = True) -> Dict[str, Any]:
+def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Dict[str, Any]:
     """
-    Executes complete end-to-end publishing workflow for a target project.
+    Executes complete publication cycle with context ingestion, SEO linting,
+    hero image synthesis, and automated GitHub commit or editorial staging.
     """
     project = get_project(project_id)
     if not project:
@@ -41,11 +45,22 @@ def run_publication_pipeline(project_id: int, force_publish: bool = True) -> Dic
 
     log_event(f"Starting publication cycle for '{project['name']}' ({project['github_repo']}).", "INFO", project_id=project_id)
 
-    # 1. Topic Planning
+    # 1. Target Repo Context Ingestion (RAG)
+    github_token = project.get("github_token") or get_setting("github_token", DEFAULT_GITHUB_TOKEN)
+    readme_raw = fetch_repo_readme(project["github_repo"], github_token)
+    repo_summary = summarize_readme_context(readme_raw)
+    internal_links = get_internal_linking_suggestions(project_id)
+
+    # 2. Topic Planning
     topic_plan = plan_daily_topic(project)
     log_event(f"Planned topic: '{topic_plan['title']}' [Archetype: {topic_plan['archetype']}]", "INFO", project_id=project_id)
 
-    # 2. AI Content Generation
+    # Enrich topic plan with repository context and internal link suggestions
+    enriched_project = dict(project)
+    if repo_summary:
+        enriched_project["topic"] = f"{project['topic']}\n\nTarget Repo Codebase Context:\n{repo_summary}"
+
+    # 3. AI Content Generation
     ai_provider = get_setting("ai_provider", DEFAULT_AI_PROVIDER)
     ai_key = get_setting(f"{ai_provider}_api_key", "")
     if not ai_key:
@@ -55,9 +70,26 @@ def run_publication_pipeline(project_id: int, force_publish: bool = True) -> Dic
             ai_key = DEFAULT_OPENAI_API_KEY
 
     generator = AIGenerator(provider=ai_provider, api_key=ai_key)
-    article = generator.generate_article(topic_plan, project)
+    article = generator.generate_article(topic_plan, enriched_project)
 
-    # 3. Target Filepath & Frontmatter Formatting
+    # 4. SEO Pre-Flight Linting & Brand Safety Filter
+    lint_results = lint_article(
+        title=article["title"],
+        excerpt=article["excerpt"],
+        content_markdown=article["content_markdown"],
+        forbidden_words_csv=project.get("forbidden_words", "")
+    )
+    log_event(f"SEO Pre-flight score for '{article['title']}': {lint_results['score']}/100.", "INFO", project_id=project_id)
+
+    # 5. Hero & OpenGraph Banner Synthesis (1200x630 SVG)
+    hero_svg = generate_hero_svg(
+        title=article["title"],
+        category=project.get("name", "Engineering"),
+        author=project.get("author_name", "Editorial Team"),
+        reading_time=article.get("meta_seo", {}).get("reading_time", 5)
+    )
+
+    # 6. Target Filepath & Frontmatter Formatting
     post_date = datetime.utcnow().strftime("%Y-%m-%d")
     target_path = build_target_filepath(project, article["slug"], post_date)
 
@@ -75,7 +107,13 @@ def run_publication_pipeline(project_id: int, force_publish: bool = True) -> Dic
     frontmatter_yaml = format_frontmatter(project["frontmatter_template"], frontmatter_vars)
     full_document = assemble_post_document(frontmatter_yaml, article["content_markdown"])
 
-    # 4. Save Post Record in DB
+    # Determine initial status:
+    # If project requires manual review (auto_publish=0) and not forced, stage for human approval
+    auto_publish_enabled = bool(project.get("auto_publish", 1))
+    should_publish_now = force_publish or auto_publish_enabled
+    initial_status = "publishing" if should_publish_now else "in_review"
+
+    # 7. Save Post Record in DB
     post_id = create_post({
         "project_id": project_id,
         "title": article["title"],
@@ -87,24 +125,27 @@ def run_publication_pipeline(project_id: int, force_publish: bool = True) -> Dic
         "tags": article["tags"],
         "meta_seo": article["meta_seo"],
         "image_prompt": article["image_prompt"],
-        "status": "scheduled" if not force_publish else "publishing"
+        "og_image_svg": hero_svg,
+        "seo_score": lint_results["score"],
+        "seo_issues": lint_results["issues"],
+        "status": initial_status
     })
 
-    if not force_publish:
-        log_event(f"Post #{post_id} saved as draft / scheduled.", "INFO", project_id=project_id, post_id=post_id)
+    if not should_publish_now:
+        log_event(f"Post #{post_id} entered Editorial Staging queue ('in_review'). Awaiting human approval.", "INFO", project_id=project_id, post_id=post_id)
         update_project_last_run(project_id)
         return {
             "success": True,
             "post_id": post_id,
             "title": article["title"],
             "target_path": target_path,
-            "status": "scheduled"
+            "status": "in_review",
+            "seo_score": lint_results["score"],
+            "message": "Article generated and held in Editorial Staging for review."
         }
 
-    # 5. Publish to GitHub
-    github_token = project.get("github_token") or get_setting("github_token", DEFAULT_GITHUB_TOKEN)
+    # 8. GitHub Publication Dispatch
     client = GitHubClient(token=github_token)
-
     pub_result = client.publish_post(
         repo=project["github_repo"],
         branch=project["github_branch"],
@@ -133,6 +174,7 @@ def run_publication_pipeline(project_id: int, force_publish: bool = True) -> Dic
             "title": article["title"],
             "target_path": target_path,
             "status": "published",
+            "seo_score": lint_results["score"],
             "pub_result": pub_result
         }
     else:
