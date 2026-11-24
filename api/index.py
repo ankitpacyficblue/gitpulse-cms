@@ -23,6 +23,7 @@ from server.routes_web import render_dashboard_html, render_login_html
 from server.routes_api import handle_api_request
 from server.routes_public import handle_public_request
 from server.routes_webhook import handle_github_webhook
+from server.routes_whatsapp import handle_whatsapp_webhook_get, handle_whatsapp_webhook_post
 
 # Initialize DB on cold start
 try:
@@ -149,6 +150,12 @@ class handler(BaseHTTPRequestHandler):
                 self.wfile.write(b"404 Not Found")
                 return
 
+        if path == "/api/webhook/whatsapp":
+            code, ctype, resp_body = handle_whatsapp_webhook_get(query)
+            self._set_headers(code, ctype)
+            self.wfile.write(resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body)
+            return
+
         if path.startswith("/api/public/"):
             client_ip = self._get_client_ip()
             code, ctype, resp_body = handle_public_request(path, query, client_ip)
@@ -194,6 +201,12 @@ class handler(BaseHTTPRequestHandler):
                 body_data = json.loads(raw_body) if raw_body else {}
             except Exception:
                 body_data = {}
+
+        if path == "/api/webhook/whatsapp" and method == "POST":
+            code, resp = handle_whatsapp_webhook_post(body_data or {})
+            self._set_headers(code, "application/json")
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
 
         if path == "/api/webhook/github" and method == "POST":
             event_type = self.headers.get("X-GitHub-Event", "ping")
@@ -285,6 +298,12 @@ def app(environ, start_response):
             start_response("404 Not Found", headers)
             return [b"404 Not Found"]
 
+        if path == "/api/webhook/whatsapp":
+            code, ctype, resp_body = handle_whatsapp_webhook_get(query)
+            self._set_headers(code, ctype)
+            self.wfile.write(resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body)
+            return
+
         if path.startswith("/api/public/"):
             code, ctype, resp_body = handle_public_request(path, query, client_ip)
             headers.append(("Content-Type", ctype))
@@ -312,6 +331,12 @@ def app(environ, start_response):
             body_data = json.loads(body_bytes.decode("utf-8"))
         except Exception:
             body_data = {}
+
+    if path == "/api/webhook/whatsapp" and method == "POST":
+        code, resp = handle_whatsapp_webhook_post(body_data or {})
+        headers.append(("Content-Type", "application/json"))
+        start_response(f"{code} OK" if code == 200 else f"{code} Error", headers)
+        return [json.dumps(resp).encode("utf-8")]
 
     if path == "/api/webhook/github" and method == "POST":
         event_type = environ.get("HTTP_X_GITHUB_EVENT", "ping")

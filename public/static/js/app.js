@@ -38,6 +38,12 @@ async function initApp() {
     await loadProjects();
     await loadStagingPosts();
     await loadPosts();
+    await loadWhatsAppInbox();
+    await loadWhatsAppContacts();
+    await loadWhatsAppDeals();
+    await loadWhatsAppBroadcasts();
+    await loadWhatsAppAutomations();
+    await loadWhatsAppConfig();
     await loadLogs();
     await loadSettings();
     await loadSupabaseStatus();
@@ -47,25 +53,60 @@ async function initApp() {
         loadStatus();
         loadStagingPosts();
         loadLogs();
+        if (activeConversationId) {
+            loadConversationMessages(activeConversationId, true);
+        }
     }, 15000);
 }
 
-// --- Tabs Navigation ---
+// --- Tabs & Sidebar Navigation ---
 function switchTab(tabName) {
     document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
     document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.sidebar-nav-item').forEach(el => el.classList.remove('active'));
 
     const targetTab = document.getElementById(`tab-${tabName}`);
     if (targetTab) targetTab.classList.remove('hidden');
 
-    const clickedBtn = Array.from(document.querySelectorAll('.nav-tab')).find(btn => 
+    const clickedNav = Array.from(document.querySelectorAll('.sidebar-nav-item, .nav-tab')).filter(btn => 
         btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(tabName)
     );
-    if (clickedBtn) clickedBtn.classList.add('active');
+    clickedNav.forEach(el => el.classList.add('active'));
 
+    // Dynamic header title update
+    const titleMap = {
+        'repos': { title: 'Connected Projects', sub: 'Autonomous multi-repo daily blog publishing targets' },
+        'staging': { title: 'Editorial Staging & Review', sub: 'Review, edit, and approve AI-generated drafts with live SEO scoring' },
+        'posts': { title: 'Published Blog Articles', sub: 'Inspect published posts, live Markdown, and GitHub commits/PRs' },
+        'zeroredeploy': { title: 'Zero-Redeploy "One-Time Blog Page"', sub: 'Turnkey dynamic blog embed with zero CI/CD rebuilds' },
+        'wa-inbox': { title: 'Shared Team Inbox', sub: 'Two-way live WhatsApp messaging with delivery status ticks and quick replies' },
+        'wa-contacts': { title: 'Contacts & Audience CRM', sub: 'Manage customer profiles, lead tags, and WhatsApp communication history' },
+        'wa-deals': { title: 'Sales Pipeline (Kanban)', sub: 'Track and advance deals across qualification, proposals, and closed won' },
+        'wa-broadcasts': { title: 'Broadcast Campaigns', sub: 'Mass WhatsApp messaging campaigns segmented by audience tags' },
+        'wa-automations': { title: 'No-Code Automations Engine', sub: 'Automated welcome bots, keyword responders, and blog publication alerts' },
+        'wa-config': { title: 'WhatsApp API & Webhook Setup', sub: 'Official Meta Cloud API credentials, webhook verification, and simulator' },
+        'supabase': { title: 'Supabase Cloud Database', sub: 'PostgreSQL multi-tenant persistence and cloud backup status' },
+        'logs': { title: 'System & Generation Logs', sub: 'Real-time audit log of AI generation, GitHub commits, and webhooks' },
+        'settings': { title: 'Platform Settings & Security', sub: 'Global API tokens, AI provider keys, TOTP 2FA, and password management' }
+    };
+
+    const headerTitleEl = document.getElementById('view-header-title');
+    const headerSubEl = document.getElementById('view-header-sub');
+    if (headerTitleEl && titleMap[tabName]) headerTitleEl.innerText = titleMap[tabName].title;
+    if (headerSubEl && titleMap[tabName]) headerSubEl.innerText = titleMap[tabName].sub;
+
+    if (tabName === 'repos') loadProjects();
     if (tabName === 'staging') loadStagingPosts();
     if (tabName === 'posts') loadPosts();
+    if (tabName === 'wa-inbox') loadWhatsAppInbox();
+    if (tabName === 'wa-contacts') loadWhatsAppContacts();
+    if (tabName === 'wa-deals') loadWhatsAppDeals();
+    if (tabName === 'wa-broadcasts') loadWhatsAppBroadcasts();
+    if (tabName === 'wa-automations') loadWhatsAppAutomations();
+    if (tabName === 'wa-config') loadWhatsAppConfig();
+    if (tabName === 'supabase') loadSupabaseStatus();
     if (tabName === 'logs') loadLogs();
+    if (tabName === 'settings') loadSettings();
 }
 
 // --- Authentication & Session Actions ---
@@ -222,17 +263,68 @@ async function loadStatus() {
     const status = await apiGet('/api/status');
     if (!status) return;
 
-    document.getElementById('stat-repos-count').innerText = status.projects_count || 0;
-    document.getElementById('stat-posts-count').innerText = status.total_posts || 0;
-    document.getElementById('stat-published-count').innerText = status.published_posts || 0;
+    if (document.getElementById('stat-repos-count')) document.getElementById('stat-repos-count').innerText = status.projects_count || 0;
+    if (document.getElementById('stat-posts-count')) document.getElementById('stat-posts-count').innerText = status.total_posts || 0;
+    if (document.getElementById('stat-published-count')) document.getElementById('stat-published-count').innerText = status.published_posts || 0;
     
     const schedEl = document.getElementById('stat-scheduler-status');
-    if (status.scheduler_active) {
-        schedEl.innerText = "Running";
-        schedEl.className = "text-2xl font-bold mt-1 text-emerald-400";
-    } else {
-        schedEl.innerText = "Idle";
-        schedEl.className = "text-2xl font-bold mt-1 text-yellow-400";
+    if (schedEl) {
+        if (status.scheduler_active) {
+            schedEl.innerText = "Running";
+            schedEl.className = "text-2xl font-bold mt-1 text-emerald-400";
+        } else {
+            schedEl.innerText = "Idle";
+            schedEl.className = "text-2xl font-bold mt-1 text-yellow-400";
+        }
+    }
+
+    // Refresh CRM metrics and sidebar badges
+    try {
+        const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
+        const cidParam = clientFilter ? `?client_id=${clientFilter}` : '';
+
+        const [cntData, convData, dealData, autoData] = await Promise.all([
+            apiGet(`/api/whatsapp/contacts${cidParam}`),
+            apiGet(`/api/whatsapp/conversations${cidParam}`),
+            apiGet(`/api/whatsapp/deals${cidParam}`),
+            apiGet(`/api/whatsapp/automations${cidParam}`)
+        ]);
+
+        if (cntData && cntData.contacts) {
+            const count = cntData.contacts.length;
+            const el = document.getElementById('stat-contacts-count');
+            if (el) el.innerText = count;
+            const badge = document.getElementById('sidebar-badge-contacts');
+            if (badge) badge.innerText = count;
+        }
+
+        if (convData && convData.conversations) {
+            const openChats = convData.conversations.length;
+            const unreadTotal = convData.conversations.reduce((sum, c) => sum + (c.unread_count || 0), 0);
+            const el = document.getElementById('stat-chats-count');
+            if (el) el.innerText = openChats;
+            const badge = document.getElementById('sidebar-badge-inbox');
+            if (badge) {
+                badge.innerText = unreadTotal > 0 ? `${unreadTotal} new` : openChats;
+                badge.className = unreadTotal > 0 ? "sidebar-badge bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "sidebar-badge bg-slate-800 text-slate-400";
+            }
+        }
+
+        if (dealData && dealData.deals) {
+            const totalVal = dealData.deals.reduce((sum, d) => sum + (parseFloat(d.value) || 0), 0);
+            const el = document.getElementById('stat-pipeline-value');
+            if (el) el.innerText = `$${totalVal.toLocaleString()}`;
+            const badge = document.getElementById('sidebar-badge-deals');
+            if (badge) badge.innerText = `$${Math.round(totalVal/1000)}k`;
+        }
+
+        if (autoData && autoData.automations) {
+            const activeCount = autoData.automations.filter(a => a.is_active).length;
+            const badge = document.getElementById('sidebar-badge-automations');
+            if (badge) badge.innerText = `${activeCount} live`;
+        }
+    } catch (e) {
+        console.warn('CRM metrics fetch error:', e);
     }
 }
 
@@ -1000,3 +1092,660 @@ function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+
+// ====================================================================
+// WhatsApp Automation & CRM Engine (ArnasDon/wacrm Frontend Controller)
+// ====================================================================
+
+let activeConversationId = null;
+let currentConversationsList = [];
+
+// --- 1. Shared Team Inbox ---
+
+async function loadWhatsAppInbox(selectConvId = null) {
+    const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
+    const url = clientFilter ? `/api/whatsapp/conversations?client_id=${clientFilter}` : '/api/whatsapp/conversations';
+    
+    const data = await apiGet(url);
+    if (!data || !data.conversations) return;
+    
+    currentConversationsList = data.conversations;
+    const threadListEl = document.getElementById('wa-threads-list');
+    if (!threadListEl) return;
+    
+    threadListEl.innerHTML = '';
+    
+    if (currentConversationsList.length === 0) {
+        threadListEl.innerHTML = `
+            <div class="p-6 text-center text-slate-500 text-xs">
+                No active conversations yet.<br>Click "Test Inbound Message" or wait for incoming WhatsApp messages.
+            </div>
+        `;
+        document.getElementById('wa-chat-empty-state').classList.remove('hidden');
+        document.getElementById('wa-chat-active-state').classList.add('hidden');
+        return;
+    }
+    
+    currentConversationsList.forEach(conv => {
+        const item = document.createElement('div');
+        const isActive = (selectConvId && conv.id === selectConvId) || (!selectConvId && activeConversationId === conv.id) || (!selectConvId && !activeConversationId && currentConversationsList[0].id === conv.id);
+        
+        item.className = `chat-thread-item ${isActive ? 'active' : ''}`;
+        item.onclick = () => selectConversation(conv.id);
+        
+        const initials = conv.contact_name ? conv.contact_name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'WA';
+        const timeStr = conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+        const unreadBadge = conv.unread_count > 0 ? `<span class="bg-indigo-500 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full">${conv.unread_count}</span>` : '';
+        
+        item.innerHTML = `
+            <div class="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-cyan-500 flex items-center justify-center font-bold text-xs text-white flex-shrink-0">
+                ${initials}
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="flex justify-between items-center mb-0.5">
+                    <span class="font-semibold text-xs text-slate-200 truncate">${escapeHtml(conv.contact_name)}</span>
+                    <span class="text-[10px] text-slate-500">${timeStr}</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <p class="text-[11px] text-slate-400 truncate">${escapeHtml(conv.last_message_preview || 'No messages')}</p>
+                    ${unreadBadge}
+                </div>
+            </div>
+        `;
+        threadListEl.appendChild(item);
+    });
+    
+    const targetId = selectConvId || activeConversationId || currentConversationsList[0].id;
+    selectConversation(targetId, true);
+}
+
+async function selectConversation(convId, force = false) {
+    if (activeConversationId === convId && !force) return;
+    activeConversationId = convId;
+    
+    // Highlight thread in sidebar
+    document.querySelectorAll('.chat-thread-item').forEach(el => el.classList.remove('active'));
+    const allThreads = document.querySelectorAll('.chat-thread-item');
+    const idx = currentConversationsList.findIndex(c => c.id === convId);
+    if (idx !== -1 && allThreads[idx]) allThreads[idx].classList.add('active');
+    
+    // Mark as read
+    apiPost(`/api/whatsapp/conversations/${convId}/read`, {});
+    
+    const conv = currentConversationsList.find(c => c.id === convId);
+    if (conv) {
+        document.getElementById('wa-chat-empty-state').classList.add('hidden');
+        document.getElementById('wa-chat-active-state').classList.remove('hidden');
+        
+        document.getElementById('wa-chat-contact-name').innerText = conv.contact_name;
+        document.getElementById('wa-chat-contact-phone').innerText = conv.contact_phone;
+        
+        // Tags
+        const tagsContainer = document.getElementById('wa-chat-contact-tags');
+        if (tagsContainer) {
+            tagsContainer.innerHTML = '';
+            (conv.contact_tags || ['Lead']).forEach(tag => {
+                const span = document.createElement('span');
+                span.className = "text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20";
+                span.innerText = tag;
+                tagsContainer.appendChild(span);
+            });
+        }
+    }
+    
+    await loadConversationMessages(convId);
+}
+
+async function loadConversationMessages(convId, silent = false) {
+    const data = await apiGet(`/api/whatsapp/conversations/${convId}/messages?limit=100`);
+    if (!data || !data.messages) return;
+    
+    const msgContainer = document.getElementById('wa-messages-container');
+    if (!msgContainer) return;
+    
+    msgContainer.innerHTML = '';
+    
+    data.messages.forEach(msg => {
+        const bubble = document.createElement('div');
+        const isInbound = msg.direction === 'inbound';
+        bubble.className = isInbound ? 'chat-bubble-inbound' : 'chat-bubble-outbound';
+        
+        const timeStr = msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+        let tick = '';
+        if (!isInbound) {
+            if (msg.status === 'read') tick = '<span class="chat-status-tick text-cyan-300 font-bold" title="Read">✓✓</span>';
+            else if (msg.status === 'delivered') tick = '<span class="chat-status-tick text-slate-300" title="Delivered">✓✓</span>';
+            else tick = '<span class="chat-status-tick text-slate-400" title="Sent">✓</span>';
+        }
+        
+        bubble.innerHTML = `
+            <div>${escapeHtml(msg.body).replace(/\\n/g, '<br>')}</div>
+            <div class="text-[9px] text-right mt-1 opacity-70 flex justify-end items-center">
+                <span>${timeStr}</span>
+                ${tick}
+            </div>
+        `;
+        msgContainer.appendChild(bubble);
+    });
+    
+    if (!silent) {
+        msgContainer.scrollTop = msgContainer.scrollHeight;
+    }
+}
+
+async function sendWhatsAppReply(e) {
+    if (e) e.preventDefault();
+    if (!activeConversationId) return;
+    
+    const input = document.getElementById('wa-message-input');
+    const text = input.value.trim();
+    if (!text) return;
+    
+    input.value = '';
+    
+    const res = await apiPost(`/api/whatsapp/conversations/${activeConversationId}/messages`, {
+        body: text
+    });
+    
+    if (res && res.success) {
+        await loadConversationMessages(activeConversationId);
+        loadStatus();
+    } else {
+        showToast(res ? res.error : 'Failed to send WhatsApp message', 'error');
+    }
+}
+
+function insertCannedReply(text) {
+    const input = document.getElementById('wa-message-input');
+    if (input) {
+        input.value = text;
+        input.focus();
+    }
+}
+
+// --- 2. Contacts CRM ---
+
+async function loadWhatsAppContacts() {
+    const search = document.getElementById('wa-contact-search') ? document.getElementById('wa-contact-search').value : '';
+    const tag = document.getElementById('wa-contact-tag-filter') ? document.getElementById('wa-contact-tag-filter').value : '';
+    const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
+    
+    let url = `/api/whatsapp/contacts?search=${encodeURIComponent(search)}&tag=${encodeURIComponent(tag)}`;
+    if (clientFilter) url += `&client_id=${clientFilter}`;
+    
+    const data = await apiGet(url);
+    if (!data || !data.contacts) return;
+    
+    const tbody = document.getElementById('wa-contacts-table-body');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    
+    data.contacts.forEach(c => {
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-slate-950/40 transition-colors";
+        
+        const initials = c.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+        const tagPills = (c.tags || ['Lead']).map(t => {
+            const colorClass = t.toLowerCase() === 'vip' ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' :
+                               (t.toLowerCase() === 'customer' ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' :
+                               'bg-indigo-500/10 text-indigo-300 border-indigo-500/30');
+            return `<span class="text-[10px] px-2 py-0.5 rounded-full border ${colorClass}">${escapeHtml(t)}</span>`;
+        }).join(' ');
+        
+        tr.innerHTML = `
+            <td class="px-5 py-3">
+                <div class="flex items-center space-x-3">
+                    <div class="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-indigo-300">
+                        ${initials}
+                    </div>
+                    <div>
+                        <div class="font-medium text-white">${escapeHtml(c.name)}</div>
+                        <div class="text-[11px] text-slate-400">${escapeHtml(c.email || 'No email')}</div>
+                    </div>
+                </div>
+            </td>
+            <td class="px-5 py-3 font-mono text-xs text-slate-300">
+                <a href="https://wa.me/${c.phone.replace(/[^\\d]/g, '')}" target="_blank" class="hover:text-emerald-400 flex items-center gap-1">
+                    <span>${escapeHtml(c.phone)}</span>
+                    <span class="text-[10px]">↗</span>
+                </a>
+            </td>
+            <td class="px-5 py-3">
+                <div class="flex flex-wrap gap-1">${tagPills}</div>
+            </td>
+            <td class="px-5 py-3 text-xs text-slate-400 max-w-xs truncate">
+                ${escapeHtml(c.notes || '-')}
+            </td>
+            <td class="px-5 py-3 text-right">
+                <div class="flex items-center justify-end gap-1.5">
+                    <button onclick="startChatWithContact(${c.id})" class="btn-secondary text-[11px] py-1 px-2.5 flex items-center gap-1 text-emerald-400 hover:text-emerald-300">
+                        <span>💬 Chat</span>
+                    </button>
+                    <button onclick="openAddDealModal(${c.id}, '${escapeHtml(c.name)}')" class="btn-secondary text-[11px] py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
+                        <span>+ Deal</span>
+                    </button>
+                    <button onclick="deleteContactFromUI(${c.id}, '${escapeHtml(c.name)}')" class="text-slate-500 hover:text-red-400 p-1">
+                        🗑️
+                    </button>
+                </div>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+async function startChatWithContact(contactId) {
+    const data = await apiGet('/api/whatsapp/conversations');
+    if (!data || !data.conversations) return;
+    const match = data.conversations.find(conv => conv.contact_id === contactId);
+    switchTab('wa-inbox');
+    if (match) {
+        selectConversation(match.id, true);
+    } else {
+        loadWhatsAppInbox();
+    }
+}
+
+async function deleteContactFromUI(id, name) {
+    if (!confirm(`Are you sure you want to delete contact "${name}"?`)) return;
+    const res = await apiDelete(`/api/whatsapp/contacts/${id}`);
+    if (res && res.success) {
+        showToast(`Contact "${name}" deleted.`, 'info');
+        loadWhatsAppContacts();
+        loadStatus();
+    }
+}
+
+// --- 3. Sales Pipeline Kanban ---
+
+async function loadWhatsAppDeals() {
+    const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
+    const url = clientFilter ? `/api/whatsapp/deals?client_id=${clientFilter}` : '/api/whatsapp/deals';
+    
+    const data = await apiGet(url);
+    if (!data || !data.deals) return;
+    
+    const stages = ['lead', 'qualified', 'proposal', 'negotiation', 'won'];
+    const grouped = { lead: [], qualified: [], proposal: [], negotiation: [], won: [] };
+    
+    data.deals.forEach(d => {
+        const st = (d.stage || 'lead').toLowerCase();
+        if (grouped[st]) grouped[st].push(d);
+        else grouped.lead.push(d);
+    });
+    
+    stages.forEach(stage => {
+        const colEl = document.getElementById(`kanban-cards-${stage}`);
+        const countEl = document.getElementById(`kanban-count-${stage}`);
+        const totalEl = document.getElementById(`kanban-total-${stage}`);
+        if (!colEl) return;
+        
+        colEl.innerHTML = '';
+        const list = grouped[stage];
+        const subtotal = list.reduce((sum, d) => sum + (parseFloat(d.value) || 0), 0);
+        
+        if (countEl) countEl.innerText = list.length;
+        if (totalEl) totalEl.innerText = `$${subtotal.toLocaleString()}`;
+        
+        list.forEach(deal => {
+            const card = document.createElement('div');
+            card.className = "kanban-card";
+            
+            const stageIndex = stages.indexOf(stage);
+            const prevStage = stageIndex > 0 ? stages[stageIndex - 1] : null;
+            const nextStage = stageIndex < stages.length - 1 ? stages[stageIndex + 1] : null;
+            
+            const prevBtn = prevStage ? `<button onclick="updateDealStage(${deal.id}, '${prevStage}')" class="text-slate-500 hover:text-indigo-400 text-xs px-1" title="Move back to ${prevStage}">←</button>` : '';
+            const nextBtn = nextStage ? `<button onclick="updateDealStage(${deal.id}, '${nextStage}')" class="text-slate-500 hover:text-emerald-400 text-xs px-1" title="Advance to ${nextStage}">→</button>` : '';
+            
+            card.innerHTML = `
+                <div class="flex justify-between items-start mb-1.5">
+                    <h4 class="font-semibold text-xs text-white leading-snug">${escapeHtml(deal.title)}</h4>
+                    <button onclick="deleteDealFromUI(${deal.id})" class="text-slate-600 hover:text-red-400 text-xs ml-1">&times;</button>
+                </div>
+                <div class="text-[11px] text-slate-400 mb-2">${escapeHtml(deal.contact_name || 'Unassigned Contact')}</div>
+                <div class="flex justify-between items-center pt-2 border-t border-slate-900 text-xs">
+                    <span class="font-bold text-emerald-400">$${(parseFloat(deal.value) || 0).toLocaleString()}</span>
+                    <div class="flex items-center gap-1 bg-slate-900 px-1 py-0.5 rounded border border-slate-800">
+                        ${prevBtn}
+                        <span class="text-[10px] text-slate-500 uppercase">${stage.substring(0, 3)}</span>
+                        ${nextBtn}
+                    </div>
+                </div>
+            `;
+            colEl.appendChild(card);
+        });
+    });
+}
+
+async function updateDealStage(dealId, newStage) {
+    const res = await apiPut(`/api/whatsapp/deals/${dealId}/stage`, { stage: newStage });
+    if (res && res.success) {
+        showToast(`Deal moved to ${newStage.toUpperCase()}`, 'success');
+        loadWhatsAppDeals();
+        loadStatus();
+    }
+}
+
+async function deleteDealFromUI(dealId) {
+    if (!confirm('Are you sure you want to delete this deal?')) return;
+    const res = await apiDelete(`/api/whatsapp/deals/${dealId}`);
+    if (res && res.success) {
+        showToast('Deal removed.', 'info');
+        loadWhatsAppDeals();
+        loadStatus();
+    }
+}
+
+// --- 4. Broadcast Campaigns ---
+
+async function loadWhatsAppBroadcasts() {
+    const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
+    const url = clientFilter ? `/api/whatsapp/broadcasts?client_id=${clientFilter}` : '/api/whatsapp/broadcasts';
+    
+    const data = await apiGet(url);
+    if (!data || !data.broadcasts) return;
+    
+    const container = document.getElementById('wa-broadcasts-container');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    data.broadcasts.forEach(b => {
+        const card = document.createElement('div');
+        card.className = "bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-3";
+        
+        const isDone = b.status === 'completed';
+        const badgeColor = isDone ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-amber-500/10 text-amber-300 border-amber-500/30';
+        
+        card.innerHTML = `
+            <div class="flex justify-between items-start">
+                <div>
+                    <h3 class="font-bold text-sm text-white">${escapeHtml(b.name)}</h3>
+                    <div class="flex items-center gap-2 mt-1">
+                        <span class="text-[10px] px-2 py-0.5 rounded-full border ${badgeColor} uppercase tracking-wider font-semibold">${escapeHtml(b.status)}</span>
+                        <span class="text-xs text-slate-400">Target: <strong class="text-indigo-300">${escapeHtml(b.target_tag.toUpperCase())}</strong></span>
+                    </div>
+                </div>
+                <button onclick="runBroadcastFromUI(${b.id})" class="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5">
+                    <span>⚡ Run Broadcast</span>
+                </button>
+            </div>
+            
+            <div class="bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs text-slate-300 font-mono">
+                ${escapeHtml(b.template_body)}
+            </div>
+            
+            <div class="grid grid-cols-4 gap-2 pt-2 border-t border-slate-800 text-center">
+                <div class="p-2 rounded bg-slate-950/60">
+                    <div class="text-[10px] text-slate-400 uppercase font-semibold">Total Leads</div>
+                    <div class="text-base font-bold text-white mt-0.5">${b.total_recipients || 0}</div>
+                </div>
+                <div class="p-2 rounded bg-slate-950/60">
+                    <div class="text-[10px] text-slate-400 uppercase font-semibold">Sent</div>
+                    <div class="text-base font-bold text-indigo-400 mt-0.5">${b.sent_count || 0}</div>
+                </div>
+                <div class="p-2 rounded bg-slate-950/60">
+                    <div class="text-[10px] text-slate-400 uppercase font-semibold">Delivered</div>
+                    <div class="text-base font-bold text-cyan-400 mt-0.5">${b.delivered_count || 0}</div>
+                </div>
+                <div class="p-2 rounded bg-slate-950/60">
+                    <div class="text-[10px] text-slate-400 uppercase font-semibold">Read</div>
+                    <div class="text-base font-bold text-emerald-400 mt-0.5">${b.read_count || 0}</div>
+                </div>
+            </div>
+        `;
+        container.appendChild(card);
+    });
+}
+
+async function runBroadcastFromUI(broadcastId) {
+    showToast('Executing WhatsApp broadcast campaign...', 'info');
+    const res = await apiPost(`/api/whatsapp/broadcasts/${broadcastId}/run`, {});
+    if (res && res.success) {
+        showToast(`Broadcast completed: ${res.stats.sent_count} messages sent!`, 'success');
+        loadWhatsAppBroadcasts();
+        loadStatus();
+    } else {
+        showToast('Broadcast execution failed', 'error');
+    }
+}
+
+// --- 5. No-Code Automations Engine ---
+
+async function loadWhatsAppAutomations() {
+    const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
+    const url = clientFilter ? `/api/whatsapp/automations?client_id=${clientFilter}` : '/api/whatsapp/automations';
+    
+    const data = await apiGet(url);
+    if (!data || !data.automations) return;
+    
+    const container = document.getElementById('wa-automations-container');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    data.automations.forEach(a => {
+        const card = document.createElement('div');
+        card.className = "bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-3";
+        
+        let icon = '💬';
+        let triggerLabel = `Keyword: <code>${escapeHtml(a.trigger_keyword)}</code>`;
+        if (a.trigger_type === 'welcome') {
+            icon = '👋';
+            triggerLabel = 'First Inbound Message from New Contact';
+        } else if (a.trigger_type === 'blog_publish') {
+            icon = '📰';
+            triggerLabel = 'Autonomous Blog Published to GitHub';
+        }
+        
+        card.innerHTML = `
+            <div class="flex justify-between items-start">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center text-xl">
+                        ${icon}
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm text-white">${escapeHtml(a.name)}</h3>
+                        <div class="text-xs text-slate-400 mt-0.5">Trigger: ${triggerLabel}</div>
+                    </div>
+                </div>
+                
+                <div class="flex items-center gap-3">
+                    <span class="text-xs text-slate-500 font-mono">${a.executions_count || 0} runs</span>
+                    <label class="switch">
+                        <input type="checkbox" ${a.is_active ? 'checked' : ''} onchange="toggleAutomationRule(${a.id}, this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                    <button onclick="deleteAutomationRule(${a.id})" class="text-slate-600 hover:text-red-400 text-xs ml-1">🗑️</button>
+                </div>
+            </div>
+            
+            <div class="bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs text-slate-300 font-mono">
+                <span class="text-indigo-400 font-semibold block mb-1">Action: Send WhatsApp Reply Template</span>
+                ${escapeHtml(a.message_template)}
+            </div>
+        `;
+        container.appendChild(card);
+    });
+}
+
+async function toggleAutomationRule(id, isChecked) {
+    const res = await apiPut(`/api/whatsapp/automations/${id}/toggle`, { is_active: isChecked });
+    if (res && res.success) {
+        showToast(`Automation rule ${isChecked ? 'Activated' : 'Paused'}.`, 'success');
+        loadStatus();
+    }
+}
+
+async function deleteAutomationRule(id) {
+    if (!confirm('Are you sure you want to delete this automation rule?')) return;
+    const res = await apiDelete(`/api/whatsapp/automations/${id}`);
+    if (res && res.success) {
+        showToast('Automation rule deleted.', 'info');
+        loadWhatsAppAutomations();
+        loadStatus();
+    }
+}
+
+// --- 6. WhatsApp Configuration & Simulator ---
+
+async function loadWhatsAppConfig() {
+    const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
+    const url = clientFilter ? `/api/whatsapp/config?client_id=${clientFilter}` : '/api/whatsapp/config';
+    
+    const cfg = await apiGet(url);
+    if (!cfg) return;
+    
+    if (document.getElementById('wa-cfg-phone-id')) document.getElementById('wa-cfg-phone-id').value = cfg.phone_number_id || '';
+    if (document.getElementById('wa-cfg-waba-id')) document.getElementById('wa-cfg-waba-id').value = cfg.waba_id || '';
+    if (document.getElementById('wa-cfg-token')) document.getElementById('wa-cfg-token').value = cfg.access_token || '';
+    if (document.getElementById('wa-cfg-verify-token')) document.getElementById('wa-cfg-verify-token').value = cfg.verify_token || 'gitpulse_webhook_verify';
+    if (document.getElementById('wa-cfg-biz-name')) document.getElementById('wa-cfg-biz-name').value = cfg.business_name || '';
+}
+
+async function saveWhatsAppConfig(e) {
+    if (e) e.preventDefault();
+    const payload = {
+        phone_number_id: document.getElementById('wa-cfg-phone-id').value,
+        waba_id: document.getElementById('wa-cfg-waba-id').value,
+        access_token: document.getElementById('wa-cfg-token').value,
+        verify_token: document.getElementById('wa-cfg-verify-token').value,
+        business_name: document.getElementById('wa-cfg-biz-name').value
+    };
+    
+    const res = await apiPost('/api/whatsapp/config', payload);
+    if (res && res.success) {
+        showToast('WhatsApp Business Cloud API configuration saved.', 'success');
+    } else {
+        showToast('Failed to save WhatsApp config.', 'error');
+    }
+}
+
+async function simulateIncomingWhatsApp(e) {
+    if (e) e.preventDefault();
+    const name = document.getElementById('wa-sim-name').value;
+    const phone = document.getElementById('wa-sim-phone').value;
+    const msg = document.getElementById('wa-sim-message').value;
+    
+    showToast('Simulating incoming WhatsApp webhook event...', 'info');
+    
+    const res = await apiPost('/api/whatsapp/simulate-incoming', {
+        name,
+        phone,
+        message: msg
+    });
+    
+    if (res && res.success) {
+        showToast('Inbound message delivered and auto-responders executed!', 'success');
+        switchTab('wa-inbox');
+        loadWhatsAppInbox();
+        loadStatus();
+    } else {
+        showToast('Simulation failed.', 'error');
+    }
+}
+
+// --- 7. Modals Controllers for WhatsApp CRM ---
+
+function openAddContactModal() {
+    document.getElementById('modal-add-contact').classList.remove('hidden');
+}
+function closeAddContactModal() {
+    document.getElementById('modal-add-contact').classList.add('hidden');
+}
+async function submitAddContact(e) {
+    e.preventDefault();
+    const name = document.getElementById('new-contact-name').value;
+    const phone = document.getElementById('new-contact-phone').value;
+    const email = document.getElementById('new-contact-email').value;
+    const tags = document.getElementById('new-contact-tags').value.split(',').map(t => t.trim()).filter(Boolean);
+    const notes = document.getElementById('new-contact-notes').value;
+    
+    const res = await apiPost('/api/whatsapp/contacts', { name, phone, email, tags, notes });
+    if (res && res.success) {
+        showToast(`Contact "${name}" added.`, 'success');
+        closeAddContactModal();
+        loadWhatsAppContacts();
+        loadStatus();
+    } else {
+        showToast(res ? res.error : 'Failed to add contact', 'error');
+    }
+}
+
+function openAddDealModal(contactId = null, contactName = '') {
+    if (contactId) {
+        document.getElementById('new-deal-contact-id').value = contactId;
+        document.getElementById('new-deal-title').value = `${contactName} - Blog & CRM Setup`;
+    }
+    document.getElementById('modal-add-deal').classList.remove('hidden');
+}
+function closeAddDealModal() {
+    document.getElementById('modal-add-deal').classList.add('hidden');
+}
+async function submitAddDeal(e) {
+    e.preventDefault();
+    const title = document.getElementById('new-deal-title').value;
+    const value = parseFloat(document.getElementById('new-deal-value').value) || 0;
+    const stage = document.getElementById('new-deal-stage').value;
+    const contact_id = document.getElementById('new-deal-contact-id').value || null;
+    const expected_close = document.getElementById('new-deal-close').value;
+    const notes = document.getElementById('new-deal-notes').value;
+    
+    const res = await apiPost('/api/whatsapp/deals', { title, value, stage, contact_id, expected_close, notes });
+    if (res && res.success) {
+        showToast(`Deal "${title}" added to pipeline!`, 'success');
+        closeAddDealModal();
+        loadWhatsAppDeals();
+        loadStatus();
+    } else {
+        showToast(res ? res.error : 'Failed to create deal', 'error');
+    }
+}
+
+function openAddBroadcastModal() {
+    document.getElementById('modal-add-broadcast').classList.remove('hidden');
+}
+function closeAddBroadcastModal() {
+    document.getElementById('modal-add-broadcast').classList.add('hidden');
+}
+async function submitAddBroadcast(e) {
+    e.preventDefault();
+    const name = document.getElementById('new-broadcast-name').value;
+    const target_tag = document.getElementById('new-broadcast-tag').value;
+    const template_body = document.getElementById('new-broadcast-template').value;
+    const auto_send = document.getElementById('new-broadcast-send-now').checked;
+    
+    const res = await apiPost('/api/whatsapp/broadcasts', { name, target_tag, template_body, auto_send });
+    if (res && res.success) {
+        showToast(`Broadcast "${name}" created${auto_send ? ' & sent!' : '.'}`, 'success');
+        closeAddBroadcastModal();
+        loadWhatsAppBroadcasts();
+        loadStatus();
+    } else {
+        showToast(res ? res.error : 'Failed to create broadcast', 'error');
+    }
+}
+
+function openAddAutomationModal() {
+    document.getElementById('modal-add-automation').classList.remove('hidden');
+}
+function closeAddAutomationModal() {
+    document.getElementById('modal-add-automation').classList.add('hidden');
+}
+async function submitAddAutomation(e) {
+    e.preventDefault();
+    const name = document.getElementById('new-auto-name').value;
+    const trigger_type = document.getElementById('new-auto-trigger').value;
+    const trigger_keyword = document.getElementById('new-auto-keyword').value;
+    const message_template = document.getElementById('new-auto-template').value;
+    
+    const res = await apiPost('/api/whatsapp/automations', { name, trigger_type, trigger_keyword, message_template });
+    if (res && res.success) {
+        showToast(`Automation rule "${name}" created!`, 'success');
+        closeAddAutomationModal();
+        loadWhatsAppAutomations();
+        loadStatus();
+    } else {
+        showToast(res ? res.error : 'Failed to create automation', 'error');
+    }
+}
+

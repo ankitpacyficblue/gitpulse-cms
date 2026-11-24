@@ -609,3 +609,304 @@ code, pre {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
+
+/* ====================================================================
+   Sidebar Navigation & Layout Architecture
+   ==================================================================== */
+
+.app-layout {
+    display: flex;
+    min-height: 100vh;
+}
+
+.sidebar {
+    width: 270px;
+    background-color: #0f172a;
+    border-right: 1px solid #1e293b;
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    z-index: 30;
+    flex-shrink: 0;
+    overflow-y: auto;
+}
+
+.sidebar-content {
+    flex: 1;
+    padding: 1rem 0.75rem;
+    overflow-y: auto;
+}
+
+.sidebar-section {
+    margin-bottom: 1.5rem;
+}
+
+.sidebar-section-title {
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #94a3b8;
+    padding: 0.35rem 0.75rem;
+    margin-bottom: 0.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.sidebar-nav-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.55rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: #cbd5e1;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.15s ease;
+    margin-bottom: 0.2rem;
+}
+
+.sidebar-nav-item:hover {
+    background-color: #1e293b;
+    color: #ffffff;
+}
+
+.sidebar-nav-item.active {
+    background-color: #4f46e5;
+    color: #ffffff;
+    font-weight: 600;
+    box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+}
+
+.sidebar-badge {
+    font-size: 0.625rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 9999px;
+    font-weight: 700;
+}
+
+.sidebar-footer {
+    padding: 0.875rem 1rem;
+    border-top: 1px solid #1e293b;
+    background-color: #020617;
+}
+
+.main-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    background-color: #020617;
+}
+
+.top-bar {
+    height: 4rem;
+    border-bottom: 1px solid #1e293b;
+    background-color: rgba(15, 23, 42, 0.8);
+    backdrop-filter: blur(8px);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 0 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+/* ====================================================================
+   WhatsApp Automation & CRM Components (ArnasDon/wacrm Architecture)
+   ==================================================================== */
+
+/* Live Shared Team Inbox */
+.chat-container {
+    display: flex;
+    height: 640px;
+    border-radius: 0.75rem;
+    border: 1px solid #1e293b;
+    background-color: #0f172a;
+    overflow: hidden;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+}
+
+.chat-sidebar {
+    width: 310px;
+    border-right: 1px solid #1e293b;
+    background-color: rgba(2, 6, 23, 0.4);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.chat-thread-list {
+    flex: 1;
+    overflow-y: auto;
+}
+
+.chat-thread-item {
+    padding: 0.875rem 1rem;
+    border-bottom: 1px solid rgba(30, 41, 59, 0.6);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+}
+
+.chat-thread-item:hover {
+    background-color: rgba(30, 41, 59, 0.5);
+}
+
+.chat-thread-item.active {
+    background-color: rgba(30, 27, 75, 0.4);
+    border-left: 3px solid #6366f1;
+}
+
+.chat-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background-color: #0f172a;
+}
+
+.chat-messages-scroll {
+    flex: 1;
+    padding: 1.25rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+    background: radial-gradient(circle at center, #0f172a 0%, #020617 100%);
+}
+
+.chat-bubble-inbound {
+    max-width: 72%;
+    background-color: #1e293b;
+    color: #f1f5f9;
+    padding: 0.75rem 1rem;
+    border-radius: 1rem;
+    border-top-left-radius: 0.25rem;
+    font-size: 0.8125rem;
+    align-self: flex-start;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(51, 65, 85, 0.4);
+}
+
+.chat-bubble-outbound {
+    max-width: 72%;
+    background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+    color: #ffffff;
+    padding: 0.75rem 1rem;
+    border-radius: 1rem;
+    border-top-right-radius: 0.25rem;
+    font-size: 0.8125rem;
+    align-self: flex-end;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+}
+
+.chat-status-tick {
+    font-size: 0.7rem;
+    opacity: 0.8;
+    margin-left: 0.35rem;
+}
+
+/* Sales Pipeline Kanban Board */
+.kanban-board {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(240px, 1fr));
+    gap: 0.875rem;
+    overflow-x: auto;
+    padding-bottom: 1rem;
+}
+
+.kanban-col {
+    background-color: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 0.75rem;
+    padding: 0.875rem;
+    display: flex;
+    flex-direction: column;
+    min-height: 480px;
+}
+
+.kanban-card {
+    background-color: #020617;
+    border: 1px solid #1e293b;
+    border-radius: 0.5rem;
+    padding: 0.875rem;
+    margin-bottom: 0.625rem;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.kanban-card:hover {
+    border-color: #6366f1;
+    transform: translateY(-1px);
+}
+
+/* Quick Canned Reply Chips */
+.quick-chip {
+    font-size: 0.6875rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 9999px;
+    background-color: #1e293b;
+    color: #cbd5e1;
+    border: 1px solid #334155;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.quick-chip:hover {
+    background-color: #334155;
+    color: white;
+    border-color: #6366f1;
+}
+
+/* Custom Toggle Switch */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: #334155;
+    transition: .3s;
+    border-radius: 20px;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 14px;
+    width: 14px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .3s;
+    border-radius: 50%;
+}
+
+input:checked + .slider {
+    background-color: #10b981;
+}
+
+input:checked + .slider:before {
+    transform: translateX(16px);
+}
+

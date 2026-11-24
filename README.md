@@ -134,7 +134,32 @@ python3 cli.py reset-password --username admin --password "StrongNewPassword!"
 
 ---
 
-## 📡 Headless Public API Endpoints
+## 💬 WhatsApp Automation & CRM Architecture (Powered by ArnasDon/wacrm)
+
+GitPulse CMS now features full native integration with **WACRM** (open-source Meta WhatsApp Cloud API-based CRM and automations architecture):
+
+### 1. Clear Categorized Sidebar Navigation Menu
+The dashboard navigation is organized into clean, dedicated sections:
+- **📰 Blog & Content Engine**:
+  - `Connected Repos`: Multi-framework publishing targets with 3-step guided website connector.
+  - `Editorial Staging`: Draft queue with live SEO pre-flight scoring and split-screen Markdown editor.
+  - `Articles Feed`: Published posts feed with live GitHub commits, PR tracking, and markdown viewer.
+  - `1-Click Blog Embed`: Zero-redeploy standalone blog page installer & public headless JSON APIs.
+- **💬 WhatsApp Automation & CRM**:
+  - `Shared Team Inbox`: Two-way threaded chat window with real-time delivery ticks (✓ sent, ✓✓ delivered, blue ✓✓ read), canned response chips, and message composer.
+  - `Contacts & Audience (CDP)`: Contact directory with WhatsApp phone links, audience tags (`VIP`, `Customer`, `Lead`), notes, and search.
+  - `Sales Pipeline (Kanban)`: 5-stage drag-and-drop/1-click Kanban pipeline (`Lead` -> `Qualified` -> `Proposal` -> `Negotiation` -> `Won`) with deal values and expected close dates.
+  - `Broadcast Campaigns`: Mass WhatsApp campaigns targeted by audience tags with delivery analytics (sent, delivered, read).
+  - `No-Code Automations`: Visual event triggers for welcome greetings, keyword auto-replies, and **Blog-to-WhatsApp publication alerts**.
+- **⚙️ Platform & Settings**:
+  - `WhatsApp API Setup`: Meta Cloud API v21.0 credentials, copyable Webhook Callback URL, verify token, and live testing simulator.
+  - `Supabase Cloud DB`: PostgreSQL schema status, health check, and 1-click cloud sync.
+  - `Activity & Webhook Logs`: Real-time audit trail of blog generation, GitHub commits, and Meta webhooks.
+  - `Security & 2FA`: TOTP 2FA authenticator, malicious login lockout, and password management.
+
+---
+
+## 📡 Headless Public & Webhook API Endpoints
 
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
@@ -143,46 +168,15 @@ python3 cli.py reset-password --username admin --password "StrongNewPassword!"
 | `/api/public/projects/{id}/posts/{slug}/og-image.svg` | `GET` | Dynamic 1200x630 OpenGraph hero banner |
 | `/api/public/projects/{id}/rss.xml` | `GET` | Auto-generated RSS 2.0 XML feed |
 | `/api/webhook/github` | `POST` | Bi-directional GitHub Webhook receiver (HMAC-SHA256 verified) |
-
----
-
-## 🚀 Vercel Serverless Deployment Guide
-
-GitPulse CMS is optimized for **Vercel Serverless Functions** (`@vercel/python`):
-
-1. **Push to GitHub**: Connect your repository to Vercel.
-2. **Serverless Entrypoint**: Vercel automatically detects `vercel.json` and routes all traffic to `api/index.py` (WSGI + HTTP handler).
-3. **Configure Environment Variables** in the Vercel Project Dashboard:
-   - `SUPABASE_URL`: `https://suvmyyonlqyipzgnmony.supabase.co`
-   - `SUPABASE_SERVICE_ROLE_KEY`: `eyJhbGciOi...` (Your Supabase Service Role Key)
-   - `GITHUB_TOKEN`: `ghp_...` (Your default GitHub Personal Access Token)
-   - `GEMINI_API_KEY`: `AIzaSy...` (Optional, for Gemini AI generation)
-
----
-
-## ☁️ Supabase Multi-Tenant Schema Architecture
-
-For persistent storage across Vercel serverless runs and multi-client blog isolation, GitPulse connects directly to **Supabase PostgreSQL**:
-
-- **Schema Architecture (`supabase_schema.sql`)**:
-  - `clients`: Multi-tenant organization grouping for client businesses.
-  - `projects`: Repositories connected to GitPulse with branch, framework presets, tone, and zero-redeploy configuration.
-  - `posts`: Full markdown articles, hero SVG images, SEO scores, view counts, and GitHub commit/PR references.
-  - `system_logs`, `settings`, `users`, `sessions`, `login_attempts`: Complete security and audit trail.
-- **Applying Schema in Supabase**:
-  Run `supabase_schema.sql` in the Supabase SQL Editor (`https://supabase.com/dashboard/project/suvmyyonlqyipzgnmony/sql`).
-- **Cloud Sync**:
-  Use the **"Sync All to Cloud"** button in Settings or `POST /api/supabase/sync` to replicate local projects and posts to Supabase.
-
----
-
-## 🧙‍♂️ Non-Technical Guided UX: Connect Website in 60s
-
-The post-login dashboard is designed specifically for non-technical team members:
-
-1. **Step 1: Visual Website Picker**: Click Next.js, Astro, Simple HTML, or Hugo. All technical directories, file formats, and frontmatter templates are configured automatically.
-2. **Step 2: 1-Click GitHub Linker**: Select the client business, type `owner/repo`, click the 1-click token generator shortcut, and click **"Test Repository Connection ⚡"** for instant live feedback.
-3. **Step 3: Topics & Tone**: Select ready-made topic inspiration chips (AI, SaaS, Health, Fintech), click an emoji tone pill (👔 Professional, 🚀 Startup Casual, 🎓 Educational), choose Review Mode or Autopilot, and click **Connect Website & Start Publishing**!
+| `/api/webhook/whatsapp` | `GET` | Meta WhatsApp Cloud API Webhook verification handshake (`hub.challenge`) |
+| `/api/webhook/whatsapp` | `POST` | Inbound WhatsApp messages, status ticks (`delivered`, `read`), and auto-responders |
+| `/api/whatsapp/conversations` | `GET` | Threaded conversations list with unread counters |
+| `/api/whatsapp/conversations/{id}/messages` | `GET / POST` | Conversation message history & outbound WhatsApp dispatch |
+| `/api/whatsapp/contacts` | `GET / POST` | Customer audience directory & CDP tag filtering |
+| `/api/whatsapp/deals` | `GET / POST / PUT` | Sales Pipeline Kanban deals & stage advancement |
+| `/api/whatsapp/broadcasts` | `GET / POST` | Mass WhatsApp broadcast campaign runner |
+| `/api/whatsapp/automations` | `GET / POST / PUT` | No-code event rules & active/paused toggles |
+| `/api/whatsapp/simulate-incoming` | `POST` | Inbound WhatsApp simulator for instant testing |
 
 ---
 
@@ -191,10 +185,10 @@ The post-login dashboard is designed specifically for non-technical team members
 Run the comprehensive unit and integration test suite:
 
 ```bash
-python3 tests/test_engine.py
+python3 -m unittest discover tests
 ```
 
-All 20 tests pass in under 0.6 seconds with zero external dependencies.
+All **29 tests** pass in under 0.7 seconds with zero external pip dependencies.
 
 ---
 

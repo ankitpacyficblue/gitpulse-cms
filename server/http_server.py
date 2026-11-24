@@ -18,6 +18,7 @@ from server.routes_api import handle_api_request
 from server.routes_web import render_dashboard_html, render_login_html
 from server.routes_public import handle_public_request
 from server.routes_webhook import handle_github_webhook
+from server.routes_whatsapp import handle_whatsapp_webhook_get, handle_whatsapp_webhook_post
 from engine.auth import validate_session
 
 STATIC_DIR = BASE_DIR / "static"
@@ -127,6 +128,13 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b"404 Not Found")
                 return
 
+        # WhatsApp Meta Webhook Handshake (GET)
+        if path == "/api/webhook/whatsapp":
+            code, ctype, resp_body = handle_whatsapp_webhook_get(query)
+            self._set_headers(code, ctype)
+            self.wfile.write(resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body)
+            return
+
         # 4. Public Headless Content API (CORS enabled, no auth required)
         if path.startswith("/api/public/"):
             client_ip = self._get_client_ip()
@@ -175,6 +183,13 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
                 body_data = json.loads(raw_body) if raw_body else {}
             except Exception:
                 body_data = {}
+
+        # WhatsApp Webhook Receiver (POST)
+        if path == "/api/webhook/whatsapp" and method == "POST":
+            code, resp = handle_whatsapp_webhook_post(body_data or {})
+            self._set_headers(code, "application/json")
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
 
         # GitHub Bi-Directional Webhook Receiver
         if path == "/api/webhook/github" and method == "POST":

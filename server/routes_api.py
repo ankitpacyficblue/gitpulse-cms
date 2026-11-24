@@ -25,8 +25,33 @@ from database import (
     get_client,
     delete_client,
     test_supabase_connection,
-    sync_all_to_supabase
+    sync_all_to_supabase,
+    get_whatsapp_config,
+    save_whatsapp_config,
+    list_contacts,
+    get_contact,
+    create_contact,
+    update_contact,
+    delete_contact,
+    list_conversations,
+    get_conversation,
+    get_or_create_conversation,
+    mark_conversation_read,
+    list_messages,
+    create_message,
+    list_deals,
+    create_deal,
+    update_deal_stage,
+    delete_deal,
+    list_broadcasts,
+    create_broadcast,
+    get_broadcast,
+    list_automations,
+    create_automation,
+    toggle_automation,
+    delete_automation
 )
+from engine.whatsapp_client import WhatsAppClient
 from config import FRAMEWORK_PRESETS, DEFAULT_AI_PROVIDER
 from engine.pipeline import run_publication_pipeline
 from engine.github_client import GitHubClient
@@ -452,5 +477,252 @@ def handle_api_request(
         for k, v in body.items():
             set_setting(k, str(v))
         return 200, {"message": "Settings updated successfully."}
+
+    # ====================================================================
+    # WhatsApp Automation & CRM Endpoints (ArnasDon/wacrm)
+    # ====================================================================
+
+    # WhatsApp API Config
+    if path == "/api/whatsapp/config" and method == "GET":
+        client_id = query_params.get("client_id")
+        cid = int(client_id) if client_id and client_id.isdigit() else None
+        cfg = get_whatsapp_config(cid)
+        return 200, cfg
+
+    if path == "/api/whatsapp/config" and method == "POST":
+        client_id = body.get("client_id")
+        cid = int(client_id) if client_id and str(client_id).isdigit() else None
+        cfg_id = save_whatsapp_config(
+            phone_number_id=body.get("phone_number_id", ""),
+            access_token=body.get("access_token", ""),
+            waba_id=body.get("waba_id", ""),
+            verify_token=body.get("verify_token", "gitpulse_webhook_verify"),
+            business_name=body.get("business_name", "GitPulse WhatsApp"),
+            phone_number=body.get("phone_number", ""),
+            client_id=cid
+        )
+        return 200, {"success": True, "id": cfg_id, "message": "WhatsApp configuration saved successfully."}
+
+    # Contacts CRM
+    if path == "/api/whatsapp/contacts" and method == "GET":
+        client_id = query_params.get("client_id")
+        cid = int(client_id) if client_id and client_id.isdigit() else None
+        search = query_params.get("search", "")
+        tag = query_params.get("tag", "")
+        return 200, {"contacts": list_contacts(client_id=cid, search=search, tag=tag)}
+
+    if path == "/api/whatsapp/contacts" and method == "POST":
+        name = body.get("name", "").strip()
+        phone = body.get("phone", "").strip()
+        if not name or not phone:
+            return 400, {"error": "Name and phone number are required."}
+        client_id = body.get("client_id")
+        cid = int(client_id) if client_id and str(client_id).isdigit() else None
+        c_id = create_contact(
+            name=name,
+            phone=phone,
+            email=body.get("email", ""),
+            tags=body.get("tags") or ["Lead"],
+            notes=body.get("notes", ""),
+            client_id=cid
+        )
+        get_or_create_conversation(c_id, client_id=cid)
+        return 201, {"success": True, "id": c_id, "message": "Contact created successfully."}
+
+    if path.startswith("/api/whatsapp/contacts/") and method == "DELETE":
+        c_id = int(path.split("/")[-1])
+        ok = delete_contact(c_id)
+        return 200, {"success": ok}
+
+    # Conversations & Shared Team Inbox
+    if path == "/api/whatsapp/conversations" and method == "GET":
+        client_id = query_params.get("client_id")
+        cid = int(client_id) if client_id and client_id.isdigit() else None
+        status = query_params.get("status", "")
+        return 200, {"conversations": list_conversations(client_id=cid, status=status)}
+
+    if path.startswith("/api/whatsapp/conversations/"):
+        parts = path.split("/")
+        if len(parts) == 6 and parts[5] == "messages":
+            conv_id = int(parts[4])
+            if method == "GET":
+                limit = int(query_params.get("limit", 100))
+                return 200, {"messages": list_messages(conv_id, limit=limit)}
+            elif method == "POST":
+                body_text = body.get("body", "").strip()
+                if not body_text:
+                    return 400, {"error": "Message body is required."}
+                conv = get_conversation(conv_id)
+                if not conv:
+                    return 404, {"error": "Conversation not found."}
+                
+                wa_client = WhatsAppClient()
+                res = wa_client.send_text_message(conv["contact_phone"], body_text)
+                msg_id = create_message(
+                    conversation_id=conv_id,
+                    contact_id=conv["contact_id"],
+                    direction="outbound",
+                    body=body_text,
+                    wa_message_id=res.get("message_id", ""),
+                    status="read" if res.get("mock") else "sent",
+                    client_id=conv.get("client_id")
+                )
+                return 200, {"success": True, "message_id": msg_id, "result": res}
+
+        if len(parts) == 6 and parts[5] == "read" and method == "POST":
+            conv_id = int(parts[4])
+            ok = mark_conversation_read(conv_id)
+            return 200, {"success": ok}
+
+        if len(parts) == 5 and method == "GET":
+            conv_id = int(parts[4])
+            conv = get_conversation(conv_id)
+            if not conv:
+                return 404, {"error": "Conversation not found."}
+            return 200, conv
+
+    # Deals Kanban
+    if path == "/api/whatsapp/deals" and method == "GET":
+        client_id = query_params.get("client_id")
+        cid = int(client_id) if client_id and client_id.isdigit() else None
+        return 200, {"deals": list_deals(client_id=cid)}
+
+    if path == "/api/whatsapp/deals" and method == "POST":
+        title = body.get("title", "").strip()
+        if not title:
+            return 400, {"error": "Deal title is required."}
+        client_id = body.get("client_id")
+        cid = int(client_id) if client_id and str(client_id).isdigit() else None
+        contact_id = body.get("contact_id")
+        cnt_id = int(contact_id) if contact_id and str(contact_id).isdigit() else None
+        deal_id = create_deal(
+            title=title,
+            value=float(body.get("value", 0.0)),
+            stage=body.get("stage", "lead"),
+            contact_id=cnt_id,
+            currency=body.get("currency", "USD"),
+            expected_close=body.get("expected_close", ""),
+            notes=body.get("notes", ""),
+            client_id=cid
+        )
+        return 201, {"success": True, "id": deal_id, "message": "Deal created successfully."}
+
+    if path.startswith("/api/whatsapp/deals/"):
+        parts = path.split("/")
+        deal_id = int(parts[4])
+        if len(parts) == 6 and parts[5] == "stage" and method == "PUT":
+            new_stage = body.get("stage", "").strip()
+            if not new_stage:
+                return 400, {"error": "Stage is required."}
+            ok = update_deal_stage(deal_id, new_stage)
+            return 200, {"success": ok}
+        if len(parts) == 5 and method == "DELETE":
+            ok = delete_deal(deal_id)
+            return 200, {"success": ok}
+
+    # Broadcast Campaigns
+    if path == "/api/whatsapp/broadcasts" and method == "GET":
+        client_id = query_params.get("client_id")
+        cid = int(client_id) if client_id and client_id.isdigit() else None
+        return 200, {"broadcasts": list_broadcasts(client_id=cid)}
+
+    if path == "/api/whatsapp/broadcasts" and method == "POST":
+        name = body.get("name", "").strip()
+        template_body = body.get("template_body", "").strip()
+        if not name or not template_body:
+            return 400, {"error": "Campaign name and message template are required."}
+        client_id = body.get("client_id")
+        cid = int(client_id) if client_id and str(client_id).isdigit() else None
+        target_tag = body.get("target_tag", "all")
+        b_id = create_broadcast(name=name, template_body=template_body, target_tag=target_tag, client_id=cid)
+        if body.get("auto_send"):
+            wa_client = WhatsAppClient()
+            exec_res = wa_client.execute_broadcast(b_id, client_id=cid)
+            return 201, {"success": True, "id": b_id, "executed": True, "stats": exec_res}
+        return 201, {"success": True, "id": b_id, "message": "Broadcast created."}
+
+    if path.startswith("/api/whatsapp/broadcasts/") and path.endswith("/run") and method == "POST":
+        b_id = int(path.split("/")[4])
+        client_id = body.get("client_id")
+        cid = int(client_id) if client_id and str(client_id).isdigit() else None
+        wa_client = WhatsAppClient()
+        exec_res = wa_client.execute_broadcast(b_id, client_id=cid)
+        return 200, {"success": True, "stats": exec_res}
+
+    # Automations
+    if path == "/api/whatsapp/automations" and method == "GET":
+        client_id = query_params.get("client_id")
+        cid = int(client_id) if client_id and client_id.isdigit() else None
+        return 200, {"automations": list_automations(client_id=cid)}
+
+    if path == "/api/whatsapp/automations" and method == "POST":
+        name = body.get("name", "").strip()
+        trigger_type = body.get("trigger_type", "").strip()
+        template = body.get("message_template", "").strip()
+        if not name or not trigger_type or not template:
+            return 400, {"error": "Name, trigger type, and message template are required."}
+        client_id = body.get("client_id")
+        cid = int(client_id) if client_id and str(client_id).isdigit() else None
+        auto_id = create_automation(
+            name=name,
+            trigger_type=trigger_type,
+            message_template=template,
+            trigger_keyword=body.get("trigger_keyword", ""),
+            action_type=body.get("action_type", "send_message"),
+            is_active=bool(body.get("is_active", True)),
+            client_id=cid
+        )
+        return 201, {"success": True, "id": auto_id, "message": "Automation rule created."}
+
+    if path.startswith("/api/whatsapp/automations/"):
+        parts = path.split("/")
+        auto_id = int(parts[4])
+        if len(parts) == 6 and parts[5] == "toggle" and method == "PUT":
+            is_active = bool(body.get("is_active", True))
+            ok = toggle_automation(auto_id, is_active)
+            return 200, {"success": ok}
+        if len(parts) == 5 and method == "DELETE":
+            ok = delete_automation(auto_id)
+            return 200, {"success": ok}
+
+    # Simulation / UI Test Incoming Message
+    if path == "/api/whatsapp/simulate-incoming" and method == "POST":
+        import time
+        sender_phone = body.get("phone", "+14155552671")
+        sender_name = body.get("name", "Test Lead")
+        message_text = body.get("message", "Hello GitPulse! I want pricing details.")
+        client_id = body.get("client_id")
+        cid = int(client_id) if client_id and str(client_id).isdigit() else None
+
+        mock_payload = {
+            "object": "whatsapp_business_account",
+            "entry": [{
+                "id": "simulated_waba",
+                "changes": [{
+                    "value": {
+                        "messaging_product": "whatsapp",
+                        "metadata": {
+                            "display_phone_number": "15550192834",
+                            "phone_number_id": "109876543210123"
+                        },
+                        "contacts": [{
+                            "profile": {"name": sender_name},
+                            "wa_id": sender_phone.replace("+", "")
+                        }],
+                        "messages": [{
+                            "from": sender_phone.replace("+", ""),
+                            "id": f"wamid.sim_{int(time.time())}",
+                            "timestamp": str(int(time.time())),
+                            "text": {"body": message_text},
+                            "type": "text"
+                        }]
+                    },
+                    "field": "messages"
+                }]
+            }]
+        }
+        wa_client = WhatsAppClient()
+        res = wa_client.process_incoming_webhook(mock_payload, client_id=cid)
+        return 200, {"success": True, "simulated": True, "result": res}
 
     return 404, {"error": f"API endpoint {method} {path} not found."}

@@ -168,6 +168,15 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
         update_project_last_run(project_id)
         log_msg = f"Published post #{post_id} to {project['github_repo']}. {pub_result.get('message')}"
         log_event(log_msg, "INFO", project_id=project_id, post_id=post_id, metadata=pub_result)
+
+        # Cross-Engine WhatsApp Automation: Notify subscribers & VIPs
+        try:
+            from engine.whatsapp_client import WhatsAppClient
+            wa = WhatsAppClient()
+            post_url = pub_result.get("pr_url") or f"https://github.com/{project['github_repo']}/blob/{project['github_branch']}/{target_path}"
+            wa.trigger_blog_publish_alert(article["title"], post_url, client_id=project.get("client_id"))
+        except Exception:
+            pass
         return {
             "success": True,
             "post_id": post_id,

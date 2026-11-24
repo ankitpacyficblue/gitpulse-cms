@@ -269,99 +269,229 @@ def render_dashboard_html() -> str:
     </style>
 </head>
 <body class="bg-slate-950 text-slate-100">
-    <!-- Top Navigation Bar -->
-    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40">
-        <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-            <div class="flex items-center space-x-3">
-                <div class="w-9 h-9 rounded-lg bg-gradient-to-tr from-indigo-500 to-cyan-400 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/20">
-                    GP
-                </div>
-                <div>
-                    <div class="flex items-center space-x-2">
-                        <span class="font-bold text-lg tracking-tight">GitPulse CMS</span>
-                        <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Daemon Active
-                        </span>
+    <div class="app-layout">
+        <!-- Persistent Left Sidebar Navigation with Clear Sections -->
+        <aside class="sidebar">
+            <!-- Sidebar Header & Brand -->
+            <div class="p-4 border-b border-slate-800/80">
+                <div class="flex items-center space-x-3 mb-3">
+                    <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-cyan-400 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/25 flex-shrink-0">
+                        GP
                     </div>
-                    <p class="text-xs text-slate-400">Autonomous Multi-Repo Daily Blog Publisher</p>
+                    <div class="min-w-0">
+                        <div class="flex items-center space-x-1.5">
+                            <span class="font-bold text-base tracking-tight text-white">GitPulse</span>
+                            <span class="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">CMS+CRM</span>
+                        </div>
+                        <div class="flex items-center gap-1.5 text-[11px] text-emerald-400 mt-0.5">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                            <span>Engine Online</span>
+                        </div>
+                    </div>
                 </div>
-            </div>
 
-            <!-- Header Actions & User Session -->
-            <div class="flex items-center space-x-3">
-                <!-- Multi-Tenant Client Filter -->
-                <div class="flex items-center space-x-1.5 bg-slate-900 border border-slate-800 rounded-lg p-1 text-xs">
-                    <span class="text-slate-400 pl-1.5 font-medium">Client:</span>
-                    <select id="client-select-filter" onchange="onClientFilterChange()" class="bg-transparent text-slate-200 text-xs py-0.5 px-1 outline-none border-none cursor-pointer">
-                        <option value="">All Clients</option>
+                <!-- Multi-Tenant Client Selector -->
+                <div class="bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Business / Client</span>
+                        <button onclick="openAddClientModal()" class="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold">+ Add</button>
+                    </div>
+                    <select id="client-select-filter" onchange="onClientFilterChange()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-slate-200 outline-none">
+                        <option value="">All Clients & Orgs</option>
                     </select>
-                    <button onclick="openAddClientModal()" class="text-indigo-400 hover:text-indigo-300 font-semibold px-1.5 py-0.5 rounded hover:bg-slate-800" title="Add New Business / Client">+ Add</button>
+                </div>
+            </div>
+
+            <!-- Sidebar Navigation Links grouped by clear sections -->
+            <div class="sidebar-content">
+                <!-- SECTION 1: BLOG & CONTENT ENGINE -->
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">
+                        <span>📰</span>
+                        <span>Blog & Content Engine</span>
+                    </div>
+                    <a class="sidebar-nav-item active" onclick="switchTab('repos')">
+                        <span class="flex items-center gap-2">
+                            <span>📦</span>
+                            <span>Connected Repos</span>
+                        </span>
+                        <span id="sidebar-badge-repos" class="sidebar-badge bg-slate-800 text-slate-300">-</span>
+                    </a>
+                    <a class="sidebar-nav-item" onclick="switchTab('staging')">
+                        <span class="flex items-center gap-2">
+                            <span>✍️</span>
+                            <span>Editorial Staging</span>
+                        </span>
+                        <span id="badge-staging-count" class="sidebar-badge bg-amber-500/20 text-amber-300 border border-amber-500/30">0</span>
+                    </a>
+                    <a class="sidebar-nav-item" onclick="switchTab('posts')">
+                        <span class="flex items-center gap-2">
+                            <span>📑</span>
+                            <span>Articles Feed</span>
+                        </span>
+                    </a>
+                    <a class="sidebar-nav-item" onclick="switchTab('zeroredeploy')">
+                        <span class="flex items-center gap-2">
+                            <span>⚡</span>
+                            <span>1-Click Blog Embed</span>
+                        </span>
+                        <span class="sidebar-badge bg-indigo-500/20 text-indigo-300">1-Time</span>
+                    </a>
                 </div>
 
-                <button onclick="openAddProjectModal()" class="btn-primary flex items-center space-x-1.5 text-sm shadow-indigo-500/25">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                    <span>Connect Website in 60s</span>
-                </button>
-
-                <div class="h-6 w-px bg-slate-800 mx-1"></div>
-
-                <div class="flex items-center space-x-2 bg-slate-950/60 px-2.5 py-1.5 rounded-lg border border-slate-800 text-xs">
-                    <span class="w-2 h-2 rounded-full bg-indigo-400"></span>
-                    <span id="header-username" class="font-medium text-slate-200">admin</span>
-                    <span class="text-slate-500">(Admin)</span>
+                <!-- SECTION 2: WHATSAPP AUTOMATION & CRM (WACRM) -->
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">
+                        <span>💬</span>
+                        <span>WhatsApp CRM & Automation</span>
+                    </div>
+                    <a class="sidebar-nav-item" onclick="switchTab('wa-inbox')">
+                        <span class="flex items-center gap-2">
+                            <span>📥</span>
+                            <span>Shared Team Inbox</span>
+                        </span>
+                        <span id="sidebar-badge-inbox" class="sidebar-badge bg-slate-800 text-slate-400">0</span>
+                    </a>
+                    <a class="sidebar-nav-item" onclick="switchTab('wa-contacts')">
+                        <span class="flex items-center gap-2">
+                            <span>👥</span>
+                            <span>Contacts & Audience</span>
+                        </span>
+                        <span id="sidebar-badge-contacts" class="sidebar-badge bg-slate-800 text-slate-400">0</span>
+                    </a>
+                    <a class="sidebar-nav-item" onclick="switchTab('wa-deals')">
+                        <span class="flex items-center gap-2">
+                            <span>🎯</span>
+                            <span>Sales Pipeline (Kanban)</span>
+                        </span>
+                        <span id="sidebar-badge-deals" class="sidebar-badge bg-emerald-500/10 text-emerald-400 font-mono">$0</span>
+                    </a>
+                    <a class="sidebar-nav-item" onclick="switchTab('wa-broadcasts')">
+                        <span class="flex items-center gap-2">
+                            <span>📢</span>
+                            <span>Broadcast Campaigns</span>
+                        </span>
+                    </a>
+                    <a class="sidebar-nav-item" onclick="switchTab('wa-automations')">
+                        <span class="flex items-center gap-2">
+                            <span>🤖</span>
+                            <span>No-Code Automations</span>
+                        </span>
+                        <span id="sidebar-badge-automations" class="sidebar-badge bg-indigo-500/20 text-indigo-300">3 live</span>
+                    </a>
                 </div>
 
-                <button onclick="handleLogout()" class="btn-secondary text-xs py-1.5 px-3 text-red-400 hover:text-red-300 hover:bg-red-500/10 border-red-500/20">
-                    Sign Out
-                </button>
+                <!-- SECTION 3: PLATFORM & CLOUD -->
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">
+                        <span>⚙️</span>
+                        <span>Platform & Settings</span>
+                    </div>
+                    <a class="sidebar-nav-item" onclick="switchTab('wa-config')">
+                        <span class="flex items-center gap-2">
+                            <span>📱</span>
+                            <span>WhatsApp API Setup</span>
+                        </span>
+                    </a>
+                    <a class="sidebar-nav-item" onclick="switchTab('supabase')">
+                        <span class="flex items-center gap-2">
+                            <span>☁️</span>
+                            <span>Supabase Cloud DB</span>
+                        </span>
+                    </a>
+                    <a class="sidebar-nav-item" onclick="switchTab('logs')">
+                        <span class="flex items-center gap-2">
+                            <span>📋</span>
+                            <span>Activity & Webhook Logs</span>
+                        </span>
+                    </a>
+                    <a class="sidebar-nav-item" onclick="switchTab('settings')">
+                        <span class="flex items-center gap-2">
+                            <span>🛡️</span>
+                            <span>Security & 2FA</span>
+                        </span>
+                    </a>
+                </div>
             </div>
-        </div>
-    </header>
 
-    <!-- Main Container -->
-    <main class="max-w-7xl mx-auto px-4 py-8">
-        <!-- Metric Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-            <div class="metric-card">
-                <div class="text-slate-400 text-xs font-medium uppercase tracking-wider">Connected Repos</div>
-                <div class="text-2xl font-bold mt-1 text-white" id="stat-repos-count">-</div>
-                <div class="text-xs text-indigo-400 mt-1">Multi-framework targets</div>
+            <!-- Sidebar User Profile Footer -->
+            <div class="sidebar-footer">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-2 min-w-0">
+                        <div class="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-xs text-white">
+                            A
+                        </div>
+                        <div class="min-w-0">
+                            <div id="header-username" class="text-xs font-semibold text-white truncate">admin</div>
+                            <div class="text-[10px] text-slate-400">Super Administrator</div>
+                        </div>
+                    </div>
+                    <button onclick="handleLogout()" class="text-slate-400 hover:text-red-400 text-xs p-1" title="Sign Out">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+                    </button>
+                </div>
             </div>
-            <div class="metric-card">
-                <div class="text-slate-400 text-xs font-medium uppercase tracking-wider">Total Articles</div>
-                <div class="text-2xl font-bold mt-1 text-white" id="stat-posts-count">-</div>
-                <div class="text-xs text-slate-400 mt-1">Generated & archived</div>
-            </div>
-            <div class="metric-card">
-                <div class="text-slate-400 text-xs font-medium uppercase tracking-wider">Published to GitHub</div>
-                <div class="text-2xl font-bold mt-1 text-emerald-400" id="stat-published-count">-</div>
-                <div class="text-xs text-emerald-400/80 mt-1">PRs & direct commits</div>
-            </div>
-            <div class="metric-card">
-                <div class="text-slate-400 text-xs font-medium uppercase tracking-wider">Schedule Engine</div>
-                <div class="text-2xl font-bold mt-1 text-cyan-400" id="stat-scheduler-status">Active</div>
-                <div class="text-xs text-slate-400 mt-1">UTC daily cron interval</div>
-            </div>
-        </div>
+        </aside>
 
-        <!-- Tab Navigation -->
-        <div class="flex border-b border-slate-800 space-x-6 mb-6 overflow-x-auto pb-1">
-            <button class="nav-tab active" onclick="switchTab('repos')">Connected Projects</button>
-            <button class="nav-tab flex items-center gap-1.5" onclick="switchTab('staging')">
-                <span>Editorial Staging</span>
-                <span id="badge-staging-count" class="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">0</span>
-            </button>
-            <button class="nav-tab" onclick="switchTab('posts')">Blog Feed & Articles</button>
-            <button class="nav-tab flex items-center gap-1.5" onclick="switchTab('zeroredeploy')">
-                <span>Zero-Redeploy Setup</span>
-                <span class="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-500/20 text-indigo-300">1-Time Install</span>
-            </button>
-            <button class="nav-tab" onclick="switchTab('logs')">Activity Logs</button>
-            <button class="nav-tab" onclick="switchTab('settings')">Settings & 2FA</button>
-        </div>
+        <!-- Main Content Area -->
+        <div class="main-content">
+            <!-- Top Action Bar -->
+            <header class="top-bar">
+                <div>
+                    <h1 id="view-header-title" class="text-lg font-bold text-white tracking-tight">Connected Projects</h1>
+                    <p id="view-header-sub" class="text-xs text-slate-400">Autonomous multi-repo daily blog publishing targets</p>
+                </div>
 
-        <!-- TAB: REPOSITORIES -->
-        <div id="tab-repos" class="tab-content">
+                <div class="flex items-center space-x-2.5">
+                    <button onclick="openAddProjectModal()" class="btn-primary flex items-center space-x-1.5 text-xs py-2 px-3 shadow-indigo-500/25">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                        <span>Connect Website in 60s</span>
+                    </button>
+                    <button onclick="openAddContactModal()" class="btn-secondary text-xs py-2 px-3 flex items-center gap-1 text-emerald-400 hover:text-emerald-300">
+                        <span>💬 + New Lead</span>
+                    </button>
+                    <button onclick="openAddDealModal()" class="btn-secondary text-xs py-2 px-3 flex items-center gap-1 text-indigo-400 hover:text-indigo-300">
+                        <span>💰 + Deal</span>
+                    </button>
+                    <button onclick="openAddBroadcastModal()" class="btn-secondary text-xs py-2 px-3 flex items-center gap-1 text-cyan-400 hover:text-cyan-300">
+                        <span>📢 + Broadcast</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Dashboard Body -->
+            <main class="flex-1 p-6 max-w-7xl w-full mx-auto">
+                <!-- 5 Top Metric Stat Cards -->
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+                    <div class="metric-card">
+                        <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">Connected Repos</div>
+                        <div class="text-xl font-bold mt-1 text-white" id="stat-repos-count">-</div>
+                        <div class="text-[10px] text-indigo-400 mt-0.5">Multi-framework targets</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">Published Articles</div>
+                        <div class="text-xl font-bold mt-1 text-emerald-400" id="stat-published-count">-</div>
+                        <div class="text-[10px] text-emerald-400/80 mt-0.5">GitHub PRs & Commits</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">CRM Contacts</div>
+                        <div class="text-xl font-bold mt-1 text-cyan-400" id="stat-contacts-count">-</div>
+                        <div class="text-[10px] text-slate-400 mt-0.5">Audience & Leads</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">WhatsApp Chats</div>
+                        <div class="text-xl font-bold mt-1 text-indigo-400" id="stat-chats-count">-</div>
+                        <div class="text-[10px] text-slate-400 mt-0.5">2-way active threads</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">Pipeline Value</div>
+                        <div class="text-xl font-bold mt-1 text-amber-400" id="stat-pipeline-value">-</div>
+                        <div class="text-[10px] text-slate-400 mt-0.5">Active sales Kanban</div>
+                    </div>
+                </div>
+
+                <!-- TAB: REPOSITORIES -->
+                <div id="tab-repos" class="tab-content">
             <div class="flex justify-between items-center mb-4">
                 <div>
                     <h2 class="text-lg font-semibold text-white">Active GitHub Publishing Targets</h2>
@@ -604,7 +734,412 @@ def render_dashboard_html() -> str:
                 </div>
             </div>
         </div>
+
+        <!-- TAB: WHATSAPP SHARED TEAM INBOX -->
+        <div id="tab-wa-inbox" class="tab-content hidden">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                        <span>💬 WhatsApp Shared Team Inbox</span>
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 font-normal">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Meta Cloud API Live
+                        </span>
+                    </h2>
+                    <p class="text-sm text-slate-400">Two-way live threaded messaging, delivery ticks (sent, delivered, read), quick replies, and lead assignment.</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="loadWhatsAppInbox()" class="btn-secondary text-xs">🔄 Refresh Chats</button>
+                    <button onclick="openAddContactModal()" class="btn-primary text-xs">+ New Lead</button>
+                </div>
+            </div>
+
+            <!-- Two-Pane Live Chat UI -->
+            <div class="chat-container">
+                <!-- Left Sidebar: Conversations Threads -->
+                <div class="chat-sidebar">
+                    <div class="p-3 border-b border-slate-800">
+                        <input type="text" id="wa-inbox-search" placeholder="Search conversations..." class="input-text text-xs py-1.5" oninput="loadWhatsAppInbox()">
+                    </div>
+                    <div id="wa-threads-list" class="chat-thread-list">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+
+                <!-- Right Pane: Active Chat Window -->
+                <div class="chat-main">
+                    <!-- Active State -->
+                    <div id="wa-chat-active-state" class="flex flex-col h-full">
+                        <!-- Chat Header -->
+                        <div class="p-3.5 border-b border-slate-800 bg-slate-950/60 flex justify-between items-center">
+                            <div class="flex items-center space-x-3">
+                                <div class="w-9 h-9 rounded-full bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center font-bold text-sm text-indigo-300">
+                                    WA
+                                </div>
+                                <div>
+                                    <div class="flex items-center space-x-2">
+                                        <h3 id="wa-chat-contact-name" class="font-bold text-sm text-white">Select a contact</h3>
+                                        <div id="wa-chat-contact-tags" class="flex gap-1"></div>
+                                    </div>
+                                    <div id="wa-chat-contact-phone" class="text-xs text-slate-400 font-mono"></div>
+                                </div>
+                            </div>
+
+                            <div class="flex items-center space-x-2">
+                                <button onclick="openAddDealModal(activeConversationId)" class="btn-secondary text-xs py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
+                                    💰 + Create Deal
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Chat Messages Scroll Feed -->
+                        <div id="wa-messages-container" class="chat-messages-scroll">
+                            <!-- Populated dynamically -->
+                        </div>
+
+                        <!-- Canned Quick Replies -->
+                        <div class="px-4 py-2 border-t border-slate-800/80 bg-slate-950/40 flex items-center gap-1.5 overflow-x-auto">
+                            <span class="text-[10px] text-slate-500 uppercase font-semibold mr-1 flex-shrink-0">Quick Replies:</span>
+                            <button type="button" class="quick-chip" onclick="insertCannedReply('Hi! 👋 Thanks for reaching out to GitPulse. How can our autonomous blog publishing and CRM help your company grow?')">👋 Welcome</button>
+                            <button type="button" class="quick-chip" onclick="insertCannedReply('Here is our pricing: Starter $49/mo (3 Repos), Pro $149/mo (10 Repos, Unlimited WA CRM). Reply demo to schedule a call!')">📊 Pricing</button>
+                            <button type="button" class="quick-chip" onclick="insertCannedReply('We would love to show you the zero-redeploy 1-click blog embed! Are you free for a 15-minute demo this week?')">⚡ 1-Click Embed Demo</button>
+                            <button type="button" class="quick-chip" onclick="insertCannedReply('Thanks for your message! Our engineering team has received this and will follow up shortly.')">🙏 Thank You</button>
+                        </div>
+
+                        <!-- Message Composer Input -->
+                        <form onsubmit="sendWhatsAppReply(event)" class="p-3 border-t border-slate-800 bg-slate-950 flex items-center gap-2">
+                            <input type="text" id="wa-message-input" placeholder="Type WhatsApp message (Enter to send)..." class="input-text text-xs flex-1 py-2">
+                            <button type="submit" class="btn-primary text-xs py-2 px-4 flex items-center gap-1.5 shadow-indigo-500/30">
+                                <span>Send</span>
+                                <span>↗</span>
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Empty State -->
+                    <div id="wa-chat-empty-state" class="hidden flex-1 flex items-center justify-center p-8 text-center">
+                        <div class="max-w-sm space-y-3">
+                            <div class="w-14 h-14 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-3xl flex items-center justify-center mx-auto text-indigo-400">
+                                💬
+                            </div>
+                            <h3 class="text-base font-bold text-white">Select a WhatsApp Conversation</h3>
+                            <p class="text-xs text-slate-400">Choose a thread from the left or test an incoming message using the WhatsApp API Simulator.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: WHATSAPP CONTACTS & AUDIENCE CRM -->
+        <div id="tab-wa-contacts" class="tab-content hidden">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-white">Contacts & Audience CRM</h2>
+                    <p class="text-sm text-slate-400">Manage customer audience, customer data platform (CDP) tags, and launch instant 1-click WhatsApp conversations.</p>
+                </div>
+                <button onclick="openAddContactModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-emerald-500/20">
+                    <span>+ Add New Lead</span>
+                </button>
+            </div>
+
+            <!-- Filter & Search Toolbar -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 mb-4 flex flex-col sm:flex-row justify-between items-center gap-3">
+                <div class="flex items-center gap-2 w-full sm:w-auto flex-1">
+                    <input type="text" id="wa-contact-search" placeholder="Search contacts by name, phone, or email..." class="input-text text-xs flex-1" oninput="loadWhatsAppContacts()">
+                    <select id="wa-contact-tag-filter" onchange="loadWhatsAppContacts()" class="input-select text-xs w-36">
+                        <option value="">All Tags</option>
+                        <option value="VIP">VIP</option>
+                        <option value="Customer">Customer</option>
+                        <option value="Lead">Lead</option>
+                        <option value="Trial">Trial</option>
+                    </select>
+                </div>
+                <button onclick="loadWhatsAppContacts()" class="btn-secondary text-xs whitespace-nowrap">Refresh List</button>
+            </div>
+
+            <!-- Contacts Table -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+                <table class="w-full text-left text-sm text-slate-300">
+                    <thead class="bg-slate-950/60 border-b border-slate-800 text-xs uppercase text-slate-400">
+                        <tr>
+                            <th class="px-5 py-3">Contact Profile</th>
+                            <th class="px-5 py-3">WhatsApp Phone</th>
+                            <th class="px-5 py-3">Audience Tags</th>
+                            <th class="px-5 py-3">Internal Notes</th>
+                            <th class="px-5 py-3 text-right">Quick Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="wa-contacts-table-body" class="divide-y divide-slate-800">
+                        <!-- Populated dynamically -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- TAB: SALES PIPELINE DEALS KANBAN -->
+        <div id="tab-wa-deals" class="tab-content hidden">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                        <span>🎯 Sales Pipeline (Deals Kanban)</span>
+                        <span id="kanban-pipeline-badge" class="text-xs px-2.5 py-0.5 rounded-full font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">Total Pipeline</span>
+                    </h2>
+                    <p class="text-sm text-slate-400">Track and advance high-value deals from inbound WhatsApp leads through qualification to closed-won revenue.</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="loadWhatsAppDeals()" class="btn-secondary text-xs">🔄 Refresh</button>
+                    <button onclick="openAddDealModal()" class="btn-primary text-xs">+ Add Sales Deal</button>
+                </div>
+            </div>
+
+            <!-- 5-Stage Kanban Board -->
+            <div class="kanban-board">
+                <!-- Column: Lead -->
+                <div class="kanban-col">
+                    <div class="flex justify-between items-center pb-2 mb-3 border-b border-slate-800">
+                        <span class="text-xs font-bold text-slate-300 uppercase">1. Lead (<span id="kanban-count-lead">0</span>)</span>
+                        <span id="kanban-total-lead" class="text-xs font-mono font-bold text-slate-400">$0</span>
+                    </div>
+                    <div id="kanban-cards-lead" class="space-y-2 flex-1"></div>
+                </div>
+
+                <!-- Column: Qualified -->
+                <div class="kanban-col">
+                    <div class="flex justify-between items-center pb-2 mb-3 border-b border-slate-800">
+                        <span class="text-xs font-bold text-cyan-400 uppercase">2. Qualified (<span id="kanban-count-qualified">0</span>)</span>
+                        <span id="kanban-total-qualified" class="text-xs font-mono font-bold text-cyan-300">$0</span>
+                    </div>
+                    <div id="kanban-cards-qualified" class="space-y-2 flex-1"></div>
+                </div>
+
+                <!-- Column: Proposal -->
+                <div class="kanban-col">
+                    <div class="flex justify-between items-center pb-2 mb-3 border-b border-slate-800">
+                        <span class="text-xs font-bold text-indigo-400 uppercase">3. Proposal (<span id="kanban-count-proposal">0</span>)</span>
+                        <span id="kanban-total-proposal" class="text-xs font-mono font-bold text-indigo-300">$0</span>
+                    </div>
+                    <div id="kanban-cards-proposal" class="space-y-2 flex-1"></div>
+                </div>
+
+                <!-- Column: Negotiation -->
+                <div class="kanban-col">
+                    <div class="flex justify-between items-center pb-2 mb-3 border-b border-slate-800">
+                        <span class="text-xs font-bold text-amber-400 uppercase">4. Negotiation (<span id="kanban-count-negotiation">0</span>)</span>
+                        <span id="kanban-total-negotiation" class="text-xs font-mono font-bold text-amber-300">$0</span>
+                    </div>
+                    <div id="kanban-cards-negotiation" class="space-y-2 flex-1"></div>
+                </div>
+
+                <!-- Column: Won -->
+                <div class="kanban-col">
+                    <div class="flex justify-between items-center pb-2 mb-3 border-b border-slate-800">
+                        <span class="text-xs font-bold text-emerald-400 uppercase">5. Closed Won (<span id="kanban-count-won">0</span>)</span>
+                        <span id="kanban-total-won" class="text-xs font-mono font-bold text-emerald-300">$0</span>
+                    </div>
+                    <div id="kanban-cards-won" class="space-y-2 flex-1"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: WHATSAPP BROADCAST CAMPAIGNS -->
+        <div id="tab-wa-broadcasts" class="tab-content hidden">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-white">Broadcast Campaigns</h2>
+                    <p class="text-sm text-slate-400">Dispatch mass WhatsApp announcements, product updates, and newsletters targeted by audience tags.</p>
+                </div>
+                <button onclick="openAddBroadcastModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
+                    <span>+ New Broadcast Campaign</span>
+                </button>
+            </div>
+
+            <div id="wa-broadcasts-container" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Populated dynamically -->
+            </div>
+        </div>
+
+        <!-- TAB: NO-CODE AUTOMATIONS ENGINE -->
+        <div id="tab-wa-automations" class="tab-content hidden">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                        <span>🤖 No-Code WhatsApp Automations Engine</span>
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">Event Triggers & Auto-Responders</span>
+                    </h2>
+                    <p class="text-sm text-slate-400">Automate welcome greetings, keyword auto-replies, and automatic WhatsApp broadcasts whenever blog articles are published.</p>
+                </div>
+                <button onclick="openAddAutomationModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
+                    <span>+ New Automation Rule</span>
+                </button>
+            </div>
+
+            <div id="wa-automations-container" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Populated dynamically -->
+            </div>
+        </div>
+
+        <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
+        <div id="tab-wa-config" class="tab-content hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Meta Cloud API Credentials Form -->
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-5">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-base font-semibold text-white flex items-center gap-2">
+                            <span>📱 Meta WhatsApp Cloud API Credentials</span>
+                            <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">Official Graph API v21.0</span>
+                        </h2>
+                    </div>
+                    <p class="text-xs text-slate-400">Configure your official Meta Business Cloud API credentials. Leave tokens set to mock mode for offline simulation.</p>
+
+                    <form onsubmit="saveWhatsAppConfig(event)" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-300 mb-1">Phone Number ID *</label>
+                            <input type="text" id="wa-cfg-phone-id" required class="input-text font-mono text-xs" placeholder="e.g. 109876543210123">
+                            <p class="text-[11px] text-slate-500 mt-1">Found in Meta App Dashboard -> WhatsApp -> API Setup.</p>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-slate-300 mb-1">WhatsApp Business Account ID (WABA ID)</label>
+                            <input type="text" id="wa-cfg-waba-id" class="input-text font-mono text-xs" placeholder="e.g. 987654321098765">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-slate-300 mb-1">Permanent System User Access Token *</label>
+                            <input type="password" id="wa-cfg-token" required class="input-text font-mono text-xs" placeholder="EAABwzLIXnzYBO...">
+                            <p class="text-[11px] text-slate-500 mt-1">Permanent Meta Business Token with <code>whatsapp_business_messaging</code> permissions.</p>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-slate-300 mb-1">Business Display Name</label>
+                            <input type="text" id="wa-cfg-biz-name" class="input-text text-xs" placeholder="e.g. GitPulse Business">
+                        </div>
+
+                        <div class="pt-2">
+                            <button type="submit" class="btn-primary text-xs py-2 px-4 shadow-indigo-500/25">
+                                Save WhatsApp Credentials
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Webhook Callback URL & Verify Token + Live Simulator -->
+                <div class="space-y-6">
+                    <!-- Webhook Callback Box -->
+                    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+                        <h2 class="text-base font-semibold text-white flex items-center gap-2">
+                            <span>⚡ Meta Webhook Verification Handshake</span>
+                        </h2>
+                        <p class="text-xs text-slate-400">Add this endpoint in your Meta App Dashboard under WhatsApp -> Configuration -> Edit Webhook.</p>
+
+                        <div class="space-y-3 text-xs">
+                            <div>
+                                <label class="block font-medium text-slate-400 mb-1">Callback URL (GET / POST)</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="wa-webhook-url-display" readonly value="https://gitpulse-cms.vercel.app/api/webhook/whatsapp" class="input-text font-mono text-xs bg-slate-950 flex-1">
+                                    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('wa-webhook-url-display').value); showToast('Webhook URL copied to clipboard!', 'success')" class="btn-secondary text-xs">Copy</button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block font-medium text-slate-400 mb-1">Verify Token</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="wa-cfg-verify-token" value="gitpulse_webhook_verify" class="input-text font-mono text-xs bg-slate-950 flex-1">
+                                    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('wa-cfg-verify-token').value); showToast('Verify token copied!', 'success')" class="btn-secondary text-xs">Copy</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Interactive Live WhatsApp Message Simulator -->
+                    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+                        <div class="flex justify-between items-center">
+                            <h2 class="text-base font-semibold text-white flex items-center gap-2">
+                                <span>🧪 Inbound WhatsApp Simulator</span>
+                                <span class="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">Test Auto-Responders</span>
+                            </h2>
+                        </div>
+                        <p class="text-xs text-slate-400">Simulate incoming WhatsApp messages from new leads or existing contacts to test auto-responders and live inbox updates instantly.</p>
+
+                        <form onsubmit="simulateIncomingWhatsApp(event)" class="space-y-3">
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-400 mb-1">Sender Name</label>
+                                    <input type="text" id="wa-sim-name" value="Michael Chang" class="input-text text-xs">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-400 mb-1">Sender Phone</label>
+                                    <input type="text" id="wa-sim-phone" value="+12065554321" class="input-text text-xs font-mono">
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-medium text-slate-400 mb-1">Incoming Message Body</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="wa-sim-message" value="Hi! Can you share your pricing and schedule a demo?" class="input-text text-xs flex-1">
+                                    <button type="submit" class="btn-primary text-xs py-2 px-3 whitespace-nowrap shadow-cyan-500/20">
+                                        Test Message
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: SUPABASE CLOUD DATABASE -->
+        <div id="tab-supabase" class="tab-content hidden">
+            <div class="max-w-4xl bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
+                <div>
+                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                        <span>☁️ Supabase Cloud Database Architecture</span>
+                        <span id="badge-supabase-status" class="text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400">Checking...</span>
+                    </h2>
+                    <p class="text-sm text-slate-400 mt-1">
+                        Persist articles, multi-client repositories, CRM contacts, conversations, deals, and configurations permanently in Supabase PostgreSQL across Vercel serverless runs.
+                    </p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Supabase REST URL</label>
+                        <input type="text" id="setting-supabase-url" class="input-text font-mono text-xs" value="https://suvmyyonlqyipzgnmony.supabase.co" placeholder="https://<ref>.supabase.co">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Supabase API Key (Service Role or Anon Key)</label>
+                        <input type="password" id="setting-supabase-key" class="input-text font-mono text-xs" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+                        <p class="text-[11px] text-slate-500 mt-1">Project Ref: <code>suvmyyonlqyipzgnmony</code>. Found in Supabase Project Settings -> API.</p>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-3 pt-1">
+                    <button type="button" onclick="testSupabaseFromUI()" class="btn-secondary text-xs flex items-center gap-1.5">
+                        <span>⚡ Test Supabase Connection</span>
+                    </button>
+                    <button type="button" onclick="syncAllToSupabaseFromUI()" class="btn-secondary text-xs flex items-center gap-1.5 text-indigo-300 border-indigo-500/30">
+                        <span>☁️ Sync All Content to Cloud</span>
+                    </button>
+                    <span id="supabase-test-feedback" class="text-xs font-mono"></span>
+                </div>
+
+                <div class="p-4 rounded-lg bg-slate-950 border border-slate-800 space-y-2 text-xs text-slate-300">
+                    <h4 class="font-semibold text-white">PostgreSQL Multi-Tenant Schema Tables:</h4>
+                    <ul class="list-disc list-inside space-y-1 text-slate-400 font-mono text-[11px]">
+                        <li><code>public.clients</code> - Multi-tenant business organization scoping</li>
+                        <li><code>public.projects</code> - Connected GitHub repositories & automation schedules</li>
+                        <li><code>public.posts</code> - AI-generated articles & editorial staging queue</li>
+                        <li><code>public.contacts</code> - WhatsApp CRM customer profiles & CDP audience tags</li>
+                        <li><code>public.conversations</code> - Live threaded chat sessions & unread counts</li>
+                        <li><code>public.messages</code> - Inbound & outbound messages with delivery ticks</li>
+                        <li><code>public.deals</code> - Sales Pipeline Kanban stages ($ value & close dates)</li>
+                        <li><code>public.broadcasts</code> - Mass WhatsApp campaign performance metrics</li>
+                        <li><code>public.automations</code> - No-code event triggers & auto-responders</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
     </main>
+    </div>
+</div>
 
     <!-- Post Preview & Markdown Modal -->
     <div id="modal-post" class="modal-backdrop hidden">
@@ -937,6 +1472,172 @@ def render_dashboard_html() -> str:
                 <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
                     <button type="button" onclick="closeAddClientModal()" class="btn-secondary text-xs">Cancel</button>
                     <button type="submit" class="btn-primary text-xs">Save Client</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Add WhatsApp Contact / Lead -->
+    <div id="modal-add-contact" class="modal-backdrop hidden">
+        <div class="modal-dialog max-w-md">
+            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <span>👥 Add Contact / Lead</span>
+                </h3>
+                <button onclick="closeAddContactModal()" class="text-slate-400 hover:text-white">&times;</button>
+            </div>
+            <form onsubmit="submitAddContact(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Full Name *</label>
+                    <input type="text" id="new-contact-name" required class="input-text" placeholder="e.g. Sarah Jenkins">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">WhatsApp Phone (+CountryCode...) *</label>
+                    <input type="text" id="new-contact-phone" required class="input-text font-mono" placeholder="e.g. +14155552671">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Email Address (Optional)</label>
+                    <input type="email" id="new-contact-email" class="input-text" placeholder="sarah@example.com">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Audience Tags (Comma-separated)</label>
+                    <input type="text" id="new-contact-tags" value="Lead" class="input-text" placeholder="e.g. VIP, Customer, Lead, Enterprise">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Notes / Company Context</label>
+                    <textarea id="new-contact-notes" rows="2" class="input-text text-xs resize-none" placeholder="Notes on lead source, interest, or requirements..."></textarea>
+                </div>
+                <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                    <button type="button" onclick="closeAddContactModal()" class="btn-secondary text-xs">Cancel</button>
+                    <button type="submit" class="btn-primary text-xs">Save Contact</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Add Sales Pipeline Deal -->
+    <div id="modal-add-deal" class="modal-backdrop hidden">
+        <div class="modal-dialog max-w-md">
+            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <span>💰 Add Sales Pipeline Deal</span>
+                </h3>
+                <button onclick="closeAddDealModal()" class="text-slate-400 hover:text-white">&times;</button>
+            </div>
+            <form onsubmit="submitAddDeal(event)" class="space-y-4">
+                <input type="hidden" id="new-deal-contact-id">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Deal Title *</label>
+                    <input type="text" id="new-deal-title" required class="input-text" placeholder="e.g. Enterprise Blog Automation Suite">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-300 mb-1">Deal Value ($) *</label>
+                        <input type="number" step="100" id="new-deal-value" required class="input-text font-mono" placeholder="4200">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-300 mb-1">Pipeline Stage</label>
+                        <select id="new-deal-stage" class="input-select text-xs">
+                            <option value="lead">1. Lead</option>
+                            <option value="qualified">2. Qualified</option>
+                            <option value="proposal" selected>3. Proposal</option>
+                            <option value="negotiation">4. Negotiation</option>
+                            <option value="won">5. Closed Won</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Expected Close Date</label>
+                    <input type="date" id="new-deal-close" class="input-text text-xs">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Deal Notes / Next Action</label>
+                    <textarea id="new-deal-notes" rows="2" class="input-text text-xs resize-none" placeholder="Contract sent, awaiting legal review..."></textarea>
+                </div>
+                <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                    <button type="button" onclick="closeAddDealModal()" class="btn-secondary text-xs">Cancel</button>
+                    <button type="submit" class="btn-primary text-xs">Create Deal</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: New Broadcast Campaign -->
+    <div id="modal-add-broadcast" class="modal-backdrop hidden">
+        <div class="modal-dialog max-w-lg">
+            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <span>📢 New WhatsApp Broadcast Campaign</span>
+                </h3>
+                <button onclick="closeAddBroadcastModal()" class="text-slate-400 hover:text-white">&times;</button>
+            </div>
+            <form onsubmit="submitAddBroadcast(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Campaign Name *</label>
+                    <input type="text" id="new-broadcast-name" required class="input-text" placeholder="e.g. Black Friday Special & Blog Feature Update">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Target Audience Tag</label>
+                    <select id="new-broadcast-tag" class="input-select text-xs">
+                        <option value="all">All Contacts</option>
+                        <option value="VIP">VIP Contacts</option>
+                        <option value="Customer">Current Customers</option>
+                        <option value="Lead">Inbound Leads</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Message Template *</label>
+                    <textarea id="new-broadcast-template" required rows="4" class="input-text text-xs font-mono resize-none" placeholder="Hi {{name}}! 🚀 Big news from GitPulse: we have just launched..."></textarea>
+                    <p class="text-[11px] text-slate-500 mt-1">Available variables: <code>{{name}}</code>, <code>{{phone}}</code></p>
+                </div>
+                <div class="flex items-center gap-2 pt-1">
+                    <input type="checkbox" id="new-broadcast-send-now" class="w-4 h-4 rounded text-indigo-600">
+                    <label for="new-broadcast-send-now" class="text-xs text-slate-300 cursor-pointer">Dispatch immediately upon saving</label>
+                </div>
+                <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                    <button type="button" onclick="closeAddBroadcastModal()" class="btn-secondary text-xs">Cancel</button>
+                    <button type="submit" class="btn-primary text-xs">Save Campaign</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: New No-Code Automation Rule -->
+    <div id="modal-add-automation" class="modal-backdrop hidden">
+        <div class="modal-dialog max-w-lg">
+            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <span>🤖 Create No-Code Automation Rule</span>
+                </h3>
+                <button onclick="closeAddAutomationModal()" class="text-slate-400 hover:text-white">&times;</button>
+            </div>
+            <form onsubmit="submitAddAutomation(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Rule Name *</label>
+                    <input type="text" id="new-auto-name" required class="input-text" placeholder="e.g. Schedule Demo Auto-Responder">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-300 mb-1">Trigger Event *</label>
+                        <select id="new-auto-trigger" required class="input-select text-xs">
+                            <option value="welcome">Welcome (First inbound message from new lead)</option>
+                            <option value="keyword" selected>Keyword Match (Contains trigger keywords)</option>
+                            <option value="blog_publish">Blog Publish (Auto-alert when article goes live)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-300 mb-1">Keywords (Comma-separated)</label>
+                        <input type="text" id="new-auto-keyword" class="input-text text-xs" placeholder="e.g. demo, call, talk, meet">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Outbound Reply Message Template *</label>
+                    <textarea id="new-auto-template" required rows="4" class="input-text text-xs font-mono resize-none" placeholder="Hey {{name}}! 📅 We would love to show you a demo. Book a time here: https://cal.com/gitpulse or reply with your preferred day!"></textarea>
+                    <p class="text-[11px] text-slate-500 mt-1">Variables: <code>{{name}}</code>, <code>{{phone}}</code>, <code>{{title}}</code>, <code>{{url}}</code></p>
+                </div>
+                <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                    <button type="button" onclick="closeAddAutomationModal()" class="btn-secondary text-xs">Cancel</button>
+                    <button type="submit" class="btn-primary text-xs">Create Rule</button>
                 </div>
             </form>
         </div>

@@ -142,3 +142,120 @@ CREATE POLICY "Public can view published posts" ON public.posts
 
 CREATE POLICY "Public can view active projects" ON public.projects
     FOR SELECT USING (is_active = true);
+
+-- ====================================================================
+-- 10. WhatsApp Automation & CRM Engine (ArnasDon/wacrm Architecture)
+-- ====================================================================
+
+-- 10.1 WhatsApp Configs
+CREATE TABLE IF NOT EXISTS public.whatsapp_configs (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    client_id UUID REFERENCES public.clients(id) ON DELETE SET NULL,
+    phone_number_id TEXT NOT NULL DEFAULT '',
+    waba_id TEXT NOT NULL DEFAULT '',
+    access_token TEXT NOT NULL DEFAULT '',
+    verify_token TEXT NOT NULL DEFAULT 'gitpulse_webhook_verify',
+    business_name TEXT NOT NULL DEFAULT 'GitPulse WhatsApp',
+    phone_number TEXT NOT NULL DEFAULT '',
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 10.2 Contacts (Audience & Leads)
+CREATE TABLE IF NOT EXISTS public.contacts (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    client_id UUID REFERENCES public.clients(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    email TEXT DEFAULT '',
+    tags JSONB NOT NULL DEFAULT '["Lead"]'::jsonb,
+    notes TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 10.3 Conversations (Live Chat Threads)
+CREATE TABLE IF NOT EXISTS public.conversations (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    client_id UUID REFERENCES public.clients(id) ON DELETE SET NULL,
+    contact_id BIGINT NOT NULL REFERENCES public.contacts(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'open', -- 'open', 'pending', 'resolved', 'closed'
+    assigned_to TEXT NOT NULL DEFAULT 'Support Team',
+    unread_count INTEGER NOT NULL DEFAULT 0,
+    last_message_at TIMESTAMPTZ DEFAULT now(),
+    last_message_preview TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 10.4 Messages (Inbound & Outbound History with delivery ticks)
+CREATE TABLE IF NOT EXISTS public.messages (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    conversation_id BIGINT NOT NULL REFERENCES public.conversations(id) ON DELETE CASCADE,
+    client_id UUID REFERENCES public.clients(id) ON DELETE SET NULL,
+    contact_id BIGINT NOT NULL REFERENCES public.contacts(id) ON DELETE CASCADE,
+    direction TEXT NOT NULL, -- 'inbound' or 'outbound'
+    message_type TEXT NOT NULL DEFAULT 'text',
+    body TEXT NOT NULL,
+    media_url TEXT DEFAULT '',
+    wa_message_id TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'sent', -- 'pending', 'sent', 'delivered', 'read', 'failed'
+    error_message TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 10.5 Deals (Sales Pipeline Kanban)
+CREATE TABLE IF NOT EXISTS public.deals (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    client_id UUID REFERENCES public.clients(id) ON DELETE SET NULL,
+    contact_id BIGINT REFERENCES public.contacts(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    value NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    stage TEXT NOT NULL DEFAULT 'lead', -- 'lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'
+    expected_close TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 10.6 Broadcast Campaigns
+CREATE TABLE IF NOT EXISTS public.broadcasts (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    client_id UUID REFERENCES public.clients(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    template_body TEXT NOT NULL,
+    target_tag TEXT NOT NULL DEFAULT 'all',
+    total_recipients INTEGER NOT NULL DEFAULT 0,
+    sent_count INTEGER NOT NULL DEFAULT 0,
+    delivered_count INTEGER NOT NULL DEFAULT 0,
+    read_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'draft',
+    scheduled_at TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 10.7 No-Code Automations (Triggers & Actions)
+CREATE TABLE IF NOT EXISTS public.automations (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    client_id UUID REFERENCES public.clients(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    trigger_type TEXT NOT NULL, -- 'welcome', 'keyword', 'blog_publish'
+    trigger_keyword TEXT DEFAULT '',
+    action_type TEXT NOT NULL DEFAULT 'send_message',
+    message_template TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    executions_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- WhatsApp Performance Indexes
+CREATE INDEX IF NOT EXISTS idx_contacts_phone ON public.contacts (phone);
+CREATE INDEX IF NOT EXISTS idx_conversations_contact ON public.conversations (contact_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON public.messages (conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_wa_id ON public.messages (wa_message_id);
+CREATE INDEX IF NOT EXISTS idx_deals_stage ON public.deals (stage);
+
