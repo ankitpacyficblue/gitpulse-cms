@@ -345,7 +345,7 @@ async function loadStatus() {
     // Refresh CRM metrics and sidebar badges
     try {
         const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
-        const cidParam = clientFilter ? `?client_id=${clientFilter}` : '';
+        const cidParam = '';
 
         const [cntData, convData, dealData, autoData] = await Promise.all([
             apiGet(`/api/whatsapp/contacts${cidParam}`),
