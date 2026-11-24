@@ -186,6 +186,13 @@ def init_db():
         if "views" not in post_cols:
             cursor.execute("ALTER TABLE posts ADD COLUMN views INTEGER DEFAULT 0")
 
+        if "account_id" not in project_cols:
+            # Nullable only for pre-account rows; those stay invisible to every account until assigned.
+            cursor.execute("ALTER TABLE projects ADD COLUMN account_id TEXT REFERENCES accounts(id)")
+        log_cols = [c[1] for c in cursor.execute("PRAGMA table_info(system_logs)").fetchall()]
+        if "account_id" not in log_cols:
+            cursor.execute("ALTER TABLE system_logs ADD COLUMN account_id TEXT")
+
         user_cols = [c[1] for c in cursor.execute("PRAGMA table_info(users)").fetchall()]
         if "totp_secret" not in user_cols:
             cursor.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT ''")
@@ -203,6 +210,8 @@ def init_db():
         # Accounts, memberships, per-account WhatsApp and CRM tables
         import crm_store
         crm_store.init_schema(conn)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_account ON projects (account_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_account ON system_logs (account_id, id)")
 
         conn.commit()
 
@@ -257,7 +266,15 @@ def delete_client(client_id: int) -> bool:
 
 # --- Project Operations ---
 
-def list_projects(client_id: Optional[int] = None) -> List[Dict[str, Any]]:
+def list_projects(account_id: str) -> List[Dict[str, Any]]:
+    """Projects of one account."""
+    return _list_projects(account_id)
+
+def list_all_projects() -> List[Dict[str, Any]]:
+    """Every account's projects. For the scheduler, CLI and platform sync only; never for an API caller."""
+    return _list_projects(None)
+
+def _list_projects(account_id: Optional[str]) -> List[Dict[str, Any]]:
     with get_connection() as conn:
         cursor = conn.cursor()
         query = """
@@ -270,9 +287,9 @@ def list_projects(client_id: Optional[int] = None) -> List[Dict[str, Any]]:
             LEFT JOIN posts post ON p.id = post.project_id
         """
         params = []
-        if client_id is not None:
-            query += " WHERE p.client_id = ?"
-            params.append(client_id)
+        if account_id is not None:
+            query += " WHERE p.account_id = ?"
+            params.append(account_id)
         query += " GROUP BY p.id ORDER BY p.id DESC"
         cursor.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
@@ -289,7 +306,7 @@ def get_project(project_id: int) -> Optional[Dict[str, Any]]:
         row = cursor.fetchone()
         return dict(row) if row else None
 
-def create_project(data: Dict[str, Any]) -> int:
+def create_project(data: Dict[str, Any], account_id: str) -> int:
     framework = data.get("target_framework", "generic")
     preset = FRAMEWORK_PRESETS.get(framework, FRAMEWORK_PRESETS["generic"])
     
@@ -310,7 +327,7 @@ def create_project(data: Dict[str, Any]) -> int:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO projects (
-                client_id, name, github_repo, github_branch, github_token,
+                account_id, name, github_repo, github_branch, github_token,
                 target_framework, content_dir, file_extension,
                 frontmatter_template, topic, target_audience, tone,
                 keywords, author_name, publishing_mode, publish_time,
@@ -318,7 +335,7 @@ def create_project(data: Dict[str, Any]) -> int:
                 zero_redeploy_enabled, blog_page_path, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            client_id,
+            account_id,
             data.get("name", "New Project"),
             data.get("github_repo", "").strip(),
             data.get("github_branch", "main").strip(),
@@ -377,21 +394,13 @@ def create_project(data: Dict[str, Any]) -> int:
 
         return project_id
 
-def update_project(project_id: int, data: Dict[str, Any]) -> bool:
+def update_project(project_id: int, data: Dict[str, Any], account_id: str) -> bool:
     now = datetime.utcnow().isoformat()
-    raw_client_id = data.get("client_id")
-    client_id = None
-    if raw_client_id not in (None, "", "null"):
-        try:
-            client_id = int(raw_client_id)
-        except (ValueError, TypeError):
-            client_id = None
 
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE projects SET
-                client_id = COALESCE(?, client_id),
                 name = COALESCE(?, name),
                 github_repo = COALESCE(?, github_repo),
                 github_branch = COALESCE(?, github_branch),
@@ -414,9 +423,8 @@ def update_project(project_id: int, data: Dict[str, Any]) -> bool:
                 zero_redeploy_enabled = COALESCE(?, zero_redeploy_enabled),
                 blog_page_path = COALESCE(?, blog_page_path),
                 updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND account_id = ?
         """, (
-            client_id,
             data.get("name"),
             data.get("github_repo"),
             data.get("github_branch"),
@@ -439,7 +447,8 @@ def update_project(project_id: int, data: Dict[str, Any]) -> bool:
             data.get("zero_redeploy_enabled"),
             data.get("blog_page_path"),
             now,
-            project_id
+            project_id,
+            account_id
         ))
         conn.commit()
         return cursor.rowcount > 0
@@ -451,10 +460,10 @@ def update_project_last_run(project_id: int):
         cursor.execute("UPDATE projects SET last_run_at = ?, updated_at = ? WHERE id = ?", (now, now, project_id))
         conn.commit()
 
-def delete_project(project_id: int) -> bool:
+def delete_project(project_id: int, account_id: str) -> bool:
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        cursor.execute("DELETE FROM projects WHERE id = ? AND account_id = ?", (project_id, account_id))
         conn.commit()
         return cursor.rowcount > 0
 
@@ -539,6 +548,26 @@ def update_post_content(post_id: int, title: str, excerpt: str, content_markdown
         ))
         conn.commit()
 
+def list_posts_for_account(account_id: str, project_id: Optional[int] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    q = """SELECT p.*, proj.name as project_name, proj.github_repo
+           FROM posts p JOIN projects proj ON p.project_id = proj.id
+           WHERE proj.account_id = ?"""
+    params: List[Any] = [account_id]
+    if project_id:
+        q += " AND p.project_id = ?"
+        params.append(project_id)
+    q += " ORDER BY p.id DESC LIMIT ?"
+    params.append(limit)
+    with get_connection() as conn:
+        return [dict(row) for row in conn.execute(q, params).fetchall()]
+
+def get_post_for_account(account_id: str, post_id: int) -> Optional[Dict[str, Any]]:
+    """The post, only if its project belongs to the account."""
+    with get_connection() as conn:
+        row = conn.execute("""SELECT p.* FROM posts p JOIN projects proj ON p.project_id = proj.id
+                              WHERE p.id = ? AND proj.account_id = ?""", (post_id, account_id)).fetchone()
+        return dict(row) if row else None
+
 def get_post(post_id: int) -> Optional[Dict[str, Any]]:
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -596,32 +625,39 @@ def update_post_status(post_id: int, status: str, commit_sha: str = None, pr_url
 
 # --- Logging & Audit ---
 
-def log_event(message: str, level: str = "INFO", project_id: Optional[int] = None, post_id: Optional[int] = None, metadata: Optional[Dict] = None):
+def log_event(message: str, level: str = "INFO", project_id: Optional[int] = None, post_id: Optional[int] = None,
+              metadata: Optional[Dict] = None, account_id: Optional[str] = None):
+    """Audit/log line. Never pass secrets or message bodies in `message` or `metadata`."""
     now = datetime.utcnow().isoformat()
     with get_connection() as conn:
         cursor = conn.cursor()
+        if account_id is None and project_id is not None:
+            row = cursor.execute("SELECT account_id FROM projects WHERE id = ?", (project_id,)).fetchone()
+            account_id = row["account_id"] if row else None
         cursor.execute("""
-            INSERT INTO system_logs (project_id, post_id, level, message, metadata, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO system_logs (project_id, post_id, level, message, metadata, created_at, account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             project_id,
             post_id,
             level,
             message,
             json.dumps(metadata or {}),
-            now
+            now,
+            account_id
         ))
         conn.commit()
 
-def list_logs(limit: int = 100) -> List[Dict[str, Any]]:
+def list_logs(account_id: str, limit: int = 100) -> List[Dict[str, Any]]:
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT l.*, p.name as project_name
             FROM system_logs l
             LEFT JOIN projects p ON l.project_id = p.id
+            WHERE l.account_id = ?
             ORDER BY l.id DESC LIMIT ?
-        """, (limit,))
+        """, (account_id, limit))
         return [dict(row) for row in cursor.fetchall()]
 
 # --- Settings ---
@@ -687,7 +723,7 @@ def sync_all_to_supabase() -> Dict[str, Any]:
             synced_clients += 1
 
         # Sync projects
-        for p in list_projects():
+        for p in list_all_projects():
             sb.table("projects").insert({
                 "name": p["name"],
                 "github_repo": p["github_repo"],

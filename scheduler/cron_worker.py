@@ -8,7 +8,7 @@ import time
 import threading
 from datetime import datetime
 from typing import Optional
-from database import list_projects, log_event
+from database import list_all_projects, log_event
 from engine.pipeline import run_publication_pipeline
 
 class CronWorker:
@@ -55,7 +55,7 @@ class CronWorker:
         current_time_str = now_dt.strftime("%H:%M")
         today_date_str = now_dt.strftime("%Y-%m-%d")
 
-        projects = list_projects()
+        projects = list_all_projects()
         for p in projects:
             if not p.get("is_active"):
                 continue
