@@ -1057,7 +1057,7 @@ def render_dashboard_html() -> str:
                     <div id="users-empty"></div>
                 </section>
                 <section id="users-invite-card" class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-4" aria-labelledby="invite-h" data-requires="users.manage">
-                    <h2 id="invite-h" class="text-base font-semibold text-white">Invite a person</h2>
+                    <h2 id="invite-h" class="text-base font-semibold text-white">Add a person</h2>
                     <form onsubmit="submitInviteUser(event)" class="space-y-3">
                         <div>
                             <label for="invite-username" class="block text-xs font-medium text-slate-300 mb-1">Username or email *</label>
@@ -1068,7 +1068,8 @@ def render_dashboard_html() -> str:
                             <select id="invite-role" class="input-text text-xs"></select>
                             <p id="invite-role-help" class="text-[11px] text-slate-500 mt-1"></p>
                         </div>
-                        <button type="submit" class="btn-primary text-xs py-2 px-3 w-full">Send invite</button>
+                        <button type="submit" class="btn-primary text-xs py-2 px-3 w-full">Add to account</button>
+                        <p id="invite-result" class="text-[11px] text-slate-300" role="status" aria-live="polite"></p>
                     </form>
                 </section>
             </div>
@@ -1138,7 +1139,8 @@ def render_dashboard_html() -> str:
                             <div>
                                 <label class="block font-medium text-slate-400 mb-1">Verify Token</label>
                                 <div class="flex gap-2">
-                                    <input type="text" id="wa-cfg-verify-token" value="gitpulse_webhook_verify" class="input-text font-mono text-xs bg-slate-950 flex-1">
+                                    <input type="text" id="wa-cfg-verify-token" readonly placeholder="Created by the server and shown once when you first save" class="input-text font-mono text-xs bg-slate-950 flex-1">
+                                    <span id="wa-cfg-webhook-url" class="sr-only"></span>
                                     <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('wa-cfg-verify-token').value); showToast('Verify token copied!', 'success')" class="btn-secondary text-xs">Copy</button>
                                 </div>
                             </div>
