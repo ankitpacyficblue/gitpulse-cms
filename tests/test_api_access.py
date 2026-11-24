@@ -208,6 +208,38 @@ class TestCrossAccountIsolationViaApi(Base):
         self.assertEqual([d["currency"] for d in cs.list_deals(acct) if d["id"] == did2], ["USD"])
         self.assertEqual(self.users["admin"]("PATCH", f"/api/accounts/{self.acct}", {"default_currency": "EUR"})[0], 403)
 
+    def test_account_settings_are_owner_only_write_only_and_encrypted(self):
+        o = self.users["owner"]
+        self.assertEqual(self.users["admin"]("GET", "/api/account/settings")[0], 403)
+        self.assertEqual(o("POST", "/api/account/settings", {"ai_provider": "claude"})[0], 400)
+        code, out = o("POST", "/api/account/settings", {"ai_provider": "gemini", "ai_api_key": "AIza-secret-9999",
+                                                       "github_token": "ghp_acct_token_1234"})
+        self.assertEqual(code, 200)
+        body = o("GET", "/api/account/settings")[1]
+        self.assertTrue(body["has_ai_api_key"] and body["has_github_token"])
+        self.assertNotIn("secret", str(body))
+        self.assertEqual(body["ai_key_source"], "account")
+        self.assertEqual(cs.get_account_ai(self.acct), ("gemini", "AIza-secret-9999"))
+        self.assertEqual(cs.get_account_ai(self.other), ("", ""))          # other account untouched
+        with cs.get_connection() as conn:
+            raw = conn.execute("SELECT ai_api_key_enc, github_token_enc FROM account_settings WHERE account_id = ?",
+                               (self.acct,)).fetchone()
+        self.assertTrue(raw[0].startswith("v1:") and raw[1].startswith("v1:"))
+        o("POST", "/api/account/settings", {"ai_provider": "openai"})        # absent key keeps stored one
+        self.assertEqual(cs.get_account_ai(self.acct)[1], "AIza-secret-9999")
+        o("POST", "/api/account/settings", {"clear_ai_key": True})
+        self.assertFalse(o("GET", "/api/account/settings")[1]["has_ai_api_key"])
+
+    def test_project_github_token_is_encrypted_at_rest(self):
+        o = self.users["owner"]
+        pid = o("POST", "/api/projects", {"name": "Enc", "github_repo": "o/r", "topic": "t",
+                                          "github_token": "ghp_plain_9876"})[1]["id"]
+        with cs.get_connection() as conn:
+            raw = conn.execute("SELECT github_token FROM projects WHERE id = ?", (pid,)).fetchone()[0]
+        self.assertTrue(raw.startswith("v1:"))
+        from database import get_project
+        self.assertEqual(get_project(pid)["github_token"], "ghp_plain_9876")
+
     def test_deal_cannot_link_foreign_contact(self):
         cid = cs.create_contact(self.other, "Foreign", "+15559990002")
         code, _ = self.users["owner"]("POST", "/api/whatsapp/deals", {"title": "Steal", "contact_id": cid})

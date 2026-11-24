@@ -219,7 +219,7 @@ def init_db():
             # Supabase exposes the public schema over its REST API. Row level security
             # with no policies denies anon/authenticated roles; the app connects as the
             # database owner, which bypasses RLS. Never leave a table without it.
-            for table in sorted(dbcompat.AUTOID_TABLES | {"accounts", "memberships", "sessions", "settings"}):
+            for table in sorted(dbcompat.AUTOID_TABLES | dbcompat.OTHER_TABLES):
                 cursor.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
 
         conn.commit()
@@ -275,6 +275,27 @@ def delete_client(client_id: int) -> bool:
 
 # --- Project Operations ---
 
+def _seal_token(account_id: str, value: str) -> str:
+    """Encrypt a project GitHub token for storage (bound to its account)."""
+    from engine import secrets_box
+    value = (value or "").strip()
+    if not value:
+        return ""
+    return secrets_box.encrypt(value, account_id)
+
+
+def _open_project(p: Dict[str, Any]) -> Dict[str, Any]:
+    """Decrypt github_token for server-side use. Old plaintext rows still work and are sealed on next save."""
+    from engine import secrets_box
+    tok = p.get("github_token") or ""
+    if tok.startswith(secrets_box.PREFIX):
+        try:
+            p["github_token"] = secrets_box.decrypt(tok, p.get("account_id") or "")
+        except secrets_box.SecretsBoxError:
+            p["github_token"] = ""      # wrong key or foreign row: treat as missing, never leak ciphertext
+    return p
+
+
 def list_projects(account_id: str) -> List[Dict[str, Any]]:
     """Projects of one account."""
     return _list_projects(account_id)
@@ -299,9 +320,9 @@ def _list_projects(account_id: Optional[str]) -> List[Dict[str, Any]]:
         if account_id is not None:
             query += " WHERE p.account_id = ?"
             params.append(account_id)
-        query += " GROUP BY p.id ORDER BY p.id DESC"
+        query += " GROUP BY p.id, c.name ORDER BY p.id DESC"
         cursor.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+        return [_open_project(dict(row)) for row in cursor.fetchall()]
 
 def get_project(project_id: int) -> Optional[Dict[str, Any]]:
     with get_connection() as conn:
@@ -313,7 +334,7 @@ def get_project(project_id: int) -> Optional[Dict[str, Any]]:
             WHERE p.id = ?
         """, (project_id,))
         row = cursor.fetchone()
-        return dict(row) if row else None
+        return _open_project(dict(row)) if row else None
 
 def create_project(data: Dict[str, Any], account_id: str) -> int:
     framework = data.get("target_framework", "generic")
@@ -348,7 +369,7 @@ def create_project(data: Dict[str, Any], account_id: str) -> int:
             data.get("name", "New Project"),
             data.get("github_repo", "").strip(),
             data.get("github_branch", "main").strip(),
-            data.get("github_token", "").strip(),
+            _seal_token(account_id, data.get("github_token", "")),
             framework,
             content_dir.strip("/"),
             file_extension,
@@ -437,7 +458,7 @@ def update_project(project_id: int, data: Dict[str, Any], account_id: str) -> bo
             data.get("name"),
             data.get("github_repo"),
             data.get("github_branch"),
-            data.get("github_token"),
+            _seal_token(account_id, data["github_token"]) if data.get("github_token") else None,
             data.get("target_framework"),
             data.get("content_dir"),
             data.get("file_extension"),

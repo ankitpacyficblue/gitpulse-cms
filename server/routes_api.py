@@ -299,6 +299,25 @@ def account_delete(ctx, m, q, body):
     return 200, {"success": True, "message": "Account deleted. Its data is retained and stays private to it."}
 
 
+@route("GET", r"/api/account/settings", "acct:account.manage")
+def account_settings_get(ctx, m, q, body):
+    return 200, cs.get_account_settings_public(ctx.account_id)
+
+
+@route("POST", r"/api/account/settings", "acct:account.manage")
+def account_settings_save(ctx, m, q, body):
+    if (body.get("ai_api_key") or body.get("github_token")) and not secrets_box.is_configured():
+        return 500, _NO_ENC
+    provider = body.get("ai_provider")
+    if provider is not None and provider not in AI_PROVIDERS:
+        return 400, {"error": "invalid_ai_provider", "allowed": sorted(AI_PROVIDERS)}
+    cs.save_account_settings(ctx.account_id, ai_provider=provider, ai_api_key=body.get("ai_api_key") or "",
+                             github_token=body.get("github_token") or "",
+                             clear_ai_key=bool(body.get("clear_ai_key")), clear_github_token=bool(body.get("clear_github_token")))
+    db.log_event("Account AI/GitHub settings updated.", "INFO", account_id=ctx.account_id)
+    return 200, {"success": True, "settings": cs.get_account_settings_public(ctx.account_id)}
+
+
 @route("GET", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users", "path:users.manage")
 def users_list(ctx, m, q, body):
     return 200, {"users": cs.list_members(ctx.account_id)}
@@ -408,7 +427,18 @@ def projects_list(ctx, m, q, body):
 def projects_create(ctx, m, q, body):
     if not body.get("name") or not body.get("github_repo") or not body.get("topic"):
         return 400, {"error": "Missing required fields: 'name', 'github_repo', and 'topic' are mandatory."}
+    if body.get("github_token") and not secrets_box.is_configured():
+        return 500, _NO_ENC
     return 201, {"id": db.create_project(body, ctx.account_id), "message": "Project registered successfully."}
+
+
+_NO_ENC = {"error": "encryption_not_configured",
+           "message": "The server has no CREDENTIAL_ENC_KEY, so credentials cannot be stored."}
+
+
+def _gh_token(ctx, project) -> str:
+    """Project token first, then the account's default token. Never the platform-wide token."""
+    return project.get("github_token") or cs.get_account_github_token(ctx.account_id)
 
 
 def _own_project(ctx, project_id: int) -> Optional[Dict[str, Any]]:
@@ -428,6 +458,8 @@ def project_update(ctx, m, q, body):
     for k in ("github_token", "webhook_secret"):      # empty keeps the stored value
         if not data.get(k):
             data.pop(k, None)
+    if data.get("github_token") and not secrets_box.is_configured():
+        return 500, _NO_ENC
     if not db.update_project(int(m.group("pid")), data, ctx.account_id):
         return 404, {"error": "Project not found or no changes made."}
     return 200, {"message": "Project updated successfully."}
@@ -456,7 +488,7 @@ def project_test_github(ctx, m, q, body):
     proj = _own_project(ctx, int(m.group("pid")))
     if not proj:
         return 404, {"error": "Project not found."}
-    ok, msg = GitHubClient(token=proj.get("github_token") or "").test_connection(proj["github_repo"])
+    ok, msg = GitHubClient(token=_gh_token(ctx, proj)).test_connection(proj["github_repo"])
     return (200 if ok else 400), {"connected": ok, "message": msg}
 
 
@@ -466,7 +498,7 @@ def project_install_blog(ctx, m, q, body):
     proj = _own_project(ctx, pid)
     if not proj:
         return 404, {"error": "Project not found."}
-    token = proj.get("github_token") or ""
+    token = _gh_token(ctx, proj)
     page_path = proj.get("blog_page_path", "public/blog/index.html")
     html = generate_one_time_blog_html(pid, proj["name"], body.get("cms_base_url", ""))
     if not token:
@@ -518,7 +550,7 @@ def _publish_post(ctx, post_id: int, approve: bool) -> Response:
         return 404, {"error": "Post not found."}
     project = _own_project(ctx, post["project_id"])
     from engine.formatters import assemble_post_document
-    res = GitHubClient(token=project.get("github_token") or "").publish_post(
+    res = GitHubClient(token=_gh_token(ctx, project)).publish_post(
         repo=project["github_repo"], branch=project["github_branch"], target_path=post["target_path"],
         file_content=assemble_post_document(post["frontmatter_yaml"], post["content_markdown"]),
         post_title=post["title"], post_excerpt=post["excerpt"],
@@ -763,6 +795,7 @@ def bc_run(ctx, m, q, body):
     return 200, {"success": True, "stats": stats}
 
 
+AI_PROVIDERS = {"gemini", "openai", "mock"}
 TRIGGER_TYPES = {"welcome", "keyword", "blog_publish"}
 DEAL_STAGES = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
 

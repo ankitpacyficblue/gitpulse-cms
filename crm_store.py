@@ -142,6 +142,12 @@ def init_schema(conn) -> None:
         is_active INTEGER NOT NULL DEFAULT 1, executions_count INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )""")
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS account_settings (
+        account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE RESTRICT,
+        ai_provider TEXT NOT NULL DEFAULT '', ai_api_key_enc TEXT NOT NULL DEFAULT '',
+        github_token_enc TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL
+    )""")
     acct_cols = {r[1] for r in cur.execute("PRAGMA table_info(accounts)").fetchall()}
     if "default_currency" not in acct_cols:
         cur.execute("ALTER TABLE accounts ADD COLUMN default_currency TEXT NOT NULL DEFAULT 'INR'")
@@ -318,6 +324,67 @@ def save_whatsapp_account(account_id: str, phone_number_id: Optional[str] = None
                       token_enc or "", secret_enc or "", _hash_verify(verify), now, now))
         conn.commit()
         return verify
+
+
+def _settings_row(account_id: str):
+    with get_connection() as conn:
+        return conn.execute("SELECT * FROM account_settings WHERE account_id = ?", (account_id,)).fetchone()
+
+
+def save_account_settings(account_id: str, ai_provider: Optional[str] = None, ai_api_key: str = "",
+                          github_token: str = "", clear_ai_key: bool = False, clear_github_token: bool = False) -> None:
+    """Per-account blog settings. Empty key/token keep the stored value; clear_* removes it."""
+    row = _settings_row(account_id)
+    provider = (row["ai_provider"] if row else "") if ai_provider is None else ai_provider.strip()
+    key_enc = row["ai_api_key_enc"] if row else ""
+    gh_enc = row["github_token_enc"] if row else ""
+    if clear_ai_key:
+        key_enc = ""
+    if ai_api_key.strip():
+        key_enc = secrets_box.encrypt(ai_api_key.strip(), account_id)
+    if clear_github_token:
+        gh_enc = ""
+    if github_token.strip():
+        gh_enc = secrets_box.encrypt(github_token.strip(), account_id)
+    with get_connection() as conn:
+        if row:
+            conn.execute("""UPDATE account_settings SET ai_provider=?, ai_api_key_enc=?, github_token_enc=?, updated_at=?
+                            WHERE account_id=?""", (provider, key_enc, gh_enc, _now(), account_id))
+        else:
+            conn.execute("""INSERT INTO account_settings (account_id, ai_provider, ai_api_key_enc, github_token_enc, updated_at)
+                            VALUES (?,?,?,?,?)""", (account_id, provider, key_enc, gh_enc, _now()))
+        conn.commit()
+
+
+def _open_setting(enc: str, account_id: str) -> str:
+    try:
+        return secrets_box.decrypt(enc, account_id) if enc else ""
+    except secrets_box.SecretsBoxError:
+        return ""
+
+
+def get_account_ai(account_id: str):
+    """(provider, api_key) this account chose, or ('', '') so the caller falls back to the platform setting."""
+    row = _settings_row(account_id)
+    if not row:
+        return "", ""
+    return row["ai_provider"], _open_setting(row["ai_api_key_enc"], account_id)
+
+
+def get_account_github_token(account_id: str) -> str:
+    row = _settings_row(account_id)
+    return _open_setting(row["github_token_enc"], account_id) if row else ""
+
+
+def get_account_settings_public(account_id: str) -> Dict[str, Any]:
+    """Write-only secrets: the API reports only whether a value is set and its last 4 characters."""
+    row = _settings_row(account_id)
+    key = _open_setting(row["ai_api_key_enc"], account_id) if row else ""
+    gh = _open_setting(row["github_token_enc"], account_id) if row else ""
+    return {"ai_provider": (row["ai_provider"] if row else ""), "has_ai_api_key": bool(key),
+            "ai_api_key_masked": secrets_box.mask(key), "has_github_token": bool(gh),
+            "github_token_masked": secrets_box.mask(gh),
+            "ai_key_source": "account" if key else "platform"}
 
 
 def rotate_verify_token(account_id: str) -> Optional[str]:

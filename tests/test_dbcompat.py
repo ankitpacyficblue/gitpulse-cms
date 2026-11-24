@@ -115,7 +115,7 @@ class RlsTests(unittest.TestCase):
         import re, database, crm_store, inspect
         src = inspect.getsource(database.init_db) + inspect.getsource(crm_store.init_schema)
         created = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", src))
-        covered = dbcompat.AUTOID_TABLES | {"accounts", "memberships", "sessions", "settings"}
+        covered = dbcompat.AUTOID_TABLES | dbcompat.OTHER_TABLES
         self.assertEqual(created - covered, set(), "tables created without an RLS entry")
 
 
