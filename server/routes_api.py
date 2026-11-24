@@ -638,7 +638,20 @@ def contacts_delete(ctx, m, q, body):
 
 @route("GET", r"/api/whatsapp/conversations", "acct:crm.read")
 def conv_list(ctx, m, q, body):
-    return 200, {"conversations": cs.list_conversations(ctx.account_id, status=q.get("status", ""))}
+    mine = ctx.user["id"] if q.get("assigned") == "me" else None
+    return 200, {"conversations": cs.list_conversations(ctx.account_id, status=q.get("status", ""), assigned_user_id=mine)}
+
+
+@route("PUT", r"/api/whatsapp/conversations/(?P<id>\d+)/assign", "acct:crm.write")
+def conversation_assign(ctx, m, q, body):
+    raw = body.get("user_id")
+    uid = None if raw in (None, "", 0) else _int(raw)
+    if raw not in (None, "", 0) and uid is None:
+        return 400, {"error": "invalid_user_id"}
+    if uid is not None and not cs.get_membership_role(ctx.account_id, uid):
+        return 400, {"error": "not_a_member", "message": "That user is not in this account."}
+    ok = cs.assign_conversation(ctx.account_id, int(m.group("id")), uid)
+    return (200, {"success": True}) if ok else (404, {"error": "Conversation not found."})
 
 
 @route("GET", r"/api/whatsapp/conversations/(?P<id>\d+)", "acct:crm.read")

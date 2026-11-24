@@ -150,7 +150,7 @@ class TestCrossAccountIsolationViaApi(Base):
         deals = [d for d in cs.list_deals(self.acct) if d["id"] == did]
         self.assertEqual(len(deals), 1)
         self.assertIsNone(deals[0]["contact_id"])
-        self.assertEqual(cs.list_conversations(self.acct), [])
+        self.assertNotIn(cid, [c["contact_id"] for c in cs.list_conversations(self.acct)])
 
     def test_handler_exception_returns_json_500(self):
         from unittest import mock
@@ -177,6 +177,22 @@ class TestCrossAccountIsolationViaApi(Base):
             cfg = o("GET", "/api/whatsapp/config")[1]
         self.assertEqual(cfg["webhook_url"], "https://preview.example.com/api/webhook/whatsapp")
         self.assertEqual((cfg["waba_id"], cfg["phone_number_id"], cfg["business_name"]), ("W1", "pn-b10", "B"))
+
+    def test_conversation_assignment(self):
+        cid = cs.create_contact(self.acct, "Assignee", "+15559990077")
+        conv = cs.get_or_create_conversation(self.acct, cid)
+        base = f"/api/whatsapp/conversations/{conv['id']}/assign"
+        agent_id = self.users["agent"].user["id"]
+        self.assertEqual(self.users["admin"]("PUT", base, {"user_id": agent_id})[0], 200)
+        mine = self.users["agent"]("GET", "/api/whatsapp/conversations", query={"assigned": "me"})[1]["conversations"]
+        self.assertEqual([c["id"] for c in mine], [conv["id"]])
+        self.assertEqual(self.users["admin"]("GET", "/api/whatsapp/conversations", query={"assigned": "me"})[1]["conversations"], [])
+        self.assertEqual(self.users["admin"]("PUT", base, {"user_id": self.outsider_user["id"]})[0], 400)
+        self.assertEqual(self.users["admin"]("PUT", base, {"user_id": "abc"})[0], 400)
+        self.assertEqual(self.users["viewer"]("PUT", base, {"user_id": agent_id})[0], 403)
+        self.assertEqual(self.outsider("PUT", base, {"user_id": self.outsider_user["id"]})[0], 404)
+        self.assertEqual(self.users["admin"]("PUT", base, {"user_id": None})[0], 200)
+        self.assertEqual(cs.get_conversation(self.acct, conv["id"])["assigned_to"], "Team")
 
     def test_deal_cannot_link_foreign_contact(self):
         cid = cs.create_contact(self.other, "Foreign", "+15559990002")

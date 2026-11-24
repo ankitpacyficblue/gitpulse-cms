@@ -142,6 +142,9 @@ def init_schema(conn) -> None:
         is_active INTEGER NOT NULL DEFAULT 1, executions_count INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )""")
+    conv_cols = {r[1] for r in cur.execute("PRAGMA table_info(conversations)").fetchall()}
+    if "assigned_user_id" not in conv_cols:
+        cur.execute("ALTER TABLE conversations ADD COLUMN assigned_user_id INTEGER")
     for stmt in (
         "CREATE INDEX IF NOT EXISTS idx_contacts_acct ON contacts (account_id, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_conv_acct ON conversations (account_id, last_message_at)",
@@ -239,9 +242,15 @@ def set_membership_role(account_id: str, user_id: int, role: str) -> bool:
         return cur.rowcount > 0
 
 
+def _unassign_for_removed(conn, account_id: str, user_id: int) -> None:
+    conn.execute("UPDATE conversations SET assigned_user_id = NULL, assigned_to = 'Team' "
+                 "WHERE account_id = ? AND assigned_user_id = ?", (account_id, user_id))
+
+
 def remove_membership(account_id: str, user_id: int) -> bool:
     with get_connection() as conn:
         cur = conn.execute("DELETE FROM memberships WHERE account_id = ? AND user_id = ?", (account_id, user_id))
+        _unassign_for_removed(conn, account_id, user_id)
         conn.commit()
         return cur.rowcount > 0
 
@@ -464,14 +473,32 @@ def _conv(row) -> Dict[str, Any]:
     return d
 
 
-def list_conversations(account_id: str, status: str = "") -> List[Dict[str, Any]]:
+def list_conversations(account_id: str, status: str = "", assigned_user_id: Optional[int] = None) -> List[Dict[str, Any]]:
     q, p = _CONV_SELECT + " WHERE conv.account_id = ?", [account_id]
+    if assigned_user_id is not None:
+        q += " AND conv.assigned_user_id = ?"
+        p.append(assigned_user_id)
     if status:
         q += " AND conv.status = ?"
         p.append(status)
     q += " ORDER BY conv.last_message_at DESC, conv.id DESC"
     with get_connection() as conn:
         return [_conv(r) for r in conn.execute(q, p).fetchall()]
+
+
+def assign_conversation(account_id: str, conversation_id: int, user_id: Optional[int]) -> bool:
+    """Assign to a member of this account (or None to unassign). Caller has checked membership."""
+    label = "Team"
+    if user_id is not None:
+        with get_connection() as conn:
+            row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+        label = row["username"] if row else "Team"
+    with get_connection() as conn:
+        cur = conn.execute("""UPDATE conversations SET assigned_user_id = ?, assigned_to = ?, updated_at = ?
+                              WHERE id = ? AND account_id = ?""",
+                           (user_id, label, _now(), conversation_id, account_id))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def get_conversation(account_id: str, conversation_id: int) -> Optional[Dict[str, Any]]:
