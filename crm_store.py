@@ -264,22 +264,24 @@ def _hash_verify(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def save_whatsapp_account(account_id: str, phone_number_id: str = "", waba_id: str = "",
-                          business_name: str = "", phone_number: str = "",
+def save_whatsapp_account(account_id: str, phone_number_id: Optional[str] = None, waba_id: Optional[str] = None,
+                          business_name: Optional[str] = None, phone_number: Optional[str] = None,
                           access_token: str = "", app_secret: str = "") -> Optional[str]:
     """Create/update this account's WhatsApp config. Empty access_token/app_secret keep the stored
     values. Returns a new verify token (shown once) when the row is first created, else None."""
     now = _now()
-    phone_number_id = (phone_number_id or "").strip()
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM whatsapp_accounts WHERE account_id = ?", (account_id,)).fetchone()
         token_enc = secrets_box.encrypt(access_token.strip(), account_id) if access_token.strip() else None
         secret_enc = secrets_box.encrypt(app_secret.strip(), account_id) if app_secret.strip() else None
+        def keep(new, old):  # absent field (None) keeps the stored value
+            return old if new is None else new.strip()
         if row:
             conn.execute("""UPDATE whatsapp_accounts SET phone_number_id=?, waba_id=?, business_name=?,
                             phone_number=?, access_token_enc=?, app_secret_enc=?, is_active=1, updated_at=?
                             WHERE account_id=?""",
-                         (phone_number_id, waba_id.strip(), business_name.strip(), phone_number.strip(),
+                         (keep(phone_number_id, row["phone_number_id"]), keep(waba_id, row["waba_id"]),
+                          keep(business_name, row["business_name"]), keep(phone_number, row["phone_number"]),
                           token_enc if token_enc is not None else row["access_token_enc"],
                           secret_enc if secret_enc is not None else row["app_secret_enc"], now, account_id))
             conn.commit()
@@ -288,7 +290,8 @@ def save_whatsapp_account(account_id: str, phone_number_id: str = "", waba_id: s
         conn.execute("""INSERT INTO whatsapp_accounts (account_id, phone_number_id, waba_id, business_name,
                         phone_number, access_token_enc, app_secret_enc, verify_token_hash, is_active,
                         created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?)""",
-                     (account_id, phone_number_id, waba_id.strip(), business_name.strip(), phone_number.strip(),
+                     (account_id, (phone_number_id or "").strip(), (waba_id or "").strip(),
+                      (business_name or "").strip(), (phone_number or "").strip(),
                       token_enc or "", secret_enc or "", _hash_verify(verify), now, now))
         conn.commit()
         return verify

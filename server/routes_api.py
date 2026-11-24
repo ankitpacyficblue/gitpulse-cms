@@ -43,9 +43,10 @@ Response = Tuple[int, Dict[str, Any]]
 
 class Ctx:
     """Who is calling and for which account. Built only by the access checks."""
-    def __init__(self, user, account_id=None, role=None, ip="", user_agent="", token=None):
+    def __init__(self, user, account_id=None, role=None, ip="", user_agent="", token=None, host=""):
         self.user, self.account_id, self.role, self.ip, self.user_agent = user, account_id, role, ip, user_agent
         self.token = token
+        self.host = host
 
 
 ROUTES: List[Tuple[str, "re.Pattern", str, Callable]] = []
@@ -108,7 +109,8 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
 
         if not current_user:
             return 401, {"error": "Authentication required. Please log in.", "code": "UNAUTHORIZED"}
-        ctx = Ctx(current_user, ip=client_ip, user_agent=user_agent, token=current_user.get("token"))
+        ctx = Ctx(current_user, ip=client_ip, user_agent=user_agent, token=current_user.get("token"),
+                  host=hdrs.get("x-forwarded-host") or hdrs.get("host", ""))
 
         if access == "session":
             ctx.account_id = hdrs.get("x-account-id") or None   # optional here (used by /api/auth/me)
@@ -532,15 +534,21 @@ def logs(ctx, m, q, body):
 # WhatsApp: configuration (per account)
 # ==========================================================================
 
-def _wa_public(account_id: str) -> Dict[str, Any]:
+def _wa_public(account_id: str, host: str = "") -> Dict[str, Any]:
+    import os
     cfg = cs.get_whatsapp_public(account_id)
     cfg["webhook_path"] = "/api/webhook/whatsapp"
+    base = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if not base and host:
+        scheme = "http" if host.startswith(("127.0.0.1", "localhost")) else "https"
+        base = f"{scheme}://{host}"
+    cfg["webhook_url"] = base + cfg["webhook_path"] if base else ""
     return cfg
 
 
 @route("GET", r"/api/whatsapp/config", "acct:crm.read")
 def wa_config_get(ctx, m, q, body):
-    return 200, _wa_public(ctx.account_id)
+    return 200, _wa_public(ctx.account_id, ctx.host)
 
 
 @route("POST", r"/api/whatsapp/config", "acct:wa.config")
@@ -550,15 +558,15 @@ def wa_config_save(ctx, m, q, body):
                      "message": "The server has no CREDENTIAL_ENC_KEY, so credentials cannot be stored."}
     try:
         verify = cs.save_whatsapp_account(
-            ctx.account_id, phone_number_id=body.get("phone_number_id", ""), waba_id=body.get("waba_id", ""),
-            business_name=body.get("business_name", ""), phone_number=body.get("phone_number", ""),
+            ctx.account_id, phone_number_id=body.get("phone_number_id"), waba_id=body.get("waba_id"),
+            business_name=body.get("business_name"), phone_number=body.get("phone_number"),
             access_token=body.get("access_token") or "", app_secret=body.get("app_secret") or "")
     except Exception as e:
         if "UNIQUE" in str(e):
             return 409, {"error": "phone_number_in_use", "message": "That WhatsApp phone number id is already connected to another account."}
         raise
     db.log_event("WhatsApp configuration updated.", "INFO", account_id=ctx.account_id)
-    out = {"success": True, "config": _wa_public(ctx.account_id)}
+    out = {"success": True, "config": _wa_public(ctx.account_id, ctx.host)}
     if verify:
         out["verify_token"] = verify          # shown once
     return 200, out
@@ -668,6 +676,8 @@ def deals_create(ctx, m, q, body):
         value = float(body.get("value", 0.0))
     except (TypeError, ValueError):
         return 400, {"error": "Deal value must be a number."}
+    if str(body.get("stage", "lead")) not in DEAL_STAGES:
+        return 400, {"error": "invalid_stage", "allowed": DEAL_STAGES}
     try:
         did = cs.create_deal(ctx.account_id, title, value, stage=body.get("stage", "lead"),
                              contact_id=_int(body.get("contact_id")), currency=body.get("currency", "USD"),
@@ -682,6 +692,8 @@ def deals_stage(ctx, m, q, body):
     stage = str(body.get("stage", "")).strip()
     if not stage:
         return 400, {"error": "Stage is required."}
+    if stage not in DEAL_STAGES:
+        return 400, {"error": "invalid_stage", "allowed": DEAL_STAGES}
     ok = cs.update_deal_stage(ctx.account_id, int(m.group("id")), stage)
     return (200, {"success": True}) if ok else (404, {"error": "Deal not found."})
 
@@ -717,6 +729,10 @@ def bc_run(ctx, m, q, body):
     return 200, {"success": True, "stats": stats}
 
 
+TRIGGER_TYPES = {"welcome", "keyword", "blog_publish"}
+DEAL_STAGES = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
+
+
 @route("GET", r"/api/whatsapp/automations", "acct:crm.read")
 def auto_list(ctx, m, q, body):
     return 200, {"automations": cs.list_automations(ctx.account_id)}
@@ -727,6 +743,10 @@ def auto_create(ctx, m, q, body):
     name, trig, tpl = (str(body.get(k, "")).strip() for k in ("name", "trigger_type", "message_template"))
     if not name or not trig or not tpl:
         return 400, {"error": "Name, trigger type, and message template are required."}
+    if trig not in TRIGGER_TYPES:
+        return 400, {"error": "invalid_trigger", "allowed": sorted(TRIGGER_TYPES)}
+    if trig == "keyword" and not str(body.get("trigger_keyword", "")).strip():
+        return 400, {"error": "keyword_required", "message": "A keyword rule needs trigger_keyword."}
     aid = cs.create_automation(ctx.account_id, name, trig, tpl, trigger_keyword=body.get("trigger_keyword", ""),
                                action_type=body.get("action_type", "send_message"),
                                is_active=bool(body.get("is_active", True)))

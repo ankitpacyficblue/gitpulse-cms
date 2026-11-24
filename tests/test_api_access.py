@@ -159,6 +159,25 @@ class TestCrossAccountIsolationViaApi(Base):
         self.assertEqual(code, 500)
         self.assertEqual(body["code"], "INTERNAL")
 
+    def test_validation_and_partial_config_save(self):
+        o = self.users["owner"]
+        code, b = o("POST", "/api/whatsapp/automations", {"name": "x", "trigger_type": "new_contact", "message_template": "hi"})
+        self.assertEqual((code, b["error"]), (400, "invalid_trigger"))
+        code, b = o("POST", "/api/whatsapp/automations", {"name": "x", "trigger_type": "keyword", "message_template": "hi"})
+        self.assertEqual((code, b["error"]), (400, "keyword_required"))
+        code, b = o("POST", "/api/whatsapp/deals", {"title": "d", "stage": "bogus"})
+        self.assertEqual((code, b["error"]), (400, "invalid_stage"))
+        did = cs.create_deal(self.acct, "S", 1)
+        self.assertEqual(o("PUT", f"/api/whatsapp/deals/{did}/stage", {"stage": "bogus"})[0], 400)
+        self.assertEqual(o("PUT", f"/api/whatsapp/deals/{did}/stage", {"stage": "won"})[0], 200)
+        self.assertEqual(o("POST", "/api/whatsapp/config", {"phone_number_id": "pn-b10", "waba_id": "W1", "business_name": "A"})[0], 200)
+        self.assertEqual(o("POST", "/api/whatsapp/config", {"business_name": "B"})[0], 200)
+        from unittest import mock
+        with mock.patch.dict("os.environ", {"PUBLIC_BASE_URL": "https://preview.example.com/"}):
+            cfg = o("GET", "/api/whatsapp/config")[1]
+        self.assertEqual(cfg["webhook_url"], "https://preview.example.com/api/webhook/whatsapp")
+        self.assertEqual((cfg["waba_id"], cfg["phone_number_id"], cfg["business_name"]), ("W1", "pn-b10", "B"))
+
     def test_deal_cannot_link_foreign_contact(self):
         cid = cs.create_contact(self.other, "Foreign", "+15559990002")
         code, _ = self.users["owner"]("POST", "/api/whatsapp/deals", {"title": "Steal", "contact_id": cid})
