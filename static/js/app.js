@@ -2699,15 +2699,16 @@ async function loadAlerts() {
     const badge = document.getElementById('alerts-count');
     if (!data || !data.alerts) { badge.classList.add('hidden'); list.innerHTML = '<p class="text-xs text-amber-300">Alerts could not be loaded, so problems may be hidden.</p>'; return; }
     const open = data.alerts.filter(a => !a.resolved_at);
-    badge.innerText = open.length;
-    badge.classList.toggle('hidden', !open.length);
+    const problems = open.filter(a => a.severity !== 'info').length;
+    badge.innerText = problems;
+    badge.classList.toggle('hidden', !problems);
     list.innerHTML = open.length ? '<ul class="space-y-2">' + open.map(a => {
         // Only same-app links: '#...' or '/...'.
         const link = /^(#|\/(?!\/))/.test(a.link || '') ? `<a class="btn-secondary text-xs" href="${escapeHtml(a.link)}">Open</a>` : '';
         return `<li class="flex flex-wrap justify-between items-center gap-2 border-t border-slate-800 pt-2">
-            <div class="min-w-0 flex-1"><div class="text-xs ${a.severity === 'warning' ? 'text-amber-300' : 'text-red-300'} break-words">${escapeHtml(a.message)}${a.count > 1 ? ` (${Number(a.count)} times)` : ''}</div>
+            <div class="min-w-0 flex-1"><div class="text-xs ${a.severity === 'info' ? 'text-slate-300' : a.severity === 'warning' ? 'text-amber-300' : 'text-red-300'} break-words">${escapeHtml(a.message)}${a.count > 1 ? ` (${Number(a.count)} times)` : ''}</div>
             <div class="text-[10px] text-slate-500">${escapeHtml([String(a.type || '').replace(/_/g, ' '), fmtWhen(a.last_seen || a.first_seen)].filter(Boolean).join(' · '))}</div></div>
-            ${link}${a.id && can('crm.write') ? `<button type="button" class="btn-secondary text-xs" onclick="resolveAlert(${Number(a.id)})">Resolve</button>` : ''}
+            ${link}${a.id && a.severity !== 'info' && can('crm.write') ? `<button type="button" class="btn-secondary text-xs" onclick="resolveAlert(${Number(a.id)})">Resolve</button>` : ''}
         </li>`;
     }).join('') + '</ul>' : '<p class="text-xs text-slate-400">No problems.</p>';
 }
