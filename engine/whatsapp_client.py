@@ -264,19 +264,28 @@ class WhatsAppClient:
             return conn.execute("SELECT 1 FROM messages WHERE account_id = ? AND wa_message_id = ? AND direction = 'inbound'",
                                 (self.account_id, wa_message_id)).fetchone() is not None
 
-    def _entry_source(self, msg: Dict[str, Any], body: str):
-        """(source, detail): a click-to-WhatsApp ad, a known entry link code, or direct."""
+    def _entry_source(self, msg: Dict[str, Any], body: str) -> Dict[str, str]:
+        """Where this message came from: a known entry link code, a click-to-WhatsApp ad, or direct."""
         ref = msg.get("referral") or {}
-        if ref:
-            return "ad", json.dumps({k: str(ref.get(k, ""))[:300] for k in ("source_id", "headline", "source_url")})
+        detail = json.dumps({k: str(ref.get(k, ""))[:300] for k in ("source_id", "headline", "source_url")}) if ref else ""
         m = re.search(r"\(ref:\s*([A-Za-z0-9_-]{1,40})\)", body or "")
         if m:
             with db.get_connection() as conn:
-                row = conn.execute("SELECT code, label FROM entry_links WHERE account_id = ? AND code = ?",
+                row = conn.execute("SELECT code, label, source, campaign FROM entry_links WHERE account_id = ? AND code = ?",
                                    (self.account_id, m.group(1).upper())).fetchone()
             if row:
-                return row["code"], row["label"]
-        return "direct", ""
+                return {"source": row["source"], "campaign": row["campaign"], "entry_code": row["code"],
+                        "source_detail": detail or row["label"]}
+        return {"source": "ad" if ref else "direct", "campaign": "", "entry_code": "", "source_detail": detail}
+
+    def _record_first_touch(self, contact_id: int, touch: Dict[str, str]) -> None:
+        """Only while nothing is recorded: the first touch is never overwritten."""
+        with db.get_connection() as conn:
+            conn.execute("UPDATE contacts SET source = ?, campaign = ?, entry_code = ?, source_detail = ? "
+                         "WHERE id = ? AND account_id = ? AND source = ''",
+                         (touch["source"], touch["campaign"], touch["entry_code"], touch["source_detail"], contact_id,
+                          self.account_id))
+            conn.commit()
 
     def _process_message(self, msg: Dict[str, Any], names: Dict[str, str]) -> bool:
         from engine import assistant, jobs, messaging
@@ -286,7 +295,7 @@ class WhatsAppClient:
             return False        # Meta redelivers: the same message must not be answered twice
         body = (msg.get("text") or {}).get("body", "") if msg_type == "text" else f"[{msg_type.capitalize()} message received]"
 
-        source, detail = self._entry_source(msg, body)
+        touch = self._entry_source(msg, body)
         contact = cs.get_contact_by_phone(self.account_id, sender)
         is_new = False
         if not contact:
@@ -296,13 +305,13 @@ class WhatsAppClient:
                                         notes="Automatically discovered via inbound WhatsApp message")
             except ValueError:
                 return False
-            with db.get_connection() as conn:
-                conn.execute("UPDATE contacts SET source = ?, source_detail = ? WHERE id = ? AND account_id = ?",
-                             (source, detail, cid, self.account_id))
-                conn.commit()
             contact, is_new = cs.get_contact(self.account_id, cid), True
-        elif source != "direct":
-            db.log_event(f"Contact #{contact['id']} came back through '{source}'.", "INFO", account_id=self.account_id)
+        if not contact["source"]:
+            self._record_first_touch(contact["id"], touch)
+            contact = cs.get_contact(self.account_id, contact["id"])
+        elif touch["source"] != "direct":
+            db.log_event(f"Contact #{contact['id']} came back through '{touch['source']}' "
+                         f"{touch['entry_code']}.", "INFO", account_id=self.account_id)
         conv = cs.get_or_create_conversation(self.account_id, contact["id"])
         cs.create_message(self.account_id, conv["id"], contact["id"], "inbound", body, message_type=msg_type,
                           wa_message_id=wa_id, status="delivered")

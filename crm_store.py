@@ -206,10 +206,19 @@ def init_schema(conn) -> None:
         assignee_id INTEGER, post_url TEXT NOT NULL DEFAULT '', post_id INTEGER, error TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )""")
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS contact_fields (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        name TEXT NOT NULL, type TEXT NOT NULL, options TEXT NOT NULL DEFAULT '[]', archived INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+    )""")
     for table, columns in (
+        ("entry_links", (("source", "TEXT NOT NULL DEFAULT 'website'"), ("campaign", "TEXT NOT NULL DEFAULT ''"))),
         ("contacts", (("consent_status", "TEXT NOT NULL DEFAULT 'unknown'"), ("consent_source", "TEXT NOT NULL DEFAULT ''"),
                       ("consent_at", "TEXT NOT NULL DEFAULT ''"), ("consent_wording", "TEXT NOT NULL DEFAULT ''"),
-                      ("source", "TEXT NOT NULL DEFAULT ''"), ("source_detail", "TEXT NOT NULL DEFAULT ''"))),
+                      ("source", "TEXT NOT NULL DEFAULT ''"), ("source_detail", "TEXT NOT NULL DEFAULT ''"),
+                      ("campaign", "TEXT NOT NULL DEFAULT ''"), ("entry_code", "TEXT NOT NULL DEFAULT ''"),
+                      ("custom", "TEXT NOT NULL DEFAULT '{}'"))),
         ("conversations", (("last_inbound_at", "TEXT NOT NULL DEFAULT ''"), ("needs_human", "INTEGER NOT NULL DEFAULT 0"),
                            ("handoff_reason", "TEXT NOT NULL DEFAULT ''"), ("ai_mode", "TEXT NOT NULL DEFAULT 'on'"),
                            ("ai_paused_at", "REAL NOT NULL DEFAULT 0"))),

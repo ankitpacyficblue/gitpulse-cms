@@ -28,7 +28,7 @@ from config import FRAMEWORK_PRESETS, DEFAULT_AI_PROVIDER
 from engine import accounts_service as svc
 from engine import auth
 from engine import secrets_box
-from engine import assistant, jobs, messaging
+from engine import assistant, contact_fields, jobs, messaging
 from engine.accounts_service import ServiceError
 from engine.auth import (
     authenticate_user, revoke_session, update_user_password, verify_password,
@@ -712,7 +712,12 @@ def _valid_phone(phone: str) -> bool:
 
 @route("GET", r"/api/whatsapp/contacts", "acct:crm.read")
 def contacts_list(ctx, m, q, body):
-    return 200, {"contacts": cs.list_contacts(ctx.account_id, search=q.get("search", ""), tag=q.get("tag", ""))}
+    rows = contact_fields.present(ctx.account_id, cs.list_contacts(ctx.account_id, search=q.get("search", ""),
+                                                                   tag=q.get("tag", "")))
+    try:
+        return 200, {"contacts": contact_fields.filter_contacts(ctx.account_id, rows, q)}
+    except contact_fields.FieldError as e:
+        return e.status, {"error": e.code, "message": e.message}
 
 
 @route("POST", r"/api/whatsapp/contacts", "acct:crm.write")
@@ -723,10 +728,16 @@ def contacts_create(ctx, m, q, body):
     if not _valid_phone(phone):
         return 400, {"error": "invalid_phone", "message": "Enter the phone number with country code, 8 to 15 digits, for example +919876543210."}
     try:
+        custom = contact_fields.validate(ctx.account_id, body.get("custom"))
+    except contact_fields.FieldError as e:
+        return e.status, {"error": e.code, "message": e.message}
+    try:
         cid = cs.create_contact(ctx.account_id, name, phone, email=body.get("email", ""),
                                 tags=body.get("tags") or ["Lead"], notes=body.get("notes", ""))
     except ValueError:
         return 409, {"error": "duplicate_phone", "message": "A contact with this phone number already exists."}
+    if custom:
+        contact_fields.save(ctx.account_id, cid, custom)
     cs.get_or_create_conversation(ctx.account_id, cid)
     return 201, {"success": True, "id": cid, "message": "Contact created successfully."}
 
@@ -735,11 +746,18 @@ def contacts_create(ctx, m, q, body):
 def contacts_update(ctx, m, q, body):
     fields = {k: body[k] for k in ("name", "phone", "email", "tags", "notes", "status") if k in body}
     try:
-        ok = cs.update_contact(ctx.account_id, int(m.group("id")), **fields)
+        custom = contact_fields.validate(ctx.account_id, body.get("custom"))
+    except contact_fields.FieldError as e:
+        return e.status, {"error": e.code, "message": e.message}
+    try:
+        ok = cs.update_contact(ctx.account_id, int(m.group("id")), **fields) if fields else \
+            cs.get_contact(ctx.account_id, int(m.group("id"))) is not None
     except Exception as e:
         if dbcompat.is_unique_violation(e):
             return 409, {"error": "duplicate_phone"}
         raise
+    if ok and custom:
+        contact_fields.save(ctx.account_id, int(m.group("id")), custom)
     return (200, {"success": True}) if ok else (404, {"error": "Contact not found."})
 
 

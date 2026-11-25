@@ -344,17 +344,74 @@ class TickAndAlertTests(Base):
 
 
 class EntryTests(Base):
-    def test_ad_code_and_direct_sources(self):
-        code, link = self.api("POST", "/api/entry-links", {"label": "Website", "code": "web1"})
-        self.assertEqual(code, 201)
+    def link(self, **extra):
+        return self.api("POST", "/api/entry-links", dict({"label": "Website", "code": "web1"}, **extra))
+
+    def test_no_number_no_link(self):
+        code, out = self.link()
+        self.assertEqual((code, out["error"]), (409, "no_number"))
+
+    def test_first_touch_source_and_campaign_are_kept(self):
+        cs.save_whatsapp_account(self.a, phone_number="+91 98000 00000")
+        code, link = self.link(source="social", campaign="diwali")
+        self.assertEqual(code, 201, link)
+        self.assertTrue(link["url"].startswith("https://wa.me/919800000000?text="))
         self.assertTrue(link["prefill"].endswith("(ref: WEB1)"))
-        a = self.inbound("hi", phone=self.phone + "1", referral={"source_id": "ad9", "headline": "Plots"})
-        b = self.inbound("hi (ref: web1)", phone=self.phone + "2")
-        c = self.inbound("hi (ref: NOPE)", phone=self.phone + "3")
-        self.assertEqual((a["source"], b["source"], c["source"]), ("ad", "WEB1", "direct"))
-        self.assertEqual(json.loads(a["source_detail"])["source_id"], "ad9")
-        self.assertEqual(self.inbound("again", phone=self.phone + "2", referral={"source_id": "z"})["source"], "WEB1")
+        ad = self.inbound("hi", phone=self.phone + "1", referral={"source_id": "ad9", "headline": "Plots"})
+        social = self.inbound("hi (ref: web1)", phone=self.phone + "2")
+        direct = self.inbound("hi (ref: NOPE)", phone=self.phone + "3")
+        self.assertEqual((ad["source"], social["source"], social["campaign"], direct["source"]),
+                         ("ad", "social", "diwali", "direct"))
+        self.assertEqual(json.loads(ad["source_detail"])["source_id"], "ad9")
+        again = self.inbound("again", phone=self.phone + "2", referral={"source_id": "z"})
+        self.assertEqual((again["source"], again["campaign"]), ("social", "diwali"))
+        manual = self.phone + "4"
+        cs.create_contact(self.a, "Typed in", "+" + manual)
+        self.assertEqual(self.inbound("hi (ref: WEB1)", phone=manual)["source"], "social")
+        self.assertEqual(self.api("GET", "/api/entry-links")[1]["links"][0]["enquiries"], 2)
         self.assertEqual(self.api_b("DELETE", f"/api/entry-links/{link['id']}")[0], 404)
+
+
+class CustomFieldTests(Base):
+    def field(self, name, kind, **extra):
+        code, out = self.api("POST", "/api/contact-fields", dict({"name": name, "type": kind}, **extra))
+        self.assertEqual(code, 201, out)
+        return str(out["field"]["id"])
+
+    def contacts(self, **query):
+        return self.api("GET", "/api/whatsapp/contacts", query=query)
+
+    def add(self, custom):
+        return self.agent_api("POST", "/api/whatsapp/contacts",
+                              {"name": "C", "phone": "+9198" + str(int.from_bytes(os.urandom(4), "big"))[:8], "custom": custom})
+
+    def test_define_validate_filter_and_archive(self):
+        self.assertEqual(self.agent_api("POST", "/api/contact-fields", {"name": "x", "type": "text"})[0], 403)
+        city, budget = self.field("City", "text"), self.field("Budget", "number")
+        when, phase = self.field("Visit", "date"), self.field("Phase", "select", options=["1", "2"])
+        self.assertEqual(self.api("POST", "/api/contact-fields", {"name": "city", "type": "text"})[0], 409)
+        for bad in ({budget: "lots"}, {when: "tomorrow"}, {phase: "3"}):
+            self.assertEqual(self.add(bad)[0], 400, bad)
+        self.assertEqual(self.contacts()[1]["contacts"], [])                      # nothing saved by a bad request
+        self.assertEqual(self.add({city: "Mysuru", budget: "50", phase: "1", when: "2026-12-05"})[0], 201)
+        self.assertEqual(self.add({city: "Pune", budget: 20})[0], 201)
+        names = lambda **q: len(self.contacts(**q)[1]["contacts"])
+        self.assertEqual(names(**{"cf_" + budget + "_min": "30"}), 1)
+        self.assertEqual(names(**{"cf_" + city: "mys", "cf_" + phase: "1"}), 1)
+        self.assertEqual(names(**{"cf_" + when + "_max": "2026-12-01"}), 0)
+        self.assertEqual(self.api("PATCH", f"/api/contact-fields/{budget}", {"type": "text"})[0], 409)
+        cid = self.contacts(**{"cf_" + city: "pune"})[1]["contacts"][0]["id"]
+        self.assertEqual(self.agent_api("PUT", f"/api/whatsapp/contacts/{cid}", {"custom": {city: ""}})[0], 200)
+        self.assertEqual(names(**{"cf_" + city: "pune"}), 0)
+        self.assertEqual(self.api("DELETE", f"/api/contact-fields/{city}")[0], 200)
+        self.assertTrue(all(city not in c["custom"] for c in self.contacts()[1]["contacts"]))
+        self.assertEqual(self.add({city: "x"})[0], 404)
+
+    def test_other_account_cannot_use_a_field(self):
+        mine = self.field("City", "text")
+        self.assertEqual(self.api_b("GET", "/api/contact-fields")[1]["fields"], [])
+        self.assertEqual(self.api_b("GET", "/api/whatsapp/contacts", query={"cf_" + mine: "x"})[0], 404)
+        self.assertEqual(self.api_b("DELETE", f"/api/contact-fields/{mine}")[0], 404)
 
 
 class BlogPlanTests(Base):

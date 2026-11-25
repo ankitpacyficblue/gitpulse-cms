@@ -9,7 +9,8 @@ import urllib.parse
 
 import crm_store as cs
 import database as db
-from engine import alerts, assistant, blog_plan, jobs, messaging
+import dbcompat
+from engine import alerts, assistant, blog_plan, contact_fields, jobs, messaging
 from engine.whatsapp_client import WhatsAppClient
 from server.routes_api import route
 
@@ -138,34 +139,44 @@ def _wa_link(account_id: str, prefill: str) -> str:
     return f"https://wa.me/{phone}?text={urllib.parse.quote(prefill)}" if phone else ""
 
 
+LINK_SOURCES = ("website", "ad", "social", "other")
+
+
 @route("GET", r"/api/entry-links", "acct:crm.read")
 def entry_links_list(ctx, m, q, body):
     with db.get_connection() as conn:
-        rows = [dict(r) for r in conn.execute("SELECT id, label, code, prefill FROM entry_links WHERE account_id = ? "
-                                              "ORDER BY id", (ctx.account_id,)).fetchall()]
-        counts = {r["source"]: r["n"] for r in conn.execute(
+        rows = [dict(r) for r in conn.execute("SELECT id, label, code, prefill, source, campaign FROM entry_links "
+                                              "WHERE account_id = ? ORDER BY id", (ctx.account_id,)).fetchall()]
+        by_code = {r["entry_code"]: r["n"] for r in conn.execute(
+            "SELECT entry_code, COUNT(*) AS n FROM contacts WHERE account_id = ? AND entry_code != '' GROUP BY entry_code",
+            (ctx.account_id,)).fetchall()}
+        by_source = {r["source"]: r["n"] for r in conn.execute(
             "SELECT source, COUNT(*) AS n FROM contacts WHERE account_id = ? AND source != '' GROUP BY source",
             (ctx.account_id,)).fetchall()}
     for r in rows:
         r["url"] = _wa_link(ctx.account_id, r["prefill"])
-    return 200, {"links": rows, "enquiries_by_source": counts}
+        r["enquiries"] = by_code.get(r["code"], 0)
+    return 200, {"links": rows, "enquiries_by_source": by_source, "has_number": bool(_wa_link(ctx.account_id, "x"))}
 
 
 @route("POST", r"/api/entry-links", "acct:automations.manage")
 def entry_links_create(ctx, m, q, body):
     label = str(body.get("label") or "").strip()[:100]
     code = str(body.get("code") or "").strip().upper() or secrets.token_hex(3).upper()
-    if not label or not re.fullmatch(r"[A-Z0-9_-]{1,40}", code) or code in ("AD", "DIRECT"):
-        return 400, {"error": "invalid_input", "message": "A label is required; the code is up to 40 letters, digits, - or _."}
+    source = str(body.get("source") or "website")
+    if not label or not re.fullmatch(r"[A-Z0-9_-]{1,40}", code) or source not in LINK_SOURCES:
+        return 400, {"error": "invalid_input", "message": "A label is required; source is website, ad, social or other; "
+                                                          "the code is up to 40 letters, digits, - or _."}
+    if not _wa_link(ctx.account_id, "x"):
+        return 409, {"error": "no_number", "message": "Save this account's WhatsApp number first (WhatsApp setup)."}
     prefill = f"{str(body.get('message') or 'Hi, I would like to know more.').strip()[:300]} (ref: {code})"
     try:
         with db.get_connection() as conn:
-            cur = conn.execute("INSERT INTO entry_links (account_id, label, code, prefill, created_at) VALUES (?,?,?,?,?)",
-                               (ctx.account_id, label, code, prefill, cs._now()))
-            link_id = cur.lastrowid
+            link_id = conn.execute("INSERT INTO entry_links (account_id, label, code, prefill, source, campaign, created_at) "
+                                   "VALUES (?,?,?,?,?,?,?)", (ctx.account_id, label, code, prefill, source,
+                                   str(body.get("campaign") or "").strip()[:100], cs._now())).lastrowid
             conn.commit()
     except Exception as e:
-        import dbcompat
         if dbcompat.is_unique_violation(e):
             return 409, {"error": "duplicate_code"}
         raise
@@ -179,6 +190,42 @@ def entry_links_delete(ctx, m, q, body):
                           (int(m.group("id")), ctx.account_id)).rowcount > 0
         conn.commit()
     return (200, {"success": True}) if ok else (404, {"error": "Entry link not found."})
+
+
+# ------------------------------------------------------------------ custom contact fields
+
+def _field_error(e):
+    return e.status, {"error": e.code, "message": e.message}
+
+
+@route("GET", r"/api/contact-fields", "acct:crm.read")
+def fields_list(ctx, m, q, body):
+    return 200, {"fields": contact_fields.list_fields(ctx.account_id)}
+
+
+@route("POST", r"/api/contact-fields", "acct:automations.manage")
+def fields_create(ctx, m, q, body):
+    try:
+        return 201, {"success": True, "field": contact_fields.create(ctx.account_id, body)}
+    except contact_fields.FieldError as e:
+        return _field_error(e)
+
+
+@route("PATCH", r"/api/contact-fields/(?P<id>\d+)", "acct:automations.manage")
+def fields_update(ctx, m, q, body):
+    try:
+        return 200, {"success": True, "field": contact_fields.update(ctx.account_id, int(m.group("id")), body)}
+    except contact_fields.FieldError as e:
+        return _field_error(e)
+
+
+@route("DELETE", r"/api/contact-fields/(?P<id>\d+)", "acct:automations.manage")
+def fields_delete(ctx, m, q, body):
+    try:
+        contact_fields.archive(ctx.account_id, int(m.group("id")))
+    except contact_fields.FieldError as e:
+        return _field_error(e)
+    return 200, {"success": True}
 
 
 # ------------------------------------------------------------------ blog plan
