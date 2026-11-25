@@ -14,6 +14,8 @@ import os
 import re
 import sqlite3
 import ssl
+import threading
+import time
 from typing import Any, List, Optional, Sequence
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -192,8 +194,9 @@ class PGCursor:
 
 
 class PGConnection:
-    def __init__(self, raw):
+    def __init__(self, raw, keep: bool = False):
         self._raw = raw
+        self._keep = keep      # keep=True: close() hands the connection back to the per-thread cache
 
     def cursor(self):
         return PGCursor(self._raw.cursor())
@@ -208,6 +211,13 @@ class PGConnection:
         self._raw.rollback()
 
     def close(self):
+        if self._keep:
+            _cache.busy = False
+            try:
+                self._raw.rollback()      # end any open transaction; the socket stays open for reuse
+            except Exception:
+                _drop_cached(self._raw)
+            return
         try:
             self._raw.close()
         except Exception:
@@ -252,7 +262,49 @@ def ssl_context(url: str):
     return ctx
 
 
+_cache = threading.local()
+_IDLE_PING_SEC = 20
+
+
+def _drop_cached(raw=None) -> None:
+    cur = getattr(_cache, "conn", None)
+    if cur is not None and (raw is None or cur[0] is raw):
+        try:
+            cur[0].close()
+        except Exception:
+            pass
+        _cache.conn = None
+
+
 def connect_postgres() -> PGConnection:
+    """One live connection per thread, reused across calls: opening a new TLS + SCRAM connection costs
+    1-2 s from a serverless region, and a single login makes about ten database calls."""
+    if getattr(_cache, "busy", False):
+        # Nested use while the cached connection is checked out: a separate connection keeps transactions apart.
+        return PGConnection(_open_postgres())
+    cur = getattr(_cache, "conn", None)
+    if cur is not None:
+        raw, last = cur
+        if time.time() - last > _IDLE_PING_SEC:
+            try:
+                c = raw.cursor()
+                c.execute("SELECT 1")
+                c.fetchall()
+                raw.rollback()
+            except Exception:
+                _drop_cached(raw)
+                cur = None
+        if cur is not None:
+            _cache.conn = (raw, time.time())
+            _cache.busy = True
+            return PGConnection(raw, keep=True)
+    raw = _open_postgres()
+    _cache.conn = (raw, time.time())
+    _cache.busy = True
+    return PGConnection(raw, keep=True)
+
+
+def _open_postgres():
     import pg8000.dbapi  # imported lazily: only needed when DATABASE_URL is set
     url = database_url()
     u = urlparse(url)
@@ -271,7 +323,7 @@ def connect_postgres() -> PGConnection:
         cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
         cur.execute(f"SET search_path TO {schema}")
         raw.commit()
-    return PGConnection(raw)
+    return raw
 
 
 def connect_sqlite(path) -> sqlite3.Connection:

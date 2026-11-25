@@ -110,6 +110,33 @@ class WrapperTests(unittest.TestCase):
                 os.environ["DATABASE_URL"] = old
 
 
+class PoolTests(unittest.TestCase):
+    def test_connection_reused_and_nested_use_gets_separate_one(self):
+        import threading
+        opened = []
+
+        class Raw(FakeConn):
+            def __init__(self):
+                super().__init__()
+                opened.append(self)
+
+        dbcompat._cache = threading.local()
+        orig = dbcompat._open_postgres
+        dbcompat._open_postgres = lambda: Raw()
+        try:
+            with dbcompat.connect_postgres() as a:
+                with dbcompat.connect_postgres() as b:      # nested: must not share a's transaction
+                    self.assertIsNot(a._raw, b._raw)
+            with dbcompat.connect_postgres() as c:          # sequential: reuses the cached connection
+                self.assertIs(c._raw, a._raw)
+            self.assertEqual(len(opened), 2)
+            self.assertNotIn("close", a._raw.events)        # cached connection is not closed
+            self.assertIn("close", b._raw.events)           # non-cached one is
+        finally:
+            dbcompat._open_postgres = orig
+            dbcompat._cache = threading.local()
+
+
 class UniqueTests(unittest.TestCase):
     def test_detects_sqlite_and_postgres(self):
         self.assertTrue(dbcompat.is_unique_violation(Exception("UNIQUE constraint failed: contacts.phone_norm")))
