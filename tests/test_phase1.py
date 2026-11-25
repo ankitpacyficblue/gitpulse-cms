@@ -69,7 +69,7 @@ class Base(unittest.TestCase):
 
     def alerts(self, kind=None):
         _, body = self.api("GET", "/api/alerts")
-        return [a for a in body["alerts"] if a["type"] != "worker_stalled" and (kind is None or a["type"] == kind)]
+        return [a for a in body["alerts"] if a["id"] is not None and (kind is None or a["type"] == kind)]
 
     def close_window(self):
         old = (datetime.utcnow() - timedelta(hours=25)).isoformat()
