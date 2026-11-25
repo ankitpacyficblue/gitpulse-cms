@@ -235,6 +235,23 @@ def list_accounts_for_user(user_id: int) -> List[Dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def list_all_accounts(user_id: int) -> List[Dict[str, Any]]:
+    """Platform admins see every active account; role is theirs if they are a member, else "owner"
+    (platform support access), and member_count helps them find empty or abandoned accounts."""
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT a.id, a.name, a.default_currency,
+                   (SELECT COUNT(*) FROM memberships mm WHERE mm.account_id = a.id) AS member_count,
+                   (SELECT m.role FROM memberships m WHERE m.account_id = a.id AND m.user_id = ?) AS my_role
+            FROM accounts a WHERE a.status = 'active' ORDER BY a.name""", (user_id,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["role"] = d.pop("my_role") or "owner"
+        out.append(d)
+    return out
+
+
 def get_membership_role(account_id: str, user_id: int) -> Optional[str]:
     with get_connection() as conn:
         row = conn.execute("""

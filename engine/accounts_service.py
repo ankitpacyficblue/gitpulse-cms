@@ -129,4 +129,10 @@ def delete_account(account_id: str, actor_role: str, confirm_name: str) -> None:
         raise ServiceError(404, "not_found", "Account not found.")
     if (confirm_name or "").strip() != acct["name"]:
         raise ServiceError(400, "confirm_name_mismatch", "Type the account name to confirm deletion.")
+    member_ids = [m["user_id"] for m in cs.list_members(account_id)]
     cs.soft_delete_account(account_id)
+    # Logins that belonged only to this account are removed with it (never platform admins or shared logins).
+    for uid in member_ids:
+        u = auth.get_user_by_id(uid)
+        if u and not u["is_platform_admin"] and not cs.list_accounts_for_user(uid):
+            auth.delete_user(uid)
