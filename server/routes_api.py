@@ -25,6 +25,7 @@ import crm_store as cs
 import database as db
 from config import FRAMEWORK_PRESETS, DEFAULT_AI_PROVIDER
 from engine import accounts_service as svc
+from engine import auth
 from engine import secrets_box
 from engine.accounts_service import ServiceError
 from engine.auth import (
@@ -376,6 +377,30 @@ def users_remove(ctx, m, q, body):
 # ==========================================================================
 
 _SENSITIVE = ("key", "secret", "token", "password")
+
+
+@route("GET", r"/api/users", "platform")
+def platform_users(ctx, m, q, body):
+    """All logins with their number of active accounts; ?orphans=1 lists only logins with no account."""
+    users = [u for u in auth.list_users_with_account_counts() if not (q.get("orphans") in ("1", "true") and u["account_count"] > 0)]
+    return 200, {"users": users}
+
+
+@route("DELETE", r"/api/users/(?P<uid>\d+)", "platform")
+def platform_user_delete(ctx, m, q, body):
+    """Platform admin removes a login that belongs to no account (left over from deleted accounts)."""
+    uid = int(m.group("uid"))
+    target = auth.get_user_by_id(uid)
+    if not target:
+        return 404, {"error": "not_found", "message": "No such user."}
+    if uid == ctx.user["id"] or target["is_platform_admin"]:
+        return 403, {"error": "forbidden", "message": "Platform admins cannot be deleted here."}
+    n = len(cs.list_accounts_for_user(uid))
+    if n:
+        return 409, {"error": "has_accounts", "message": f"This login still belongs to {n} account(s). Remove it from them first."}
+    auth.delete_user(uid)
+    db.log_event(f"Orphan login #{uid} deleted by platform admin.", "INFO")
+    return 200, {"success": True}
 
 
 @route("GET", r"/api/settings", "platform")

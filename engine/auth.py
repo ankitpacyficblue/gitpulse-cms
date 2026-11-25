@@ -11,7 +11,7 @@ import hmac
 import base64
 import os
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, List, Tuple
 from database import get_connection, log_event
 
 # Security Parameters
@@ -116,6 +116,17 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
                           FROM users WHERE id = ?""", (user_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+def list_users_with_account_counts() -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT u.id, u.username, COALESCE(u.email, '') AS email, COALESCE(u.is_active, 1) AS is_active,
+                   COALESCE(u.is_platform_admin, 0) AS is_platform_admin, u.created_at,
+                   (SELECT COUNT(*) FROM memberships m JOIN accounts a ON a.id = m.account_id
+                    WHERE m.user_id = u.id AND a.status = 'active') AS account_count
+            FROM users u ORDER BY u.username""").fetchall()
+    return [dict(r) for r in rows]
+
 
 def delete_user(user_id: int) -> bool:
     """Delete a login that belongs to no account. Callers must check memberships first.

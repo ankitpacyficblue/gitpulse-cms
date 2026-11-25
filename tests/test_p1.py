@@ -299,3 +299,26 @@ class EmptyConversationFilterTests(P1Base):
         join(a, ua, "owner"); join(b, ub, "owner")
         cid = Caller(ua, a)("POST", "/api/whatsapp/contacts", {"name": "X", "phone": "+919811100002"})[1]["id"]
         self.assertEqual(Caller(ub, b)("GET", "/api/whatsapp/conversations", query={"contact_id": str(cid)})[1]["conversations"], [])
+
+
+class OrphanUserTests(P1Base):
+    def test_platform_admin_lists_and_purges_orphans_only(self):
+        pa = new_user("pa-orph", platform_admin=True)
+        c = Caller(pa, None)
+        orphan, member = new_user("orph"), new_user("memb")
+        join(new_account(), member, "agent")
+        oid = orphan["id"] if isinstance(orphan, dict) else orphan
+        mid = member["id"] if isinstance(member, dict) else member
+        listed = {u["id"]: u for u in c("GET", "/api/users", query={"orphans": "1"})[1]["users"]}
+        self.assertIn(oid, listed)
+        self.assertNotIn(mid, listed)
+        code, body = c("DELETE", f"/api/users/{mid}")
+        self.assertEqual((code, body["error"]), (409, "has_accounts"))
+        self.assertEqual(c("DELETE", f"/api/users/{oid}")[0], 200)
+        self.assertIsNone(auth.get_user_by_id(oid))
+        self.assertEqual(c("DELETE", f"/api/users/{oid}")[0], 404)
+        self.assertEqual(c("DELETE", f"/api/users/{pa['id'] if isinstance(pa, dict) else pa}")[0], 403)
+
+    def test_non_platform_admin_denied(self):
+        self.assertEqual(self.c["owner"]("GET", "/api/users")[0], 403)
+        self.assertEqual(self.c["owner"]("DELETE", f"/api/users/{self.ids['viewer']}")[0], 403)
