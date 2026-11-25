@@ -200,6 +200,25 @@ class WhatsAppClient:
             out.append(param)
         return out
 
+    def audience(self, target_tag: str) -> List[Dict[str, Any]]:
+        contacts = cs.list_contacts(self.account_id)
+        if target_tag == "all":
+            return contacts
+        return [c for c in contacts if target_tag.lower() in [t.lower() for t in c.get("tags", [])]]
+
+    def preview_broadcast(self, template: Dict[str, Any], target_tag: str) -> Dict[str, Any]:
+        """What a send would do now, by the same rules. Nothing is stored or sent."""
+        from engine import messaging
+        contacts, skipped = self.audience(target_tag), {}
+        for contact in contacts:
+            try:
+                messaging.check(contact, {}, template)
+            except messaging.Blocked as b:
+                skipped[b.code] = skipped.get(b.code, 0) + 1
+        n_skipped = sum(skipped.values())
+        return {"audience": len(contacts), "will_send": len(contacts) - n_skipped, "skipped_count": n_skipped,
+                "skipped": skipped}
+
     def execute_broadcast(self, broadcast_id: int) -> Dict[str, Any]:
         """Queue an approved template, one job per recipient. A broadcast runs once."""
         from engine import messaging
@@ -220,9 +239,7 @@ class WhatsAppClient:
             return {"success": False, "error": "This broadcast has already been run.", "code": "already_run"}
 
         target_tag = broadcast.get("target_tag", "all")
-        contacts = cs.list_contacts(self.account_id)
-        if target_tag != "all":
-            contacts = [c for c in contacts if target_tag.lower() in [t.lower() for t in c.get("tags", [])]]
+        contacts = self.audience(target_tag)
 
         queued, skipped = 0, {}
         params = json.loads(broadcast.get("template_params") or "[]")

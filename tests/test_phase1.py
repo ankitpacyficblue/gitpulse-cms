@@ -164,7 +164,7 @@ class ReplyTests(Base):
     def test_provider_error_hands_off_with_alert_and_no_filler(self):
         self.llm_reply = llm.LLMError("AI provider returned HTTP 500")
         self.inbound()
-        self.assertEqual([m["body"] for m in self.out()], [assistant.DEFAULT_HANDOFF])
+        self.assertEqual([m["body"] for m in self.out()], [f"{assistant.DISCLOSURE}\n\n{assistant.DEFAULT_HANDOFF}"])
         self.assertEqual(len(self.alerts("ai_failed")), 1)
 
     def test_media_hands_off_and_reaction_is_ignored(self):
@@ -342,6 +342,24 @@ class TickAndAlertTests(Base):
             db.set_setting("worker_last_tick", str(time.time()))
             self.api("GET", "/api/alerts")
         self.assertEqual(tick.call_count, 1)
+
+
+class UatTests(Base):
+    def test_a_first_message_that_hands_off_still_says_it_is_automated(self):
+        self.api("PUT", "/api/ai/knowledge", {"ai_enabled": True, "business_name": "Villa"})
+        self.llm_reply = {"reply": "", "confident": False, "reason": "unsure"}
+        self.inbound("Can I speak to someone?")
+        self.assertIn(assistant.DISCLOSURE, self.out()[-1]["body"])
+
+    def test_broadcast_preview_counts_who_is_skipped_and_sends_nothing(self):
+        self.sync_templates()
+        cs.create_contact(self.a, "A", "+" + self.phone + "1")
+        out = cs.create_contact(self.a, "B", "+" + self.phone + "2")
+        messaging.set_consent(self.a, out, "opted_out", "test")
+        code, res = self.api("POST", "/api/whatsapp/broadcasts/preview",
+                             {"template_name": "mock_approved", "template_language": "en"})
+        self.assertEqual((code, res["audience"], res["will_send"], res["skipped"]), (200, 2, 1, {"opted_out": 1}))
+        self.assertEqual(cs.list_messages(self.a, cs.get_or_create_conversation(self.a, out)["id"]), [])
 
 
 class EntryTests(Base):
