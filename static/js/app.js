@@ -729,7 +729,7 @@ function updateSplitPreview() {
     // Render markdown to preview pane
     const previewEl = document.getElementById('editor-live-preview');
     if (window.marked) {
-        previewEl.innerHTML = marked.parse(md);
+        previewEl.replaceChildren(sanitizeHtml(marked.parse(md)));
     } else {
         previewEl.innerText = md;
     }
@@ -3056,7 +3056,7 @@ function planButton(i, compact) {
         <div class="flex flex-wrap justify-between items-start gap-2">
             <div class="min-w-0 flex-1">
                 <h3 class="text-sm font-semibold text-white break-words">${escapeHtml(i.title)}</h3>
-                <div class="text-[11px] text-slate-400">${escapeHtml([fmtWhen(i.publish_at) || 'No date yet', i.keyword, i.assignee_name].filter(Boolean).join(' · '))}</div>
+                <div class="text-[11px] text-slate-400">${escapeHtml([fmtIst(i.publish_at) || 'No date yet', i.keyword, i.writer ? `Writer ${i.writer}` : i.assignee_name].filter(Boolean).join(' · '))}</div>
                 <div class="text-xs font-semibold ${colour}">${escapeHtml(label)}${i.error ? ': ' + escapeHtml(i.error) : ''}</div>
                 ${/^https?:\/\//.test(i.post_url || '') ? `<a class="text-xs text-indigo-300 underline break-all" href="${escapeHtml(i.post_url)}" target="_blank" rel="noopener">View published post</a>` : ''}
             </div>
@@ -3080,16 +3080,11 @@ function renderPlan() {
     const lead = (planMonth.getDay() + 6) % 7;
     let cells = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => `<div class="text-[10px] text-slate-500 text-center">${d}</div>`).join('') + '<div></div>'.repeat(lead);
     for (let d = 1; d <= days; d++) {
-        const day = new Date(planMonth.getFullYear(), planMonth.getMonth(), d).toDateString();
-        cells += `<div class="border border-slate-800 rounded p-1 min-h-[3.5rem] min-w-0"><div class="text-[10px] text-slate-400">${d}</div>${items.filter(i => i.publish_at && new Date(i.publish_at).toDateString() === day).map(i => planButton(i, true)).join('')}</div>`;
+        const day = `${planMonth.getFullYear()}-${String(planMonth.getMonth() + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        cells += `<div class="border border-slate-800 rounded p-1 min-h-[3.5rem] min-w-0"><div class="text-[10px] text-slate-400">${d}</div>${items.filter(i => i.publish_at && istDay(i.publish_at) === day).map(i => planButton(i, true)).join('')}</div>`;
     }
     list.className = 'grid grid-cols-7 gap-1';
     list.innerHTML = cells;
-}
-function localInput(iso) {
-    if (!iso) return '';
-    const d = new Date(iso);
-    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 function previewPlan() { document.getElementById('plan-preview').innerHTML = postPreviewHtml(document.getElementById('plan-body').value, planImages); }
 async function editPlan(id) {
@@ -3114,9 +3109,10 @@ async function editPlan(id) {
         if (item.assignee_id && ![...people.options].some(o => o.value === String(item.assignee_id))) people.add(new Option(item.assignee_name || 'Teammate', String(item.assignee_id)));
         const set = (k, v) => { document.getElementById(k).value = v == null ? '' : v; };
         set('plan-title', item.title); set('plan-topic', item.topic); set('plan-keyword', item.keyword);
-        set('plan-when', localInput(item.publish_at)); set('plan-project', item.project_id); set('plan-assignee', item.assignee_id); set('plan-body', item.body);
+        set('plan-when', istInput(item.publish_at)); set('plan-project', item.project_id); set('plan-assignee', item.assignee_id); set('plan-body', item.body);
     }
     setPlanImages(item && item.images);
+    await fillWriterSelect(item);
     el('plan-reject-box').classList.add('hidden');
     el('plan-reject-note').value = '';
     const rejected = el('plan-rejected');
@@ -3144,14 +3140,16 @@ async function editPlan(id) {
 function closePlanForm() { planEditing = null; document.getElementById('plan-form').classList.add('hidden'); }
 function planBody() {
     const val = k => document.getElementById(k).value.trim();
-    return { title: val('plan-title'), topic: val('plan-topic'), keyword: val('plan-keyword'), publish_at: val('plan-when') ? new Date(val('plan-when')).toISOString() : null,
-             project_id: Number(val('plan-project')) || val('plan-project'), assignee_id: val('plan-assignee') ? Number(val('plan-assignee')) : null, body: document.getElementById('plan-body').value, images: imagesPayload(planImages) };
+    return { title: val('plan-title'), topic: val('plan-topic'), keyword: val('plan-keyword'), publish_at: istToIso(val('plan-when')),
+             project_id: Number(val('plan-project')) || val('plan-project'), assignee_id: val('plan-assignee') ? Number(val('plan-assignee')) : null, body: document.getElementById('plan-body').value, images: imagesPayload(planImages),
+             ...(writerChoice() === undefined ? {} : { writer_token_id: writerChoice() }) };
 }
 function planDirty() {
     if (!planEditing) return false;
     const b = planBody();
-    return ['title', 'topic', 'keyword', 'body'].some(k => (planEditing[k] || '') !== b[k]) || localInput(planEditing.publish_at) !== document.getElementById('plan-when').value
+    return ['title', 'topic', 'keyword', 'body'].some(k => (planEditing[k] || '') !== b[k]) || istInput(planEditing.publish_at) !== document.getElementById('plan-when').value
         || JSON.stringify(imagesPayload(planEditing.images)) !== JSON.stringify(b.images)
+        || (writerChoice() !== undefined && (planEditing.writer_token_id || null) !== writerChoice())
         || String(planEditing.project_id || '') !== String(b.project_id || '') || String(planEditing.assignee_id || '') !== String(b.assignee_id || '');
 }
 async function savePlan(e) {

@@ -1201,9 +1201,10 @@ def render_dashboard_html() -> str:
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div><label for="plan-topic" class="block text-xs text-slate-400 mb-1">Topic</label><input id="plan-topic" class="input-text text-sm w-full" maxlength="300"></div>
                         <div><label for="plan-keyword" class="block text-xs text-slate-400 mb-1">Target keyword</label><input id="plan-keyword" class="input-text text-sm w-full" maxlength="100"></div>
-                        <div><label for="plan-when" class="block text-xs text-slate-400 mb-1">Publish date and time (your local time)</label><input id="plan-when" class="input-text text-sm w-full" type="datetime-local" required></div>
+                        <div><label for="plan-when" class="block text-xs text-slate-400 mb-1">Publish date and time (India time)</label><input id="plan-when" class="input-text text-sm w-full" type="datetime-local" required></div>
                         <div><label for="plan-project" class="block text-xs text-slate-400 mb-1">Blog project</label><select id="plan-project" class="input-select text-sm w-full" required></select></div>
                         <div><label for="plan-assignee" class="block text-xs text-slate-400 mb-1">Assignee</label><select id="plan-assignee" class="input-select text-sm w-full" ></select></div>
+                        <div id="plan-writer-wrap" class="hidden"><label for="plan-writer" class="block text-xs text-slate-400 mb-1">AI writer</label><select id="plan-writer" class="input-select text-sm w-full"></select></div>
                     </div>
                     <div><label for="plan-body" class="block text-xs text-slate-400 mb-1">Article (Markdown)</label><textarea id="plan-body" class="input-text text-sm w-full font-mono" rows="10" oninput="previewPlan()"></textarea></div>
                     <div>
@@ -1213,7 +1214,7 @@ def render_dashboard_html() -> str:
                     </div>
                 </fieldset>
                 <details><summary class="text-xs text-indigo-300 cursor-pointer">Preview</summary><div id="plan-preview" class="text-sm text-slate-200 mt-2 break-words"></div></details>
-                <p class="text-[11px] text-slate-500">Approved posts publish within 3 hours of the scheduled time.</p>
+                <p class="text-[11px] text-slate-500">Approved posts publish within 3 hours of the scheduled time, directly to the website.</p>
                 <div id="plan-reject-box" class="hidden space-y-2">
                     <label for="plan-reject-note" class="block text-xs text-slate-400">Why is it rejected?</label>
                     <textarea id="plan-reject-note" class="input-text text-sm w-full" rows="2" maxlength="1000"></textarea>
@@ -1293,6 +1294,7 @@ def render_dashboard_html() -> str:
                     <p class="text-xs text-slate-400">For AI writer agents. A token can only upload images and submit drafts. It can never publish: every draft waits for an admin to approve it.</p>
                     <form onsubmit="createWriterToken(event)" class="flex flex-wrap items-end gap-2">
                         <div class="flex-1 min-w-[12rem]"><label for="token-name" class="block text-xs font-medium text-slate-300 mb-1">Writer name</label><input id="token-name" class="input-text text-xs w-full" required maxlength="80" placeholder="e.g. Toby"></div>
+                        <div class="min-w-[10rem]"><label for="token-project" class="block text-xs font-medium text-slate-300 mb-1">Default blog project</label><select id="token-project" class="input-select text-xs w-full"></select></div>
                         <button type="submit" class="btn-primary text-xs py-2 px-3">Create token</button>
                     </form>
                     <div id="token-new" class="hidden border border-amber-500/40 rounded-lg p-3 space-y-2" role="status">

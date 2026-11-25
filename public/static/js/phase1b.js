@@ -14,6 +14,37 @@ function thumbHtml(m, cls) {
     return `<div class="${cls} flex items-center justify-center rounded bg-slate-950 text-xs text-slate-400">${kind}</div>`;
 }
 
+// --- Untrusted text: rendered Markdown keeps only plain formatting tags and web links ---
+const SAFE_TAGS = new Set('A B BLOCKQUOTE BR CODE DEL EM H1 H2 H3 H4 H5 H6 HR I IMG LI OL P PRE STRONG TABLE TBODY TD TH THEAD TR UL'.split(' '));
+const SAFE_ATTRS = { A: ['href', 'title'], IMG: ['src', 'alt', 'title'] };
+function sanitizeHtml(html) {
+    const tpl = document.createElement('template'); // inert: nothing loads or runs while we clean it
+    tpl.innerHTML = html;
+    tpl.content.querySelectorAll('*').forEach(node => {
+        const tag = node.tagName;
+        if (!SAFE_TAGS.has(tag)) {
+            if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'SVG', 'MATH', 'TEMPLATE'].includes(tag.toUpperCase())) node.remove();
+            else node.replaceWith(...node.childNodes);
+            return;
+        }
+        [...node.attributes].forEach(a => {
+            const ok = (SAFE_ATTRS[tag] || []).includes(a.name) && (a.name !== 'href' && a.name !== 'src' || /^(https?:|mailto:|#|\/(?!\/))/i.test(a.value.trim()));
+            if (!ok) node.removeAttribute(a.name);
+        });
+        if (tag === 'A') { node.target = '_blank'; node.rel = 'noopener noreferrer'; }
+    });
+    return tpl.content;
+}
+
+// --- Blog times are shown and entered in India time ---
+const IST_OFFSET_MS = 5.5 * 3600 * 1000;
+const fmtIst = v => v ? `${new Date(v).toLocaleString([], { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} IST` : '';
+const istInput = v => v ? new Date(new Date(v).getTime() + IST_OFFSET_MS).toISOString().slice(0, 16) : '';
+const istToIso = v => v ? new Date(`${v}:00+05:30`).toISOString() : null;
+const istDay = v => new Date(new Date(v).getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+// Late: approved, and more than one scheduler run (3 hours) past its time.
+const isLate = i => i.status === 'approved' && !!i.publish_at && Date.now() - new Date(i.publish_at).getTime() > 3 * 3600 * 1000;
+
 // --- Upload: ask for a signed URL, PUT the file there, then confirm ---
 async function uploadMedia(file, onProgress) {
     const limit = MEDIA_LIMITS[file.type];
@@ -178,8 +209,9 @@ async function rejectFromEditor() {
 }
 
 // --- Blog status and review queue ---
-const postState = i => i.status === 'draft' && i.rejected_note ? 'rejected' : i.status;
-const POST_STATES = { needs_approval: ['In review', 'text-amber-300'], approved: ['Approved, scheduled', 'text-cyan-300'], published: ['Published', 'text-emerald-400'],
+const STATE_NAMES = { in_review: 'needs_approval', scheduled: 'approved' };
+const postState = i => STATE_NAMES[i.state] || i.state || (i.status === 'draft' && i.rejected_note ? 'rejected' : i.status);
+const POST_STATES = { needs_approval: ['In review', 'text-amber-300'], approved: ['Scheduled', 'text-cyan-300'], published: ['Published', 'text-emerald-400'],
     failed: ['Failed', 'text-red-300'], rejected: ['Rejected', 'text-red-300'], draft: ['Draft', 'text-slate-300'] };
 let statusItems = [], statusFilter = '';
 async function fetchPlan() {
@@ -216,7 +248,7 @@ function renderReviewQueue() {
         const id = Number(i.id), imgs = i.images || [];
         return `<article class="${cardClass}">
             <h3 class="text-sm font-semibold text-white break-words">${escapeHtml(i.title)}</h3>
-            <p class="text-[11px] text-slate-400">${escapeHtml([i.publish_at ? `Scheduled ${fmtWhen(i.publish_at)}` : 'No date yet', i.assignee_name, `${imgs.length} image${imgs.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '))}</p>
+            <p class="text-[11px] text-slate-400">${escapeHtml([i.publish_at ? `Scheduled ${fmtIst(i.publish_at)}` : 'No date yet', i.writer ? `Writer ${i.writer}` : i.assignee_name, `${imgs.length} image${imgs.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '))}</p>
             <div class="flex flex-wrap gap-2 mt-2">${imgs.map(m => thumbHtml({ ...m, mime: 'image/' }, 'w-16 h-16')).join('')}</div>
             <details class="mt-2"><summary class="text-xs text-indigo-300 cursor-pointer">Read the post</summary><div class="text-sm text-slate-200 mt-2">${postPreviewHtml(i.body, imgs)}</div></details>
             ${can('content.publish') ? `<div class="flex flex-wrap gap-2 mt-3">
@@ -225,7 +257,8 @@ function renderReviewQueue() {
             <form class="hidden mt-2 space-y-2" data-form="${id}">
                 <label for="reject-${id}" class="block text-xs text-slate-400">Why is it rejected?</label>
                 <textarea id="reject-${id}" class="input-text text-sm w-full" rows="2" required maxlength="1000"></textarea>
-                <button type="submit" class="btn-secondary text-xs">Send back</button></form>` : ''}
+                <button type="submit" class="btn-secondary text-xs">Send back</button></form>
+            <p class="text-[11px] text-slate-500 mt-2">After approval it publishes within 3 hours of the scheduled time.</p>` : ''}
         </article>`;
     }).join('') : '<p class="text-xs text-slate-400">Nothing is waiting for approval.</p>';
     box.querySelectorAll('[data-approve]').forEach(b => b.onclick = async () => {
@@ -258,35 +291,64 @@ function renderBlogStatus() {
     el('status-list').innerHTML = items.length ? items.map(i => {
         const [label, colour] = POST_STATES[postState(i)] || [i.status, 'text-slate-300'];
         const link = /^https?:\/\//.test(i.post_url || '') ? `<a class="text-indigo-300 underline" href="${escapeHtml(i.post_url)}" target="_blank" rel="noopener">View post</a>` : '';
+        const cell = (name, html) => `<div class="min-w-0"><dt class="inline">${name}: </dt><dd class="inline text-slate-200 break-words">${html || '-'}</dd></div>`;
+        const problem = i.error ? `<span class="text-red-300">${escapeHtml(i.error)}</span>`
+            : i.rejected_note ? `<span class="text-amber-200">${i.rejected_by_name ? `${escapeHtml(i.rejected_by_name)}: ` : ''}${escapeHtml(i.rejected_note)}</span>` : '';
         return `<article class="${cardClass}">
             <div class="flex flex-wrap justify-between items-start gap-2">
                 <h3 class="text-sm font-semibold text-white break-words min-w-0 flex-1">${escapeHtml(i.title)}</h3>
-                <span class="text-xs font-semibold ${colour}">${escapeHtml(label)}</span>
+                <span class="text-xs font-semibold ${colour}">${escapeHtml(label)}${isLate(i) ? ' <span class="ml-1 px-1.5 rounded bg-red-500/20 text-red-300">Late</span>' : ''}</span>
             </div>
-            <dl class="text-xs text-slate-400 mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-4">
-                <div><dt class="inline">Scheduled: </dt><dd class="inline text-slate-200">${escapeHtml(fmtWhen(i.publish_at) || 'No date')}</dd></div>
-                <div><dt class="inline">Published: </dt><dd class="inline text-slate-200">${escapeHtml(fmtWhen(i.published_at) || (i.status === 'published' ? 'Yes' : 'Not yet'))}</dd> ${link}</div>
+            <dl class="text-xs text-slate-400 mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5">
+                ${cell('Writer', escapeHtml(i.writer || i.assignee_name || ''))}
+                ${cell('Scheduled', escapeHtml(fmtIst(i.publish_at)))}
+                ${cell('Published', escapeHtml(fmtIst(i.published_at)))}
+                ${cell('Link', link)}
+                ${cell('Last error or note', problem)}
             </dl>
-            ${i.error ? `<p class="text-xs text-red-300 mt-1 break-words">Last error: ${escapeHtml(i.error)}</p>` : ''}
-            ${i.rejected_note ? `<p class="text-xs text-amber-200 mt-1 break-words">Rejected${i.rejected_by_name ? ` by ${escapeHtml(i.rejected_by_name)}` : ''}: ${escapeHtml(i.rejected_note)}</p>` : ''}
             <button type="button" class="btn-secondary text-xs mt-2" onclick="openPlanFromAlert(${Number(i.id)})">Open</button>
         </article>`;
     }).join('') : emptyStateHtml('No posts here', 'Plan a post under Blog Schedule.');
 }
 
+// Assign a planned post to a writer token (admin only; the token list needs users.manage).
+async function fillWriterSelect(item) {
+    const wrap = el('plan-writer-wrap'), sel = el('plan-writer');
+    sel.innerHTML = '';
+    wrap.classList.add('hidden');
+    if (!can('content.publish') || !can('users.manage')) return;
+    const data = await apiCall('GET', '/api/writer-tokens', undefined, { quiet: true });
+    if (!data || !data.tokens || planEditing !== item) return;
+    sel.innerHTML = '';
+    sel.add(new Option('No writer', ''));
+    data.tokens.filter(t => !t.revoked_at || (item && item.writer_token_id === t.id)).forEach(t => sel.add(new Option(t.name, String(t.id))));
+    sel.value = item && item.writer_token_id ? String(item.writer_token_id) : '';
+    wrap.classList.toggle('hidden', sel.options.length < 2);
+}
+const writerChoice = () => el('plan-writer-wrap').classList.contains('hidden') ? undefined : (Number(el('plan-writer').value) || null);
+
 // --- Writer tokens (AI writer agents submit drafts; they can never publish) ---
+let tokenProjects = {};
+async function loadTokenProjects() {
+    const data = await apiCall('GET', '/api/projects', undefined, { quiet: true });
+    const sel = el('token-project');
+    sel.innerHTML = '';
+    sel.add(new Option('No default project', ''));
+    tokenProjects = {};
+    ((data && data.projects) || []).forEach(p => { tokenProjects[p.id] = p.name; sel.add(new Option(p.name, String(p.id))); });
+}
 async function loadWriterTokens() {
     const acct = getActiveAccountId();
     const card = el('writer-tokens-card');
     if (!acct || !can('users.manage')) { card.classList.add('hidden'); return; }
-    const data = await apiCall('GET', '/api/writer-tokens', undefined, { quiet: true });
+    const [data] = await Promise.all([apiCall('GET', '/api/writer-tokens', undefined, { quiet: true }), loadTokenProjects()]);
     if (acct !== getActiveAccountId()) return;
     const ready = !!data && Array.isArray(data.tokens);
     card.classList.toggle('hidden', !ready);
     if (!ready) return;
     el('token-list').innerHTML = data.tokens.length ? data.tokens.map(t => `<li class="flex flex-wrap justify-between items-center gap-2 border-t border-slate-800 pt-2 text-xs">
         <div class="min-w-0 flex-1"><div class="text-slate-100 font-semibold break-words">${escapeHtml(t.name)} <code class="text-slate-500">${escapeHtml(t.prefix || '')}…</code></div>
-        <div class="text-slate-500">${escapeHtml([`Created ${fmtWhen(t.created_at)}`, t.created_by_name && `by ${t.created_by_name}`, t.last_used_at ? `last used ${fmtWhen(t.last_used_at)}` : 'never used'].filter(Boolean).join(' · '))}</div></div>
+        <div class="text-slate-500">${escapeHtml([`Created ${fmtWhen(t.created_at)}`, t.created_by_name && `by ${t.created_by_name}`, t.project_id && tokenProjects[t.project_id] && `for ${tokenProjects[t.project_id]}`, t.last_used_at ? `last used ${fmtWhen(t.last_used_at)}` : 'never used'].filter(Boolean).join(' · '))}</div></div>
         ${t.revoked_at ? `<span class="text-red-300">Revoked ${escapeHtml(fmtWhen(t.revoked_at))}</span>` : `<button type="button" class="btn-secondary text-xs text-red-300" data-revoke="${Number(t.id)}" data-name="${escapeHtml(t.name)}">Revoke</button>`}</li>`).join('')
         : '<li class="text-xs text-slate-400">No writer tokens yet.</li>';
     el('token-list').querySelectorAll('[data-revoke]').forEach(b => b.onclick = async () => {
@@ -300,7 +362,8 @@ async function createWriterToken(e) {
     e.preventDefault();
     const name = el('token-name').value.trim();
     if (!name) return;
-    const res = await apiPost('/api/writer-tokens', { name });
+    const project = Number(el('token-project').value);
+    const res = await apiPost('/api/writer-tokens', { name, ...(project ? { project_id: project } : {}) });
     if (!res || !res.token) return;
     e.target.reset();
     el('token-value').value = res.token;
