@@ -2705,10 +2705,12 @@ async function loadAlerts() {
     list.innerHTML = open.length ? '<ul class="space-y-2">' + open.map(a => {
         // Only same-app links: '#...' or '/...'.
         const link = /^(#|\/(?!\/))/.test(a.link || '') ? `<a class="btn-secondary text-xs" href="${escapeHtml(a.link)}">Open</a>` : '';
+        const post = /^blog:(\d+)$/.exec(a.link || '');
+        const open = post ? `<button type="button" class="btn-secondary text-xs" onclick="openPlanFromAlert(${Number(post[1])})">Open post</button>` : link;
         return `<li class="flex flex-wrap justify-between items-center gap-2 border-t border-slate-800 pt-2">
             <div class="min-w-0 flex-1"><div class="text-xs ${a.severity === 'info' ? 'text-slate-300' : a.severity === 'warning' ? 'text-amber-300' : 'text-red-300'} break-words">${escapeHtml(a.message)}${a.count > 1 ? ` (${Number(a.count)} times)` : ''}</div>
             <div class="text-[10px] text-slate-500">${escapeHtml([String(a.type || '').replace(/_/g, ' '), fmtWhen(a.last_seen || a.first_seen)].filter(Boolean).join(' · '))}</div></div>
-            ${link}${a.id && a.severity !== 'info' && can('crm.write') ? `<button type="button" class="btn-secondary text-xs" onclick="resolveAlert(${Number(a.id)})">Resolve</button>` : ''}
+            ${open}${a.id && a.severity !== 'info' && can('crm.write') ? `<button type="button" class="btn-secondary text-xs" onclick="resolveAlert(${Number(a.id)})">Resolve</button>` : ''}
         </li>`;
     }).join('') + '</ul>' : '<p class="text-xs text-slate-400">No problems.</p>';
 }
@@ -2897,7 +2899,7 @@ function planButton(i, compact) {
         <div class="flex flex-wrap justify-between items-start gap-2">
             <div class="min-w-0 flex-1">
                 <h3 class="text-sm font-semibold text-white break-words">${escapeHtml(i.title)}</h3>
-                <div class="text-[11px] text-slate-400">${escapeHtml([fmtWhen(i.publish_at), i.keyword, i.assignee_name].filter(Boolean).join(' · '))}</div>
+                <div class="text-[11px] text-slate-400">${escapeHtml([fmtWhen(i.publish_at) || 'No date yet', i.keyword, i.assignee_name].filter(Boolean).join(' · '))}</div>
                 <div class="text-xs font-semibold ${colour}">${escapeHtml(label)}${i.error ? ': ' + escapeHtml(i.error) : ''}</div>
                 ${/^https?:\/\//.test(i.post_url || '') ? `<a class="text-xs text-indigo-300 underline break-all" href="${escapeHtml(i.post_url)}" target="_blank" rel="noopener">View published post</a>` : ''}
             </div>
@@ -2922,7 +2924,7 @@ function renderPlan() {
     let cells = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => `<div class="text-[10px] text-slate-500 text-center">${d}</div>`).join('') + '<div></div>'.repeat(lead);
     for (let d = 1; d <= days; d++) {
         const day = new Date(planMonth.getFullYear(), planMonth.getMonth(), d).toDateString();
-        cells += `<div class="border border-slate-800 rounded p-1 min-h-[3.5rem] min-w-0"><div class="text-[10px] text-slate-400">${d}</div>${items.filter(i => new Date(i.publish_at).toDateString() === day).map(i => planButton(i, true)).join('')}</div>`;
+        cells += `<div class="border border-slate-800 rounded p-1 min-h-[3.5rem] min-w-0"><div class="text-[10px] text-slate-400">${d}</div>${items.filter(i => i.publish_at && new Date(i.publish_at).toDateString() === day).map(i => planButton(i, true)).join('')}</div>`;
     }
     list.className = 'grid grid-cols-7 gap-1';
     list.innerHTML = cells;
@@ -3002,7 +3004,8 @@ async function planAction(action) {
     const res = await apiPost(`/api/blog/plan/${item.id}/${action}`, {});
     btn.disabled = false;
     if (!res || res.error) return;
-    showToast({ draft: 'Draft ready. Read it before submitting.', submit: 'Sent for approval.', approve: 'Approved. It will publish on its date.' }[action], 'success');
+    if (res.item && res.item.error) showToast(res.item.error, 'error');
+    else showToast({ draft: 'Draft ready. Read it before submitting.', submit: 'Sent for approval.', approve: 'Approved. It will publish on its date.' }[action], 'success');
     await loadPlan();
     if (planEditing && planEditing.id === item.id) editPlan(item.id);
 }
@@ -3143,4 +3146,10 @@ async function deleteContactField(id) {
     if (!confirm('Remove this field? It is hidden everywhere; saved values are kept.')) return;
     const res = await apiDelete(`/api/contact-fields/${id}`);
     if (res && !res.error) { await loadContactFields(true); loadWhatsAppContacts(); }
+}
+
+async function openPlanFromAlert(id) {
+    switchTab('blog-plan');
+    await loadPlan();
+    editPlan(id);
 }
