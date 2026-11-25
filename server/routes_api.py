@@ -926,6 +926,16 @@ def bc_create(ctx, m, q, body):
     return 201, {"success": True, "id": bid, "message": "Broadcast created."}
 
 
+@route("POST", r"/api/whatsapp/broadcasts/preview", "acct:broadcasts.run")
+def bc_preview(ctx, m, q, body):
+    try:
+        tpl = messaging.approved_template(ctx.account_id, str(body.get("template_name") or ""),
+                                          str(body.get("template_language") or ""))
+    except messaging.Blocked as b:
+        return 400, {"error": b.code, "message": b.message}
+    return 200, WhatsAppClient(ctx.account_id).preview_broadcast(tpl, str(body.get("target_tag") or "all"))
+
+
 @route("POST", r"/api/whatsapp/broadcasts/(?P<id>\d+)/run", "acct:broadcasts.run")
 def bc_run(ctx, m, q, body):
     stats = WhatsAppClient(ctx.account_id).execute_broadcast(int(m.group("id")))
