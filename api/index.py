@@ -18,6 +18,7 @@ import logging
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
+import dbcompat
 from server.security import SECURITY_HEADERS
 from database import init_db
 from engine.auth import validate_session
@@ -46,6 +47,7 @@ def ensure_db() -> bool:
 
 
 ensure_db()
+dbcompat.close_cached()
 
 STATIC_DIR = ROOT_DIR / "static"
 
@@ -88,6 +90,12 @@ class handler(BaseHTTPRequestHandler):
     
     def log_message(self, format, *args):
         return
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        finally:
+            dbcompat.close_cached()
 
     def _get_client_ip(self) -> str:
         forwarded = self.headers.get("X-Forwarded-For")
@@ -259,6 +267,13 @@ class handler(BaseHTTPRequestHandler):
 
 # WSGI Application compatibility
 def app(environ, start_response):
+    try:
+        return _app(environ, start_response)
+    finally:
+        dbcompat.close_cached()
+
+
+def _app(environ, start_response):
     ensure_db()
     path = environ.get("PATH_INFO", "/")
     method = environ.get("REQUEST_METHOD", "GET")

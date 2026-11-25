@@ -276,6 +276,13 @@ def _drop_cached(raw=None) -> None:
         _cache.conn = None
 
 
+def close_cached() -> None:
+    """Close this thread's cached connection. Serverless entry points call it after each request so an idle
+    instance never holds a slot in the database pooler (Supabase session mode allows only ~15 clients)."""
+    _cache.busy = False
+    _drop_cached()
+
+
 def connect_postgres() -> PGConnection:
     """One live connection per thread, reused across calls: opening a new TLS + SCRAM connection costs
     1-2 s from a serverless region, and a single login makes about ten database calls."""
