@@ -2088,20 +2088,42 @@ async function broadcastPreview(tag, choice) {
     return { send: d.will_send, skipped: d.skipped_count, text: `Will send to ${d.will_send}, skip ${d.skipped_count}${why ? ` (${why})` : ''}.` };
 }
 let broadcastPreviewSeq = 0;
+let broadcastCounting = false, broadcastSaving = false;
+// Save stays off while a count or a save is running, so one click asks for one confirm.
+function syncBroadcastSave() {
+    el('new-broadcast-save').disabled = broadcastCounting || broadcastSaving;
+}
 async function updateBroadcastAudience() {
-    const el = document.getElementById('new-broadcast-count');
+    const line = document.getElementById('new-broadcast-count');
     const sel = document.getElementById('new-broadcast-tag');
-    if (!el || !sel) return;
+    if (!line || !sel) return;
     const seq = ++broadcastPreviewSeq;
-    el.innerText = 'Counting recipients…';
-    const split = await broadcastPreview(sel.value, pickedTemplate('bc'));
-    if (seq === broadcastPreviewSeq) el.innerText = split.text;
+    line.innerText = 'Counting recipients…';
+    broadcastCounting = true;
+    syncBroadcastSave();
+    try {
+        const split = await broadcastPreview(sel.value, pickedTemplate('bc'));
+        if (seq === broadcastPreviewSeq) line.innerText = split.text;
+    } finally {
+        if (seq === broadcastPreviewSeq) { broadcastCounting = false; syncBroadcastSave(); }
+    }
 }
 function closeAddBroadcastModal() {
     document.getElementById('modal-add-broadcast').classList.add('hidden');
 }
 async function submitAddBroadcast(e) {
     e.preventDefault();
+    if (broadcastSaving) return;
+    broadcastSaving = true;
+    syncBroadcastSave();
+    try {
+        await saveBroadcast();
+    } finally {
+        broadcastSaving = false;
+        syncBroadcastSave();
+    }
+}
+async function saveBroadcast() {
     const name = document.getElementById('new-broadcast-name').value;
     const target_tag = document.getElementById('new-broadcast-tag').value;
     const choice = templateChoice('bc');
