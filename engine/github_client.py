@@ -115,11 +115,9 @@ class GitHubClient:
         payload = {
             "message": commit_message,
             "content": b64_content,
-            "branch": branch,
-            "committer": {
-                "name": "GitPulse CMS",
-                "email": "bot@gitpulse.cms"
-            }
+            # No committer/author: GitHub then uses the token owner. Vercel blocks deploys
+            # for a commit email it cannot match to a GitHub account.
+            "branch": branch
         }
         if existing_sha:
             payload["sha"] = existing_sha
