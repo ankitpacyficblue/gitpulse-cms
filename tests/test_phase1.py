@@ -4,6 +4,7 @@ import json
 import os
 import time
 import unittest
+import urllib.error
 from datetime import datetime, timedelta
 from unittest import mock
 
@@ -13,6 +14,8 @@ import crm_store as cs
 import database as db
 from engine import assistant, jobs, llm, media, messaging, writer_tokens
 from engine.whatsapp_client import WhatsAppClient
+from database import normalize_repo
+from engine.github_client import GitHubClient
 from server.routes_api import handle_api_request
 from server.routes_public import handle_public_request
 
@@ -360,6 +363,22 @@ class UatTests(Base):
                              {"template_name": "mock_approved", "template_language": "en"})
         self.assertEqual((code, res["audience"], res["will_send"], res["skipped"]), (200, 2, 1, {"opted_out": 1}))
         self.assertEqual(cs.list_messages(self.a, cs.get_or_create_conversation(self.a, out)["id"]), [])
+
+
+class RepoNameTests(Base):
+    def test_a_pasted_address_is_saved_and_used_as_owner_repo(self):
+        for given in ("https://github.com/o/site.git/", "github.com/o/site", "git@github.com:o/site.git", " o/site/ ",
+                      "https://github.com/o/site/tree/main"):
+            self.assertEqual(normalize_repo(given), "o/site", given)
+        pid = db.create_project({"name": "S", "github_repo": "https://github.com/o/site", "topic": "t",
+                                 "target_framework": "generic"}, self.a)
+        self.assertEqual(db.get_project(pid)["github_repo"], "o/site")
+        db.update_project(pid, {"github_repo": "https://github.com/o/other.git"}, self.a)
+        self.assertEqual(db.get_project(pid)["github_repo"], "o/other")
+        missing = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+        with mock.patch("urllib.request.urlopen", side_effect=missing):
+            ok, message = GitHubClient("t").test_connection("o/other")
+        self.assertEqual((ok, "repo not found or token has no access" in message), (False, True))
 
 
 class EntryTests(Base):

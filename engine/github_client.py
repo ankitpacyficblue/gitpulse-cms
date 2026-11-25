@@ -4,12 +4,16 @@ Handles repository access validation, direct commit pushes,
 branch orchestration, and automated Pull Request creation.
 """
 
+from database import normalize_repo
 import base64
 import json
 import urllib.request
 import urllib.error
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
+
+NOT_FOUND = "GitHub: repo not found or token has no access."
+
 
 class GitHubClient:
     def __init__(self, token: str):
@@ -30,7 +34,7 @@ class GitHubClient:
         if not self.token:
             return False, "GitHub Personal Access Token is not configured."
 
-        repo_clean = repo.strip().strip("/")
+        repo_clean = normalize_repo(repo)
         if "/" not in repo_clean:
             return False, f"Invalid repository format '{repo}'. Expected 'owner/repo'."
 
@@ -47,7 +51,7 @@ class GitHubClient:
                 can_push = permissions.get("push", False)
                 return True, f"Connected to {data['full_name']} (Push access: {'Yes' if can_push else 'Read-only'})."
         except urllib.error.HTTPError as e:
-            return False, f"GitHub HTTP error {e.code}: {e.reason}"
+            return False, NOT_FOUND if e.code == 404 else f"GitHub HTTP error {e.code}: {e.reason}"
         except Exception as e:
             return False, f"Connection failed: {str(e)}"
 
@@ -133,7 +137,7 @@ class GitHubClient:
                 return True, commit_sha, None
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8")
-            return False, None, f"GitHub HTTP {e.code}: {body}"
+            return False, None, NOT_FOUND if e.code == 404 else f"GitHub HTTP {e.code}: {body}"
         except Exception as e:
             return False, None, str(e)
 
@@ -168,7 +172,7 @@ class GitHubClient:
                 return True, data.get("html_url"), data.get("number"), None
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8")
-            return False, None, None, f"GitHub HTTP {e.code}: {body}"
+            return False, None, None, NOT_FOUND if e.code == 404 else f"GitHub HTTP {e.code}: {body}"
         except Exception as e:
             return False, None, None, str(e)
 

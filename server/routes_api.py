@@ -30,6 +30,7 @@ from engine import auth
 from engine import secrets_box
 from engine import assistant, contact_fields, jobs, messaging
 from engine import media
+from database import normalize_repo
 from engine import writer_tokens
 from engine.accounts_service import ServiceError
 from engine.auth import (
@@ -474,7 +475,7 @@ def status(ctx, m, q, body):
 
 @route("POST", r"/api/github/verify", "acct:content.publish")
 def github_verify(ctx, m, q, body):
-    repo = body.get("github_repo", "").strip()
+    repo = normalize_repo(body.get("github_repo", ""))
     if not repo:
         return 400, {"valid": False, "message": "Please enter a GitHub repository (e.g. username/repo)."}
     ok, msg = GitHubClient(token=body.get("github_token", "").strip()).test_connection(repo)
