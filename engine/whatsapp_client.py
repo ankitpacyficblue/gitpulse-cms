@@ -76,6 +76,35 @@ class WhatsAppClient:
         except Exception as e:
             return {"success": False, "status": "failed", "error": f"WhatsApp dispatch failed ({type(e).__name__})."}
 
+    def test_connection(self) -> Dict[str, Any]:
+        """Check the saved credentials without sending a message: a read-only lookup of the phone number
+        at Meta. In mock mode nothing leaves this server. The result is stored for the setup wizard."""
+        if mock_enabled():
+            res = {"ok": True, "message": "Mock mode: no request was made to Meta.", "mock": True}
+        elif not self.is_configured():
+            res = {"ok": False, "message": "Save the phone number id and access token first."}
+        else:
+            creds = self._credentials()
+            url = (f"{self.BASE_URL}/{self.META_API_VERSION}/{creds['phone_number_id']}"
+                   "?fields=display_phone_number,verified_name")
+            try:
+                req = urllib.request.Request(url, headers={"Authorization": f"Bearer {creds['access_token']}"})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                res = {"ok": True, "message": "Connected to " + str(data.get("verified_name") or data.get("display_phone_number") or "WhatsApp")}
+            except urllib.error.HTTPError as e:
+                detail = ""
+                try:
+                    detail = (json.loads(e.read().decode("utf-8")).get("error", {}) or {}).get("message", "")[:200]
+                except Exception:
+                    pass
+                res = {"ok": False, "message": f"Meta rejected the credentials (HTTP {e.code}): {detail}".strip()}
+            except Exception as e:
+                res = {"ok": False, "message": f"Could not reach Meta ({type(e).__name__})."}
+        if self.is_configured() or mock_enabled():
+            cs.save_whatsapp_test(self.account_id, res["ok"], res["message"])
+        return res
+
     def _record_outbound(self, contact: Dict[str, Any], text: str, res: Dict[str, Any]) -> Optional[int]:
         conv = cs.get_or_create_conversation(self.account_id, contact["id"])
         if not conv:
@@ -131,6 +160,7 @@ class WhatsAppClient:
                 if not account_id:
                     skipped += 1
                     continue
+                cs.touch_whatsapp_webhook(account_id)
                 client = WhatsAppClient(account_id)
                 m, s = client._process_change(val)
                 messages_n += m

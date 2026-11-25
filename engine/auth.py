@@ -48,9 +48,13 @@ def verify_password(password: str, salt_hex: str, expected_hash_hex: str) -> boo
 
 # --- Malicious Login & Brute Force Prevention ---
 
+MAX_FAILED_PER_USERNAME = 25  # across all IPs, so a spread-out attack on one account still stops
+
 def check_login_lockout(ip_address: str, username: str) -> Tuple[bool, int]:
     """
-    Check if the IP or username is currently locked out due to repeated failures.
+    Locked out when this username+IP pair has MAX_FAILED_ATTEMPTS recent failures, or the
+    username has MAX_FAILED_PER_USERNAME failures from any IPs. Failures for other usernames
+    from the same IP never count, so unknown names do not lock out real users.
     Returns (is_locked_out, remaining_lockout_seconds).
     """
     now = time.time()
@@ -58,23 +62,18 @@ def check_login_lockout(ip_address: str, username: str) -> Tuple[bool, int]:
 
     with get_connection() as conn:
         cursor = conn.cursor()
-        # Find failed attempts within the lockout window
         cursor.execute("""
-            SELECT attempt_time FROM login_attempts
-            WHERE (ip_address = ? OR username = ?)
-              AND attempt_time > ?
-              AND success = 0
+            SELECT ip_address, attempt_time FROM login_attempts
+            WHERE username = ? AND attempt_time > ? AND success = 0
             ORDER BY attempt_time DESC
-        """, (ip_address, username, cutoff))
+        """, (username, cutoff))
         rows = cursor.fetchall()
 
-    if len(rows) >= MAX_FAILED_ATTEMPTS:
-        # User is locked out. Calculate remaining time based on latest failed attempt
-        latest_attempt_time = rows[0]["attempt_time"]
-        elapsed = now - latest_attempt_time
-        remaining = max(1, int(LOCKOUT_DURATION_SEC - elapsed))
+    pair = [r for r in rows if r["ip_address"] == ip_address]
+    hit = pair if len(pair) >= MAX_FAILED_ATTEMPTS else (rows if len(rows) >= MAX_FAILED_PER_USERNAME else None)
+    if hit:
+        remaining = max(1, int(LOCKOUT_DURATION_SEC - (now - hit[0]["attempt_time"])))
         return True, remaining
-
     return False, 0
 
 def record_login_attempt(ip_address: str, username: str, success: bool):
@@ -91,7 +90,7 @@ def record_login_attempt(ip_address: str, username: str, success: bool):
         if success:
             cursor.execute("""
                 DELETE FROM login_attempts
-                WHERE (ip_address = ? OR username = ?) AND success = 0
+                WHERE ip_address = ? AND username = ? AND success = 0
             """, (ip_address, username))
 
         # Cleanup old attempts older than 24 hours to keep table small
@@ -117,6 +116,17 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
                           FROM users WHERE id = ?""", (user_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+def delete_user(user_id: int) -> bool:
+    """Delete a login that belongs to no account. Callers must check memberships first.
+    Audit rows keep their text; sessions go with the user (FK cascade, explicit for safety)."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM memberships WHERE user_id = ?", (user_id,))
+        cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
 
 TEMP_PASSWORD_HOURS = 72
 

@@ -9,6 +9,7 @@ DELETE. There is no "all accounts" read path. Ids from a request are never
 trusted on their own: a row is only reachable together with its account_id.
 """
 
+import dbcompat
 import hashlib
 import hmac
 import json
@@ -151,6 +152,11 @@ def init_schema(conn) -> None:
     acct_cols = {r[1] for r in cur.execute("PRAGMA table_info(accounts)").fetchall()}
     if "default_currency" not in acct_cols:
         cur.execute("ALTER TABLE accounts ADD COLUMN default_currency TEXT NOT NULL DEFAULT 'INR'")
+    wa_cols = {r[1] for r in cur.execute("PRAGMA table_info(whatsapp_accounts)").fetchall()}
+    for col, ddl in (("last_webhook_at", "TEXT NOT NULL DEFAULT ''"), ("last_test_at", "TEXT NOT NULL DEFAULT ''"),
+                     ("last_test_ok", "INTEGER NOT NULL DEFAULT 0"), ("last_test_message", "TEXT NOT NULL DEFAULT ''")):
+        if col not in wa_cols:
+            cur.execute(f"ALTER TABLE whatsapp_accounts ADD COLUMN {col} {ddl}")
     conv_cols = {r[1] for r in cur.execute("PRAGMA table_info(conversations)").fetchall()}
     if "assigned_user_id" not in conv_cols:
         cur.execute("ALTER TABLE conversations ADD COLUMN assigned_user_id INTEGER")
@@ -416,6 +422,34 @@ def get_whatsapp_public(account_id: str) -> Dict[str, Any]:
             "is_active": bool(row["is_active"])}
 
 
+def touch_whatsapp_webhook(account_id: str) -> None:
+    with get_connection() as conn:
+        conn.execute("UPDATE whatsapp_accounts SET last_webhook_at = ? WHERE account_id = ?", (_now(), account_id))
+        conn.commit()
+
+
+def save_whatsapp_test(account_id: str, ok: bool, message: str) -> None:
+    with get_connection() as conn:
+        conn.execute("UPDATE whatsapp_accounts SET last_test_at = ?, last_test_ok = ?, last_test_message = ? "
+                     "WHERE account_id = ?", (_now(), 1 if ok else 0, (message or "")[:300], account_id))
+        conn.commit()
+
+
+def get_whatsapp_status(account_id: str) -> Dict[str, Any]:
+    """Setup-wizard view: what is saved, when Meta last called us, and the last connection test.
+    Never includes a token, secret or hash."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM whatsapp_accounts WHERE account_id = ?", (account_id,)).fetchone()
+    if not row:
+        return {"credentials": {"phone_number_id": False, "access_token": False, "app_secret": False, "verify_token": False},
+                "last_webhook_at": None, "last_test": None}
+    return {"credentials": {"phone_number_id": bool(row["phone_number_id"]), "access_token": bool(row["access_token_enc"]),
+                            "app_secret": bool(row["app_secret_enc"]), "verify_token": bool(row["verify_token_hash"])},
+            "last_webhook_at": row["last_webhook_at"] or None,
+            "last_test": ({"at": row["last_test_at"], "ok": bool(row["last_test_ok"]), "message": row["last_test_message"]}
+                          if row["last_test_at"] else None)}
+
+
 def get_whatsapp_credentials(account_id: str) -> Dict[str, str]:
     """Server-side only. Returns decrypted credentials, or empty strings when not configured."""
     with get_connection() as conn:
@@ -500,7 +534,7 @@ def create_contact(account_id: str, name: str, phone: str, email: str = "", tags
                                (account_id, name.strip(), phone.strip(), _norm_phone(phone), email.strip(),
                                 json.dumps(tags_list), notes.strip(), now, now))
         except Exception as e:
-            if "UNIQUE" in str(e):
+            if dbcompat.is_unique_violation(e):
                 raise ValueError("duplicate_phone")
             raise
         conn.commit()
@@ -669,6 +703,11 @@ def create_deal(account_id: str, title: str, value: float, stage: str = "lead", 
                 currency: Optional[str] = None, expected_close: str = "", notes: str = "") -> int:
     if not currency:
         currency = (get_account(account_id) or {}).get("default_currency") or "INR"
+    currency = currency.strip().upper()
+    if not (len(currency) == 3 and currency.isalpha()):
+        raise ValueError("invalid_currency")
+    if float(value) < 0:
+        raise ValueError("negative_value")
     if contact_id is not None and not get_contact(account_id, contact_id):
         raise ValueError("contact_not_found")
     now = _now()

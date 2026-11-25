@@ -183,6 +183,9 @@ def init_db():
         if "views" not in post_cols:
             cursor.execute("ALTER TABLE posts ADD COLUMN views INTEGER DEFAULT 0")
 
+        # Accounts, memberships, per-account WhatsApp and CRM tables
+        import crm_store
+        crm_store.init_schema(conn)
         if "account_id" not in project_cols:
             # Nullable only for pre-account rows; those stay invisible to every account until assigned.
             cursor.execute("ALTER TABLE projects ADD COLUMN account_id TEXT REFERENCES accounts(id)")
@@ -211,9 +214,6 @@ def init_db():
         if "temp_password_expires" not in user_cols:
             cursor.execute("ALTER TABLE users ADD COLUMN temp_password_expires TEXT DEFAULT ''")
 
-        # Accounts, memberships, per-account WhatsApp and CRM tables
-        import crm_store
-        crm_store.init_schema(conn)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_account ON projects (account_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_account ON system_logs (account_id, id)")
 

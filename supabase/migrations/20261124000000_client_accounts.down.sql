@@ -10,6 +10,7 @@ BEGIN
 END $$;
 DROP TABLE IF EXISTS public.account_settings;
 ALTER TABLE public.conversations DROP COLUMN IF EXISTS assigned_user_id;
+ALTER TABLE public.whatsapp_accounts DROP COLUMN IF EXISTS last_webhook_at, DROP COLUMN IF EXISTS last_test_at, DROP COLUMN IF EXISTS last_test_ok, DROP COLUMN IF EXISTS last_test_message;
 ALTER TABLE public.accounts DROP COLUMN IF EXISTS default_currency;
 ALTER TABLE public.users DROP COLUMN IF EXISTS must_change_password, DROP COLUMN IF EXISTS temp_password_expires, DROP COLUMN IF EXISTS sessions_valid_after_ms;
 DROP TABLE IF EXISTS public.whatsapp_accounts;
