@@ -1682,7 +1682,7 @@ async function loadWhatsAppBroadcasts() {
                         <span class="text-xs text-slate-400">Target: <strong class="text-indigo-300">${escapeHtml(b.target_tag.toUpperCase())}</strong></span>
                     </div>
                 </div>
-                ${can('broadcasts.run') ? `<button onclick="runBroadcastFromUI(${b.id})" class="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5">
+                ${can('broadcasts.run') && b.status !== 'queued' && b.status !== 'completed' ? `<button onclick="runBroadcastFromUI(${b.id})" class="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5">
                     <span>⚡ Run Broadcast</span>
                 </button>` : ''}
             </div>
