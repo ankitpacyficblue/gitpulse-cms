@@ -1002,6 +1002,7 @@ def render_dashboard_html() -> str:
 
         <!-- TAB: WHATSAPP BROADCAST CAMPAIGNS -->
         <div id="tab-wa-broadcasts" class="tab-content hidden">
+            <p id="wa-bc-viewonly" class="hidden mb-3 text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2" role="note">View only. Your role can read campaigns but not create or send them.</p>
             <div class="flex justify-between items-center mb-4">
                 <div>
                     <h2 class="text-lg font-semibold text-white">Broadcast Campaigns</h2>
@@ -1019,6 +1020,7 @@ def render_dashboard_html() -> str:
 
         <!-- TAB: NO-CODE AUTOMATIONS ENGINE -->
         <div id="tab-wa-automations" class="tab-content hidden">
+            <p id="wa-auto-viewonly" class="hidden mb-3 text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2" role="note">View only. Your role can read the rules but not change them.</p>
             <div class="flex justify-between items-center mb-4">
                 <div>
                     <h2 class="text-lg font-semibold text-white flex items-center gap-2">

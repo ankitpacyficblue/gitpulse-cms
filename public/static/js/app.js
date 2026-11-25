@@ -2075,6 +2075,8 @@ function applyRolePermissions() {
     if (ps) ps.classList.toggle('hidden', ![...ps.querySelectorAll('.sidebar-nav-item')].some(n => !n.classList.contains('hidden')));
     document.querySelectorAll('header [onclick^="openAddProjectModal"]').forEach(b => b.classList.toggle('hidden', !can('content.publish')));
     document.querySelectorAll('header [onclick^="openAddBroadcastModal"]').forEach(b => b.classList.toggle('hidden', !can('broadcasts.run')));
+    const bcNote = document.getElementById('wa-bc-viewonly'); if (bcNote) bcNote.classList.toggle('hidden', can('broadcasts.run'));
+    const auNote = document.getElementById('wa-auto-viewonly'); if (auNote) auNote.classList.toggle('hidden', can('automations.manage'));
     const write = can('crm.write');
     ['openAddContactModal', 'openAddDealModal'].forEach(fn => {
         document.querySelectorAll(`header [onclick^="${fn}"]`).forEach(b => b.classList.toggle('hidden', !write));
