@@ -441,6 +441,9 @@ def render_dashboard_html() -> str:
                     <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-templates')">
                         <span class="flex items-center gap-2"><span aria-hidden="true">🧾</span><span>Message Templates</span></span>
                     </a>
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-entry')">
+                        <span class="flex items-center gap-2"><span aria-hidden="true">🔗</span><span>Entry Links</span></span>
+                    </a>
                 </div>
 
                 <!-- SECTION 3: PLATFORM & CLOUD -->
@@ -1108,6 +1111,22 @@ def render_dashboard_html() -> str:
                 <button type="button" data-requires="automations.manage" class="btn-primary text-xs" onclick="syncTemplates(this)">Sync from Meta</button>
             </div>
             <div id="tpl-list" class="space-y-3"></div>
+        </div>
+
+        <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
+        <div id="tab-wa-entry" class="tab-content hidden">
+            <form data-requires="automations.manage" onsubmit="saveEntryLink(event)" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4 space-y-3">
+                <h2 class="text-sm font-semibold text-white">New entry link</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div><label for="entry-label" class="block text-xs text-slate-400 mb-1">Label</label><input id="entry-label" class="input-text text-sm w-full" required maxlength="100" placeholder="Website button"></div>
+                    <div><label for="entry-code" class="block text-xs text-slate-400 mb-1">Source code (optional)</label><input id="entry-code" class="input-text text-sm w-full" maxlength="40" pattern="[A-Za-z0-9_-]+" placeholder="WEB-HOME"></div>
+                    <div><label for="entry-campaign" class="block text-xs text-slate-400 mb-1">Campaign (optional)</label><input id="entry-campaign" class="input-text text-sm w-full" maxlength="100"></div>
+                </div>
+                <div><label for="entry-message" class="block text-xs text-slate-400 mb-1">Message the customer starts with</label><input id="entry-message" class="input-text text-sm w-full" maxlength="300" placeholder="Hi, I would like to know more."></div>
+                <button type="submit" class="btn-primary text-xs">Create link</button>
+            </form>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4"><h2 class="text-sm font-semibold text-white mb-2">Enquiries by source</h2><div id="entry-counts" class="flex flex-wrap gap-2"></div></div>
+            <div id="entry-list" class="space-y-3"></div>
         </div>
 
         <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->

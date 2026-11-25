@@ -121,6 +121,7 @@ function switchTab(tabName) {
         'users': { title: 'Users & Roles', sub: 'Invite people to this client account and control what each role can do' },
         'wa-knowledge': { title: 'AI Assistant', sub: 'What the AI may say to customers of this business' },
         'wa-templates': { title: 'Message Templates', sub: 'Meta-approved messages for contacting customers after 24 hours' },
+        'wa-entry': { title: 'Entry Links', sub: 'Website and ad links that open a WhatsApp chat and record where it came from' },
         'wa-config': { title: 'WhatsApp API & Webhook Setup', sub: 'Four steps: credentials, webhook, test, done' },
         'supabase': { title: 'Supabase Cloud Database', sub: 'PostgreSQL multi-tenant persistence and cloud backup status' },
         'logs': { title: 'System & Generation Logs', sub: 'Real-time audit log of AI generation, GitHub commits, and webhooks' },
@@ -144,6 +145,7 @@ function switchTab(tabName) {
     if (tabName === 'users') loadUsersAndRoles();
     if (tabName === 'wa-knowledge') loadKnowledge();
     if (tabName === 'wa-templates') loadTemplates();
+    if (tabName === 'wa-entry') loadEntryLinks();
     updateAlertsVisibility(tabName);
     if (tabName === 'repos') loadAlerts();
     if (tabName === 'supabase' && isPlatformAdmin()) loadSupabaseStatus();
@@ -2720,6 +2722,9 @@ function reloadPhase1() {
     loadAlerts();
     if (!document.getElementById('tab-wa-knowledge').classList.contains('hidden')) loadKnowledge();
     if (!document.getElementById('tab-wa-templates').classList.contains('hidden')) loadTemplates();
+    document.getElementById('entry-list').innerHTML = '';
+    document.getElementById('entry-counts').innerHTML = '';
+    if (!document.getElementById('tab-wa-entry').classList.contains('hidden')) loadEntryLinks();
 }
 
 // Approved templates: used by broadcasts, blog alerts, and chats outside the 24-hour window.
@@ -2796,4 +2801,50 @@ async function sendChatTemplate(e) {
     if (!id || !c) return;
     const res = await apiPost(`/api/whatsapp/conversations/${id}/template`, { name: c.template_name, language: c.template_language, params: c.template_params });
     if (res && res.success) { showToast('Template sent.', 'success'); loadConversationMessages(id); }
+}
+
+// Entry links (E-3): wa.me click-to-chat links; the code in the prefilled text records the lead source.
+let entryLinks = [];
+async function loadEntryLinks() {
+    const acct = getActiveAccountId();
+    if (!acct) return;
+    const data = await apiGet('/api/entry-links');
+    if (acct !== getActiveAccountId()) return;
+    const list = document.getElementById('entry-list');
+    if (!data || !data.links) { list.innerHTML = emptyStateHtml('Could not load entry links', 'Try again in a moment.'); return; }
+    entryLinks = data.links;
+    const counts = Object.entries(data.enquiries_by_source || {});
+    document.getElementById('entry-counts').innerHTML = counts.length
+        ? counts.map(([k, n]) => `<span class="text-xs px-2 py-1 rounded-full border border-slate-700 text-slate-200">${escapeHtml(LEAD_SOURCES[k] || k)}: <strong>${Number(n)}</strong></span>`).join('')
+        : '<p class="text-xs text-slate-400">No enquiries recorded yet.</p>';
+    list.innerHTML = entryLinks.length ? entryLinks.map(l => `<article class="${cardClass}">
+        <h3 class="text-sm font-semibold text-white break-words">${escapeHtml(l.label)}</h3>
+        <div class="text-[11px] text-slate-400">Code ${escapeHtml(l.code)}${l.campaign ? ' · Campaign ' + escapeHtml(l.campaign) : ''}</div>
+        <p class="text-xs text-slate-300 mt-2 break-words">${escapeHtml(l.prefill)}</p>
+        ${l.url ? `<p class="text-xs font-mono text-indigo-300 mt-2 break-all">${escapeHtml(l.url)}</p>` : '<p class="text-xs text-amber-300 mt-2">Add the business phone number under WhatsApp API Setup to get the link.</p>'}
+        <div class="flex flex-wrap gap-2 mt-3">
+            ${l.url ? `<button type="button" class="btn-secondary text-xs" onclick="copyEntry(${Number(l.id)}, false)">Copy link</button>
+            <button type="button" class="btn-secondary text-xs" onclick="copyEntry(${Number(l.id)}, true)">Copy website button</button>` : ''}
+            ${can('automations.manage') ? `<button type="button" class="btn-secondary text-xs text-red-300" onclick="deleteEntryLink(${Number(l.id)})">Delete</button>` : ''}
+        </div>
+    </article>`).join('') : emptyStateHtml('No entry links yet', 'Create one for your website button and one for each ad.');
+}
+async function copyEntry(id, asButton) {
+    const l = entryLinks.find(x => x.id === id);
+    if (!l) return;
+    const text = asButton ? `<a href="${escapeHtml(l.url)}" target="_blank" rel="noopener">Chat with us on WhatsApp</a>` : l.url;
+    try { await navigator.clipboard.writeText(text); showToast('Copied.', 'success'); }
+    catch (e) { prompt('Copy this text:', text); }
+}
+async function saveEntryLink(e) {
+    e.preventDefault();
+    const val = i => document.getElementById(i).value.trim();
+    const form = e.target;
+    const res = await apiPost('/api/entry-links', { label: val('entry-label'), code: val('entry-code'), campaign: val('entry-campaign'), message: val('entry-message') });
+    if (res && res.success) { showToast('Entry link created.', 'success'); form.reset(); loadEntryLinks(); }
+}
+async function deleteEntryLink(id) {
+    if (!confirm('Delete this link? Links already shared still open WhatsApp, but their enquiries are no longer labelled.')) return;
+    const res = await apiDelete(`/api/entry-links/${id}`);
+    if (res && res.success) loadEntryLinks();
 }
