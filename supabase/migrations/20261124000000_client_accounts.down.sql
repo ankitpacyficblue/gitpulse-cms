@@ -9,6 +9,7 @@ BEGIN
   END LOOP;
 END $$;
 DROP TABLE IF EXISTS public.account_settings;
+DROP INDEX IF EXISTS public.idx_conv_one_per_contact;
 ALTER TABLE public.conversations DROP COLUMN IF EXISTS assigned_user_id;
 ALTER TABLE public.whatsapp_accounts DROP COLUMN IF EXISTS last_webhook_at, DROP COLUMN IF EXISTS last_test_at, DROP COLUMN IF EXISTS last_test_ok, DROP COLUMN IF EXISTS last_test_message;
 ALTER TABLE public.accounts DROP COLUMN IF EXISTS default_currency;

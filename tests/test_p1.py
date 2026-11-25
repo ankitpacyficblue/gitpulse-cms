@@ -237,3 +237,42 @@ class PlatformAdminTests(P1Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OneConversationTests(P1Base):
+    def test_one_inbound_makes_one_contact_and_one_conversation(self):
+        import threading
+        acct = new_account()
+        u = new_user("conv")
+        join(acct, u, "owner")
+        Caller(u, acct)("POST", "/api/whatsapp/config", {"phone_number_id": "pn-conv-1", "access_token": "t", "app_secret": "s"})
+        from engine.whatsapp_client import WhatsAppClient
+
+        def inbound(mid):
+            WhatsAppClient.process_incoming_webhook({"entry": [{"changes": [{"value": {
+                "metadata": {"phone_number_id": "pn-conv-1"}, "contacts": [{"wa_id": "919800000555", "profile": {"name": "N"}}],
+                "messages": [{"from": "919800000555", "id": mid, "type": "text", "text": {"body": "hi"}}]}}]}]})
+        inbound("wamid.c1")
+        inbound("wamid.c2")
+        self.assertEqual(len(cs.list_contacts(acct)), 1)
+        self.assertEqual(len(cs.list_conversations(acct)), 1)
+
+    def test_get_or_create_is_race_safe(self):
+        import threading
+        acct = new_account()
+        cid = cs.create_contact(acct, "R", "+919800000666")
+        out = []
+        ts = [threading.Thread(target=lambda: out.append(cs.get_or_create_conversation(acct, cid)["id"])) for _ in range(6)]
+        [t.start() for t in ts]; [t.join() for t in ts]
+        self.assertEqual(len(set(out)), 1)
+        self.assertEqual(len(cs.list_conversations(acct)), 1)
+
+    def test_preview_csp_allows_toolbar_only_on_preview(self):
+        import importlib, server.security as sec
+        with mock.patch.dict(os.environ, {"VERCEL_ENV": "preview"}):
+            importlib.reload(sec)
+            self.assertIn("vercel.live", dict(sec.SECURITY_HEADERS)["Content-Security-Policy"])
+        with mock.patch.dict(os.environ, {"VERCEL_ENV": "production"}):
+            importlib.reload(sec)
+            self.assertNotIn("vercel.live", dict(sec.SECURITY_HEADERS)["Content-Security-Policy"])
+        importlib.reload(sec)
