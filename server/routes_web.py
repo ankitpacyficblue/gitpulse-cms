@@ -885,6 +885,15 @@ def render_dashboard_html() -> str:
                         </div>
 
                         <!-- Message Composer Input -->
+                        <p id="wa-window-note" class="px-3 text-[11px] text-slate-500"></p>
+                        <form id="wa-window-closed" class="hidden px-3 py-2 border-t border-slate-800 space-y-2" onsubmit="sendChatTemplate(event)">
+                            <p class="text-xs text-amber-200">More than 24 hours since their last message: only an approved template can be sent.</p>
+                            <label for="chat-tpl" class="block text-xs font-medium text-slate-300 mb-1">Template</label>
+                    <select id="chat-tpl" class="input-select text-xs w-full" onchange="showTemplateFields('chat')"></select>
+                    <div id="chat-tpl-vars" class="space-y-2 mt-2"></div>
+                    <p id="chat-tpl-preview" class="text-[11px] text-slate-400 mt-1 whitespace-pre-wrap break-words" aria-live="polite"></p>
+                            <button type="submit" class="btn-primary text-xs">Send template</button>
+                        </form>
                         <form onsubmit="sendWhatsAppReply(event)" data-requires="crm.write" class="p-3 border-t border-slate-800 bg-slate-950 flex items-center gap-2">
                             <input type="text" id="wa-message-input" placeholder="Type WhatsApp message (Enter to send)..." class="input-text text-xs flex-1 py-2">
                             <button type="submit" class="btn-primary text-xs py-2 px-4 flex items-center gap-1.5 shadow-indigo-500/30">
@@ -1096,7 +1105,7 @@ def render_dashboard_html() -> str:
         <div id="tab-wa-templates" class="tab-content hidden">
             <div class="flex flex-wrap justify-between items-center gap-3 mb-4">
                 <p class="text-xs text-slate-400">Create templates in Meta's WhatsApp Manager, then sync them here. Only approved ones can be sent.</p>
-                <button type="button" data-requires="wa.config" class="btn-primary text-xs" onclick="syncTemplates(this)">Sync from Meta</button>
+                <button type="button" data-requires="automations.manage" class="btn-primary text-xs" onclick="syncTemplates(this)">Sync from Meta</button>
             </div>
             <div id="tpl-list" class="space-y-3"></div>
         </div>
@@ -1842,9 +1851,10 @@ def render_dashboard_html() -> str:
                     <p id="new-broadcast-count" class="text-[11px] text-slate-400 mt-1" aria-live="polite"></p>
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-slate-300 mb-1">Message Template *</label>
-                    <textarea id="new-broadcast-template" required rows="4" class="input-text text-xs font-mono resize-none" placeholder="Hi {{name}}! 🚀 Big news from GitPulse: we have just launched..."></textarea>
-                    <p class="text-[11px] text-slate-500 mt-1">Available variables: <code>{{name}}</code>, <code>{{phone}}</code></p>
+                    <label for="bc-tpl" class="block text-xs font-medium text-slate-300 mb-1">Approved template *</label>
+                    <select id="bc-tpl" class="input-select text-xs w-full" onchange="showTemplateFields('bc')"></select>
+                    <div id="bc-tpl-vars" class="space-y-2 mt-2"></div>
+                    <p id="bc-tpl-preview" class="text-[11px] text-slate-400 mt-1 whitespace-pre-wrap break-words" aria-live="polite"></p>
                 </div>
                 <div class="flex items-center gap-2 pt-1">
                     <input type="checkbox" id="new-broadcast-send-now" class="w-4 h-4 rounded text-indigo-600">
@@ -1875,7 +1885,7 @@ def render_dashboard_html() -> str:
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-medium text-slate-300 mb-1">Trigger Event *</label>
-                        <select id="new-auto-trigger" required class="input-select text-xs">
+                        <select id="new-auto-trigger" onchange="updateAutomationFields()" required class="input-select text-xs">
                             <option value="welcome">Welcome (First inbound message from new lead)</option>
                             <option value="keyword" selected>Keyword Match (Contains trigger keywords)</option>
                             <option value="blog_publish">Blog Publish (Auto-alert when article goes live)</option>
@@ -1886,7 +1896,13 @@ def render_dashboard_html() -> str:
                         <input type="text" id="new-auto-keyword" class="input-text text-xs" placeholder="e.g. hours, price, book">
                     </div>
                 </div>
-                <div>
+                <div id="au-tpl-wrap" class="hidden">
+                    <label for="au-tpl" class="block text-xs font-medium text-slate-300 mb-1">Approved template *</label>
+                    <select id="au-tpl" class="input-select text-xs w-full" onchange="showTemplateFields('au')"></select>
+                    <div id="au-tpl-vars" class="space-y-2 mt-2"></div>
+                    <p id="au-tpl-preview" class="text-[11px] text-slate-400 mt-1 whitespace-pre-wrap break-words" aria-live="polite"></p>
+                </div>
+                <div id="au-text-wrap">
                     <label class="block text-xs font-medium text-slate-300 mb-1">Outbound Reply Message Template *</label>
                     <textarea id="new-auto-template" required rows="4" class="input-text text-xs font-mono resize-none" placeholder="Hi {{name}}! Thanks for your message. We will get back to you shortly."></textarea>
                     <p class="text-[11px] text-slate-500 mt-1">Variables: <code>{{name}}</code>, <code>{{phone}}</code>, <code>{{title}}</code>, <code>{{url}}</code></p>

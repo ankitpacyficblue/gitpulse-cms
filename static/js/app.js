@@ -1418,6 +1418,8 @@ async function loadConversationMessages(convId, silent = false) {
         let tick = '';
         if (!isInbound) {
             if (msg.status === 'mock') tick = '<span class="text-[10px] text-amber-300" title="Mock mode: not sent">mock</span>';
+            else if (msg.status === 'queued') tick = '<span class="text-[10px] text-amber-300">queued</span>';
+            else if (msg.status === 'failed') tick = '<span class="text-[10px] text-red-300 font-semibold">failed</span>';
             else if (msg.status === 'read') tick = '<span class="chat-status-tick text-cyan-300 font-bold" title="Read">✓✓</span>';
             else if (msg.status === 'delivered') tick = '<span class="chat-status-tick text-slate-300" title="Delivered">✓✓</span>';
             else tick = '<span class="chat-status-tick text-slate-400" title="Sent">✓</span>';
@@ -1707,6 +1709,7 @@ async function loadWhatsAppBroadcasts() {
                     <div class="text-base font-bold text-emerald-400 mt-0.5">${b.read_count || 0}</div>
                 </div>
             </div>
+            ${b.queued_count || b.failed_count ? `<p class="text-[11px] text-amber-300">Queued: ${Number(b.queued_count || 0)} · Failed: ${Number(b.failed_count || 0)}</p>` : ''}
         `;
         container.appendChild(card);
     });
@@ -1719,10 +1722,10 @@ async function runBroadcastFromUI(broadcastId) {
     const n = bc ? broadcastAudienceCount(bc.target_tag) : null;
     if (n === 0) { showToast('No contacts match this audience, so nothing would be sent.', 'error'); return; }
     if (!confirm(n === null ? 'Send this broadcast now to everyone in its audience?' : `Send this broadcast now to ${n} contact${n === 1 ? '' : 's'}?`)) return;
-    showToast('Executing WhatsApp broadcast campaign...', 'info');
+    showToast('Queuing the broadcast...', 'info');
     const res = await apiPost(`/api/whatsapp/broadcasts/${broadcastId}/run`, {});
     if (res && res.success) {
-        showToast(`Broadcast completed: ${res.stats.sent_count} messages sent!`, 'success');
+        showToast(broadcastResult(res.stats), 'success');
         loadWhatsAppBroadcasts();
         loadStatus();
     } else {
@@ -1970,6 +1973,7 @@ async function openAddBroadcastModal() {
     tags.forEach(t => sel.add(new Option(t, t)));
     if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
     updateBroadcastAudience();
+    fillTemplatePicker('bc');
 }
 function broadcastAudienceCount(tag) {
     if (!tag || tag === 'all') return broadcastContacts.length;
@@ -1989,16 +1993,17 @@ async function submitAddBroadcast(e) {
     e.preventDefault();
     const name = document.getElementById('new-broadcast-name').value;
     const target_tag = document.getElementById('new-broadcast-tag').value;
-    const template_body = document.getElementById('new-broadcast-template').value;
+    const choice = templateChoice('bc');
+    if (!choice) return;
     const auto_send = document.getElementById('new-broadcast-send-now').checked;
     if (auto_send) {
         const n = broadcastAudienceCount(target_tag);
         if (n === 0) { showToast('No contacts match this audience, so nothing would be sent.', 'error'); return; }
         if (!confirm(`Send this now to ${n} contact${n === 1 ? '' : 's'}?`)) return;
     }
-    const res = await apiPost('/api/whatsapp/broadcasts', { name, target_tag, template_body, auto_send });
+    const res = await apiPost('/api/whatsapp/broadcasts', { name, target_tag, auto_send, ...choice });
     if (res && res.success) {
-        showToast(`Broadcast "${name}" created${auto_send ? ' & sent!' : '.'}`, 'success');
+        showToast(res.stats ? broadcastResult(res.stats) : `Broadcast "${name}" created.`, res.stats && res.stats.success === false ? 'error' : 'success');
         closeAddBroadcastModal();
         loadWhatsAppBroadcasts();
         loadStatus();
@@ -2009,6 +2014,7 @@ async function submitAddBroadcast(e) {
 
 function openAddAutomationModal() {
     document.getElementById('modal-add-automation').classList.remove('hidden');
+    updateAutomationFields();
 }
 function closeAddAutomationModal() {
     document.getElementById('modal-add-automation').classList.add('hidden');
@@ -2020,7 +2026,9 @@ async function submitAddAutomation(e) {
     const trigger_keyword = document.getElementById('new-auto-keyword').value;
     const message_template = document.getElementById('new-auto-template').value;
     
-    const res = await apiPost('/api/whatsapp/automations', { name, trigger_type, trigger_keyword, message_template });
+    let choice = {};
+    if (trigger_type === 'blog_publish') { choice = templateChoice('au'); if (!choice) return; }
+    const res = await apiPost('/api/whatsapp/automations', { name, trigger_type, trigger_keyword, message_template, ...choice });
     if (res && res.success) {
         showToast(`Automation rule "${name}" created!`, 'success');
         closeAddAutomationModal();
@@ -2528,7 +2536,7 @@ function consentHtml(c) {
     const meta = [c.consent_source, fmtWhen(c.consent_at)].filter(Boolean).join(' · ');
     const when = meta ? `<div class="text-[10px] text-slate-500">${escapeHtml(meta)}</div>` : '';
     const role = currentUser && currentUser.role;
-    if (!(role === 'owner' || role === 'admin' || isPlatformAdmin())) return `<span class="text-xs ${v === 'opted_out' ? 'text-red-300 font-semibold' : 'text-slate-300'}">${CONSENT_LABELS[v]}</span>${when}`;
+    if (!(role === 'owner' || role === 'admin' || isPlatformAdmin()) || !can('automations.manage')) return `<span class="text-xs ${v === 'opted_out' ? 'text-red-300 font-semibold' : 'text-slate-300'}">${CONSENT_LABELS[v]}</span>${when}`;
     const options = Object.keys(CONSENT_LABELS).map(k => `<option value="${k}" ${k === v ? 'selected' : ''}>${CONSENT_LABELS[k]}</option>`).join('');
     return `<select aria-label="Consent for ${escapeHtml(c.name)}" class="input-select text-xs py-1 min-w-[9rem] ${v === 'opted_out' ? 'text-red-300' : ''}" onchange="setConsent(${Number(c.id)}, this.value, '${v}', this)">${options}</select>${when}`;
 }
@@ -2539,7 +2547,7 @@ async function setConsent(id, value, previous, select) {
         source = (prompt('How did this person agree to receive messages? (for example: website form, 25 Nov)') || '').trim();
         if (!source) { select.value = previous; return; }
     }
-    const res = await apiPut(`/api/whatsapp/contacts/${id}`, { consent_status: value, consent_source: source || 'set by team' });
+    const res = await apiPut(`/api/whatsapp/contacts/${id}/consent`, { status: value, source: source || 'set by team' });
     if (res && res.success) { showToast('Consent saved.', 'success'); loadWhatsAppContacts(); }
     else select.value = previous;
 }
@@ -2550,8 +2558,9 @@ function renderNeedsHuman(conv) {
     if (!box) return;
     box.classList.toggle('hidden', !conv.id);
     conversationAiOn = conv.ai_mode !== 'off' && !conv.needs_human;
+    renderWindow(conv);
     document.getElementById('wa-needs-human-text').innerText = conv.needs_human
-        ? `Needs a person${conv.needs_human_reason ? ': ' + conv.needs_human_reason : ''}`
+        ? `Needs a person${conv.handoff_reason ? ': ' + conv.handoff_reason : ''}`
         : conversationAiOn ? 'AI is answering this chat.' : 'AI is off for this chat.';
     document.getElementById('wa-ai-btn').innerText = conversationAiOn ? 'Take over' : 'Resume AI';
 }
@@ -2595,7 +2604,7 @@ function fillKnowledge(k) {
     document.getElementById('kb-banned').value = joined(k.banned_claims);
     document.getElementById('kb-handoff').value = k.handoff_message || '';
     document.getElementById('kb-faq').innerHTML = '';
-    (k.faq || []).forEach(addFaqRow);
+    (k.faqs || []).forEach(addFaqRow);
     document.getElementById('kb-prices').innerHTML = '';
     (k.price_items || []).forEach(addPriceRow);
 }
@@ -2622,9 +2631,9 @@ async function saveKnowledge(e) {
     const val = id => document.getElementById(id).value.trim();
     const body = {
         ai_enabled: document.getElementById('kb-ai-enabled').checked,
-        business_facts: val('kb-facts'), locations: lines('kb-locations'), tone: val('kb-tone'),
+        business_facts: val('kb-facts'), locations: val('kb-locations'), tone: val('kb-tone'),
         languages: lines('kb-languages'), banned_claims: lines('kb-banned'), handoff_message: val('kb-handoff'),
-        faq: [...document.querySelectorAll('.kb-faq-row')].map(r => ({ question: r.querySelector('[data-f=question]').value.trim(), answer: r.querySelector('[data-f=answer]').value.trim() })).filter(x => x.question && x.answer),
+        faqs: [...document.querySelectorAll('.kb-faq-row')].map(r => ({ question: r.querySelector('[data-f=question]').value.trim(), answer: r.querySelector('[data-f=answer]').value.trim() })).filter(x => x.question && x.answer),
         price_items: [...document.querySelectorAll('.kb-price-row')].map(r => ({ text: r.querySelector('[data-f=text]').value.trim(), ai_may_quote: r.querySelector('[data-f=quote]').checked })).filter(x => x.text)
     };
     const res = await apiPut('/api/ai/knowledge', body);
@@ -2663,7 +2672,7 @@ async function syncTemplates(btn) {
     btn.disabled = true;
     const res = await apiPost('/api/whatsapp/templates/sync', {});
     btn.disabled = false;
-    if (res && !res.error) { showToast('Templates synced.', 'success'); loadTemplates(); }
+    if (res && res.ok) { showToast(`${Number(res.count)} templates synced.`, 'success'); loadTemplates(); }
 }
 
 function updateAlertsVisibility(tab) {
@@ -2690,7 +2699,7 @@ async function loadAlerts() {
         return `<li class="flex flex-wrap justify-between items-center gap-2 border-t border-slate-800 pt-2">
             <div class="min-w-0 flex-1"><div class="text-xs ${a.severity === 'warning' ? 'text-amber-300' : 'text-red-300'} break-words">${escapeHtml(a.message)}${a.count > 1 ? ` (${Number(a.count)} times)` : ''}</div>
             <div class="text-[10px] text-slate-500">${escapeHtml([String(a.type || '').replace(/_/g, ' '), fmtWhen(a.last_seen || a.first_seen)].filter(Boolean).join(' · '))}</div></div>
-            ${link}${can('crm.write') ? `<button type="button" class="btn-secondary text-xs" onclick="resolveAlert(${Number(a.id)})">Resolve</button>` : ''}
+            ${link}${a.id && can('crm.write') ? `<button type="button" class="btn-secondary text-xs" onclick="resolveAlert(${Number(a.id)})">Resolve</button>` : ''}
         </li>`;
     }).join('') + '</ul>' : '<p class="text-xs text-slate-400">No problems.</p>';
 }
@@ -2702,6 +2711,7 @@ async function resolveAlert(id) {
 }
 
 function reloadPhase1() {
+    approvedTemplates = [];
     fillKnowledge({});
     document.getElementById('kb-test-result').innerText = '';
     document.getElementById('tpl-list').innerHTML = '';
@@ -2710,4 +2720,80 @@ function reloadPhase1() {
     loadAlerts();
     if (!document.getElementById('tab-wa-knowledge').classList.contains('hidden')) loadKnowledge();
     if (!document.getElementById('tab-wa-templates').classList.contains('hidden')) loadTemplates();
+}
+
+// Approved templates: used by broadcasts, blog alerts, and chats outside the 24-hour window.
+let approvedTemplates = [];
+async function fillTemplatePicker(prefix) {
+    const sel = document.getElementById(`${prefix}-tpl`);
+    const data = await apiGet('/api/whatsapp/templates');
+    approvedTemplates = ((data && data.templates) || []).filter(t => String(t.status).toUpperCase() === 'APPROVED');
+    const prev = sel.value;
+    sel.innerHTML = '';
+    sel.add(new Option(approvedTemplates.length ? 'Choose a template' : 'No approved templates. Sync them under Message Templates.', ''));
+    approvedTemplates.forEach((t, i) => sel.add(new Option(`${t.name} (${t.language})`, `${t.name}|${t.language}`)));
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+    showTemplateFields(prefix);
+}
+function pickedTemplate(prefix) {
+    const [name, language] = document.getElementById(`${prefix}-tpl`).value.split('|');
+    return approvedTemplates.find(t => t.name === name && t.language === language);
+}
+function showTemplateFields(prefix) {
+    const t = pickedTemplate(prefix);
+    const box = document.getElementById(`${prefix}-tpl-vars`);
+    box.innerHTML = '';
+    for (let i = 1; t && i <= t.variables; i++) {
+        const input = document.createElement('input');
+        input.className = 'input-text text-xs w-full';
+        input.placeholder = `Value for {{${i}}}` + (prefix === 'chat' ? '' : ' (you can use {{name}})');
+        input.setAttribute('aria-label', `Value for variable ${i}`);
+        input.oninput = () => previewTemplate(prefix);
+        box.appendChild(input);
+    }
+    previewTemplate(prefix);
+}
+function previewTemplate(prefix) {
+    const t = pickedTemplate(prefix);
+    const values = [...document.querySelectorAll(`#${prefix}-tpl-vars input`)].map(i => i.value);
+    document.getElementById(`${prefix}-tpl-preview`).innerText = t ? String(t.body || '').replace(/\{\{(\d+)\}\}/g, (m, n) => values[n - 1] || m) : '';
+}
+function templateChoice(prefix) {
+    const t = pickedTemplate(prefix);
+    if (!t) { showToast('Choose an approved template.', 'error'); return null; }
+    const params = [...document.querySelectorAll(`#${prefix}-tpl-vars input`)].map(i => i.value.trim());
+    if (params.some(v => !v)) { showToast('Fill in every template value.', 'error'); return null; }
+    return { template_name: t.name, template_language: t.language, template_params: params };
+}
+function updateAutomationFields() {
+    const blog = document.getElementById('new-auto-trigger').value === 'blog_publish';
+    document.getElementById('au-tpl-wrap').classList.toggle('hidden', !blog);
+    document.getElementById('au-text-wrap').classList.toggle('hidden', blog);
+    document.getElementById('new-auto-template').required = !blog;
+    if (blog) fillTemplatePicker('au');
+}
+function broadcastResult(st) {
+    if (st.success === false) return st.error || 'The broadcast was not sent.';
+    return `Queued for ${Number(st.queued_count || 0)}, skipped ${Number(st.skipped_count || 0)}.`;
+}
+
+let windowConversationId = null;
+function renderWindow(conv) {
+    const box = document.getElementById('wa-window-closed');
+    const note = document.getElementById('wa-window-note');
+    const closed = !!conv.id && conv.window_open === false;
+    note.innerText = conv.id && conv.window_open && conv.window_expires_at ? `Free-text replies open until ${fmtWhen(conv.window_expires_at)}.` : '';
+    box.classList.toggle('hidden', !closed || !can('crm.write'));
+    const input = document.getElementById('wa-message-input');
+    input.disabled = closed;
+    if (closed && windowConversationId !== conv.id) fillTemplatePicker('chat');
+    windowConversationId = closed ? conv.id : null;
+}
+async function sendChatTemplate(e) {
+    e.preventDefault();
+    const id = activeConversationId;
+    const c = templateChoice('chat');
+    if (!id || !c) return;
+    const res = await apiPost(`/api/whatsapp/conversations/${id}/template`, { name: c.template_name, language: c.template_language, params: c.template_params });
+    if (res && res.success) { showToast('Template sent.', 'success'); loadConversationMessages(id); }
 }
