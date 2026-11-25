@@ -80,8 +80,8 @@ class TestConversationsAndMessages(TenancyBase):
         ca = cs.create_contact(self.a, "Ann", "+15550007777")
         cb = cs.create_contact(self.b, "Bob", "+15550008888")
         conv_a = cs.get_or_create_conversation(self.a, ca)
-        with get_connection() as conn:
-            with self.assertRaises(Exception):
+        with self.assertRaises(Exception):
+            with get_connection() as conn:
                 conn.execute("""INSERT INTO messages (account_id, conversation_id, contact_id, direction, body, created_at)
                                 VALUES (?,?,?,?,?,?)""", (self.b, conv_a["id"], cb, "inbound", "x", "now"))
 
@@ -145,8 +145,8 @@ class TestAccountsAndMembership(TenancyBase):
 
     def test_hard_delete_blocked_by_restrict(self):
         cs.create_contact(self.a, "Ann", "+15550001212")
-        with get_connection() as conn:
-            with self.assertRaises(Exception):
+        with self.assertRaises(Exception):      # outside the block, so the connection rolls back
+            with get_connection() as conn:
                 conn.execute("DELETE FROM accounts WHERE id = ?", (self.a,))
 
 
