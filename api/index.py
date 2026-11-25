@@ -277,7 +277,8 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({"error": "Endpoint not found"}).encode("utf-8"))
 
 def _wsgi_headers(environ):
-    return {"X-Account-Id": environ.get("HTTP_X_ACCOUNT_ID", ""), "X-Cron-Secret": environ.get("HTTP_X_CRON_SECRET", ""),
+    return {"X-Account-Id": environ.get("HTTP_X_ACCOUNT_ID", ""), "Host": environ.get("HTTP_HOST", ""),
+            "X-Forwarded-Host": environ.get("HTTP_X_FORWARDED_HOST", ""), "X-Cron-Secret": environ.get("HTTP_X_CRON_SECRET", ""),
             "Authorization": environ.get("HTTP_AUTHORIZATION", "")}
 
 

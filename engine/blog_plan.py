@@ -41,11 +41,15 @@ def _parse_time(value: Any) -> str:
 
 
 def _view(row: Dict[str, Any], names: Dict[int, str], files: Dict[int, Dict[str, Any]], links: Dict[str, str],
-          host: str) -> Dict[str, Any]:
+          host: str, writers: Dict[int, str]) -> Dict[str, Any]:
     d = {k: row[k] for k in ("id", "title", "topic", "keyword", "status", "body", "project_id", "assignee_id",
                              "post_url", "error")}
     d["publish_at"] = row["publish_at"] + "Z" if row["publish_at"] else None
     d["assignee_name"] = names.get(row["assignee_id"])
+    d["state"] = ("rejected" if row["status"] == "draft" and row["rejected_note"]
+                  else {"needs_approval": "in_review", "approved": "scheduled"}.get(row["status"], row["status"]))
+    d["published_at"] = row["published_at"] + "Z" if row["published_at"] else None
+    d["writer_name"] = writers.get(row["writer_token_id"])
     origin = f"https://{host}" if host else ""
     d["images"] = []
     for image in json.loads(row["images"] or "[]"):
@@ -68,7 +72,10 @@ def _views(account_id: str, rows: List[Dict[str, Any]], host: str) -> List[Dict[
             pass
     links = media.views(list(files.values()))
     names = _names(account_id)
-    return [_view(r, names, files, links, host) for r in rows]
+    with db.get_connection() as conn:
+        writers = {w["id"]: w["name"] for w in conn.execute("SELECT id, name FROM writer_tokens WHERE account_id = ?",
+                                                           (account_id,)).fetchall()}
+    return [_view(r, names, files, links, host, writers) for r in rows]
 
 
 def _names(account_id: str) -> Dict[int, str]:
@@ -96,7 +103,8 @@ def list_items(account_id: str, status: str = "", assignee_id: Optional[int] = N
         q += " AND assignee_id = ?"
         args.append(assignee_id)
     with db.get_connection() as conn:
-        rows = [dict(r) for r in conn.execute(q + " ORDER BY publish_at, id LIMIT 500", args).fetchall()]
+        rows = [dict(r) for r in conn.execute(q + " ORDER BY publish_at DESC, id DESC LIMIT 500", args).fetchall()]
+    rows.reverse()
     return _views(account_id, rows, host)
 
 
@@ -400,7 +408,8 @@ def _publish_job(job: Dict[str, Any]) -> None:
     result = publish(account_id, row)
     if not result.get("success"):
         return _failed(account_id, item_id, str(result.get("error", "publishing error")))
-    _set(account_id, item_id, status="published", error="", post_url=result["url"], post_id=result["post_id"])
+    _set(account_id, item_id, status="published", error="", post_url=result["url"], post_id=result["post_id"],
+         published_at=_now())
 
 
 def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:

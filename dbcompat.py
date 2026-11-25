@@ -25,7 +25,7 @@ OTHER_TABLES = {"accounts", "memberships", "sessions", "settings", "account_sett
 AUTOID_TABLES = {
     "clients", "projects", "posts", "system_logs", "users", "login_attempts", "post_views",
     "whatsapp_accounts", "contacts", "conversations", "messages", "deals", "broadcasts", "automations",
-    "jobs", "alerts", "wa_templates", "entry_links", "blog_plan", "contact_fields", "media_files",
+    "jobs", "alerts", "wa_templates", "entry_links", "blog_plan", "contact_fields", "media_files", "writer_tokens",
 }
 
 

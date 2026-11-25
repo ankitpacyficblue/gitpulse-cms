@@ -10,7 +10,7 @@ import urllib.parse
 import crm_store as cs
 import database as db
 import dbcompat
-from engine import alerts, assistant, blog_plan, contact_fields, jobs, media, messaging
+from engine import alerts, assistant, blog_plan, contact_fields, jobs, media, messaging, writer_tokens
 from engine.whatsapp_client import WhatsAppClient
 from server.routes_api import route
 
@@ -242,7 +242,7 @@ def plan_list(ctx, m, q, body):
     assignee = q.get("assignee_id", "")
     return 200, {"items": blog_plan.list_items(ctx.account_id, status=q.get("status", ""),
                                                assignee_id=int(assignee) if assignee.isdigit() else None,
-                                               host=ctx.host)}
+                                               host=ctx.host), "tick_hours": jobs.TICK_HOURS}
 
 
 @route("POST", r"/api/blog/plan", "acct:content.write")
@@ -320,3 +320,63 @@ def media_confirm(ctx, m, q, body):
 @route("DELETE", r"/api/media/(?P<id>\d+)", "acct:content.publish")
 def media_delete(ctx, m, q, body):
     return _media(lambda: media.delete(ctx.account_id, m.group("id"), force=q.get("force") == "1") or {"success": True})
+
+
+# ------------------------------------------------------------------ AI writer tokens
+
+def _writer(action, code=200):
+    try:
+        return code, action()
+    except (blog_plan.PlanError, media.MediaError) as e:
+        return e.status, {"error": e.code, "message": e.message}
+
+
+@route("GET", r"/api/writer-tokens", "acct:users.manage")
+def writer_token_list(ctx, m, q, body):
+    return 200, {"tokens": writer_tokens.list_tokens(ctx.account_id)}
+
+
+@route("POST", r"/api/writer-tokens", "acct:users.manage")
+def writer_token_create(ctx, m, q, body):
+    res = _writer(lambda: writer_tokens.create(ctx.account_id, body.get("name"), ctx.user["id"]), 201)
+    if res[0] == 201:
+        db.log_event(f"Writer token '{res[1]['name']}' created by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
+    return res
+
+
+@route("DELETE", r"/api/writer-tokens/(?P<id>\d+)", "acct:users.manage")
+def writer_token_revoke(ctx, m, q, body):
+    res = _writer(lambda: writer_tokens.revoke(ctx.account_id, int(m.group("id"))) or {"success": True})
+    if res[0] == 200:
+        db.log_event(f"Writer token #{m.group('id')} revoked by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
+    return res
+
+
+@route("GET", r"/api/writer/projects", "writer")
+def writer_projects(ctx, m, q, body):
+    return 200, {"projects": writer_tokens.projects(ctx.writer)}
+
+
+@route("POST", r"/api/writer/media/upload-url", "writer")
+def writer_upload_url(ctx, m, q, body):
+    return _writer(lambda: writer_tokens.upload_url(ctx.writer, body), 201)
+
+
+@route("POST", r"/api/writer/media", "writer")
+def writer_media_confirm(ctx, m, q, body):
+    return _writer(lambda: writer_tokens.confirm(ctx.writer, body.get("media_id"), ctx.host), 201)
+
+
+@route("GET", r"/api/writer/posts", "writer")
+def writer_posts(ctx, m, q, body):
+    return 200, {"items": writer_tokens.posts(ctx.writer)}
+
+
+@route("POST", r"/api/writer/posts", "writer")
+def writer_submit(ctx, m, q, body):
+    return _writer(lambda: {"item": writer_tokens.submit_draft(ctx.writer, body)}, 201)
+
+
+@route("PATCH", r"/api/writer/posts/(?P<id>\d+)", "writer")
+def writer_revise(ctx, m, q, body):
+    return _writer(lambda: {"item": writer_tokens.revise(ctx.writer, int(m.group("id")), body)})

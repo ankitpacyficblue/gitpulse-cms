@@ -30,6 +30,7 @@ from engine import auth
 from engine import secrets_box
 from engine import assistant, contact_fields, jobs, messaging
 from engine import media
+from engine import writer_tokens
 from engine.accounts_service import ServiceError
 from engine.auth import (
     authenticate_user, revoke_session, update_user_password, verify_password,
@@ -128,6 +129,15 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
         if access == "public":
             ctx = Ctx(None, ip=client_ip, user_agent=user_agent)
             ctx.headers = hdrs
+            return fn(ctx, match, query_params, body)
+
+        if access == "writer":      # an AI writer's own token, never a session; scoped to its account
+            writer = writer_tokens.authenticate(hdrs.get("authorization", ""))
+            if not writer:
+                return 401, {"error": "invalid_writer_token", "message": "This writer token is not valid."}
+            ctx = Ctx(None, writer["account_id"], ip=client_ip, user_agent=user_agent,
+                      host=hdrs.get("x-forwarded-host") or hdrs.get("host", ""))
+            ctx.writer = writer
             return fn(ctx, match, query_params, body)
 
         if not current_user:

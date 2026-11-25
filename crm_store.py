@@ -219,10 +219,18 @@ def init_schema(conn) -> None:
         token TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'pending', source TEXT NOT NULL DEFAULT 'library',
         is_public INTEGER NOT NULL DEFAULT 0, created_by INTEGER, created_at TEXT NOT NULL
     )""")
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS writer_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, hint TEXT NOT NULL DEFAULT '', created_by INTEGER,
+        created_at TEXT NOT NULL, last_used_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT ''
+    )""")
     for table, columns in (
+        ("media_files", (("writer_token_id", "INTEGER"),)),
         ("blog_plan", (("images", "TEXT NOT NULL DEFAULT '[]'"), ("rejected_note", "TEXT NOT NULL DEFAULT ''"),
                        ("rejected_by", "INTEGER"), ("rejected_at", "TEXT NOT NULL DEFAULT ''"),
-                       ("publish_origin", "TEXT NOT NULL DEFAULT ''"))),
+                       ("publish_origin", "TEXT NOT NULL DEFAULT ''"),
+                       ("writer_token_id", "INTEGER"), ("published_at", "TEXT NOT NULL DEFAULT ''"))),
         ("entry_links", (("source", "TEXT NOT NULL DEFAULT 'website'"), ("campaign", "TEXT NOT NULL DEFAULT ''"))),
         ("contacts", (("consent_status", "TEXT NOT NULL DEFAULT 'unknown'"), ("consent_source", "TEXT NOT NULL DEFAULT ''"),
                       ("consent_at", "TEXT NOT NULL DEFAULT ''"), ("consent_wording", "TEXT NOT NULL DEFAULT ''"),

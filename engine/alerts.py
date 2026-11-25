@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 import database as db
 
 TYPES = ("send_failed", "ai_failed", "handoff", "webhook_rejected", "token_invalid", "blog_failed", "worker_stalled")
-STALL_SECONDS = 300
+STALL_SECONDS = 3 * 3600 + 900      # the scheduler runs every 3 hours
 
 
 def raise_alert(account_id: str, kind: str, message: str, link: str = "", severity: str = "warning") -> None:
@@ -41,7 +41,7 @@ def list_alerts(account_id: str, include_resolved: bool = False) -> List[Dict[st
                        "first_seen": None, "last_seen": None, "resolved_at": ""})
     elif time.time() - last > STALL_SECONDS:
         out.insert(0, {"id": None, "type": "worker_stalled", "severity": "error", "link": "", "count": 1,
-                       "message": "The background worker has not run in the last 5 minutes. Queued messages and "
+                       "message": "The background worker has not run in over 3 hours. Queued messages and "
                                   "scheduled posts are waiting.",
                        "first_seen": None, "last_seen": datetime.utcfromtimestamp(last).isoformat() if last else None,
                        "resolved_at": ""})

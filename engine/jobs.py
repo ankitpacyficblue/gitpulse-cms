@@ -15,6 +15,7 @@ from engine import alerts
 
 RETRY_DELAYS = (60, 300, 1800)      # after the 1st, 2nd and 3rd failed attempt
 STALE_SECONDS = 600
+TICK_HOURS = 3      # how often the scheduler calls /api/internal/tick (Supabase pg_cron, see docs/SCHEDULER.md)
 TICK_BUDGET_SECONDS = 40
 OPPORTUNISTIC_EVERY = 60      # seconds between queue drains triggered by normal requests
 OPPORTUNISTIC_BUDGET = 3
