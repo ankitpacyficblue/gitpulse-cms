@@ -468,12 +468,12 @@ def render_dashboard_html() -> str:
             <div class="sidebar-footer">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center space-x-2 min-w-0">
-                        <div class="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-xs text-white">
-                            A
+                        <div class="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-xs text-white" id="header-avatar" aria-hidden="true">
+                            &nbsp;
                         </div>
                         <div class="min-w-0">
-                            <div id="header-username" class="text-xs font-semibold text-white truncate">admin</div>
-                            <div class="text-[10px] text-slate-400">Super Administrator</div>
+                            <div id="header-username" class="text-xs font-semibold text-white truncate">&nbsp;</div>
+                            <div class="text-[10px] text-slate-400">&nbsp;</div>
                         </div>
                     </div>
                     <button onclick="handleLogout()" class="text-slate-400 hover:text-red-400 text-xs p-1" title="Sign Out">
@@ -637,20 +637,20 @@ def render_dashboard_html() -> str:
                 <div class="space-y-3">
                     <h3 class="text-sm font-semibold text-slate-200">Public Headless Content API Endpoints</h3>
                     <div class="space-y-2 text-xs font-mono">
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
-                            <span class="text-cyan-400">GET /api/public/projects/{id}/posts</span>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
+                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/posts</span>
                             <span class="text-slate-500">Paginated JSON feed of published posts</span>
                         </div>
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
-                            <span class="text-cyan-400">GET /api/public/projects/{id}/posts/{slug}</span>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
+                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/posts/{slug}</span>
                             <span class="text-slate-500">Full post markdown, frontmatter, & view counter</span>
                         </div>
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
-                            <span class="text-cyan-400">GET /api/public/projects/{id}/posts/{slug}/og-image.svg</span>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
+                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/posts/{slug}/og-image.svg</span>
                             <span class="text-slate-500">Dynamic 1200x630 OpenGraph hero banner</span>
                         </div>
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
-                            <span class="text-cyan-400">GET /api/public/projects/{id}/rss.xml</span>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
+                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/rss.xml</span>
                             <span class="text-slate-500">Auto-generated RSS 2.0 XML feed</span>
                         </div>
                     </div>

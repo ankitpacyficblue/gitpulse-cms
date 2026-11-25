@@ -31,6 +31,8 @@ async function initApp() {
     try { window.__perms = authData.permissions || null; } catch (e) {}
     const userEl = document.getElementById('header-username');
     if (userEl) userEl.innerText = currentUser.username;
+    const avEl = document.getElementById('header-avatar');
+    if (avEl) avEl.innerText = (currentUser.username || '?').charAt(0).toUpperCase();
 
     // Update 2FA status badge
     const badge2fa = document.getElementById('badge-2fa-status');
@@ -43,6 +45,8 @@ async function initApp() {
         }
     }
 
+    // First login with a one-time password: ask for a new one before loading anything else.
+    if (needsPasswordChange()) { showPasswordChange(); return; }
     // 2. Load Dashboard Components
     await fetchPresets();
     await loadClients();
@@ -52,18 +56,14 @@ async function initApp() {
         showNoAccess(isPlatformAdmin());
         if (!isPlatformAdmin()) return;
     }
-    await loadStatus();
-    await loadProjects();
-    await loadStagingPosts();
-    await loadPosts();
-    await loadWhatsAppInbox();
-    await loadWhatsAppContacts();
-    await loadWhatsAppDeals();
-    await loadWhatsAppBroadcasts();
-    await loadWhatsAppAutomations();
-    await loadWhatsAppConfig();
-    await loadLogs();
-    if (isPlatformAdmin()) { await loadSettings(); await loadSupabaseStatus(); }
+    // Role gating first, so buttons are right even if a later load fails.
+    applyRolePermissions();
+    const hasAccount = !!getActiveAccountId();
+    const loaders = [loadStatus, loadProjects, loadStagingPosts, loadPosts, loadLogs];
+    if (hasAccount) loaders.push(loadWhatsAppInbox, loadWhatsAppContacts, loadWhatsAppDeals, loadWhatsAppBroadcasts, loadWhatsAppAutomations, loadWhatsAppConfig);
+    if (isPlatformAdmin()) loaders.push(loadSettings, loadSupabaseStatus);
+    // Run in parallel; one failing screen must not blank the rest.
+    await Promise.allSettled(loaders.map(f => { try { return Promise.resolve(f()); } catch (e) { return Promise.reject(e); } }));
     applyRolePermissions();
     updateAccountBanner();
 
@@ -2078,6 +2078,11 @@ function applyRolePermissions() {
     });
     const nav = document.getElementById('nav-users');
     if (nav) nav.classList.toggle('hidden', !can('users.manage'));
+    if (!getActiveAccountId()) {
+        // No account chosen: CRM screens have nothing to show and every call would be rejected.
+        document.querySelectorAll('.sidebar-nav-item[onclick*="switchTab(\'wa-"], #nav-users').forEach(n => n.classList.add('hidden'));
+        document.querySelectorAll('header [onclick^="openAddContactModal"], header [onclick^="openAddDealModal"], header [onclick^="openAddBroadcastModal"]').forEach(n => n.classList.add('hidden'));
+    }
     const cfgNav = document.querySelector("[onclick*=\"switchTab('wa-config')\"]");
     if (cfgNav) cfgNav.classList.toggle('hidden', !can('wa.config'));
     const navGate = { logs: 'audit.read', zeroredeploy: 'content.publish' };
@@ -2097,7 +2102,7 @@ function applyRolePermissions() {
     const nb = document.getElementById('new-menu-btn');
     if (nb) nb.style.visibility = anyAction ? '' : 'hidden';
     const roleEl = document.querySelector('.sidebar-footer .text-slate-400');
-    if (roleEl && currentUser) roleEl.innerText = currentUser.role ? currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1) : '';
+    if (roleEl && currentUser) roleEl.innerText = isPlatformAdmin() ? 'Platform admin' : (currentUser.role ? currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1) : '');
 }
 
 function navKey(ev, el) {
@@ -2143,9 +2148,9 @@ async function loadUsersAndRoles() {
         const locked = isSelf || (u.role === 'owner' && !can('account.manage'));
         const opts = ['owner', 'admin', 'agent', 'viewer'].filter(r => r !== 'owner' || can('account.manage') || u.role === 'owner').map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r}</option>`).join('');
         tr.innerHTML = `
-            <td class="px-5 py-3 text-white">${escapeHtml(u.username || u.email || '')}${u.email && u.username ? `<div class="text-[11px] text-slate-400">${escapeHtml(u.email)}</div>` : ''}${u.is_active === false ? '<span class="ml-2 text-[10px] text-amber-300">inactive</span>' : ''}</td>
+            <td class="px-3 sm:px-5 py-3 text-white break-all">${escapeHtml(u.username || u.email || '')}${u.email && u.username ? `<div class="text-[11px] text-slate-400">${escapeHtml(u.email)}</div>` : ''}${u.is_active === false ? '<span class="ml-2 text-[10px] text-amber-300">inactive</span>' : ''}</td>
             <td class="px-5 py-3">${manage && !locked
-                ? `<select aria-label="Role for ${escapeHtml(u.username)}" class="input-text text-xs" onchange="changeUserRole(${Number(uid)}, this.value)">${opts}</select>`
+                ? `<select aria-label="Role for ${escapeHtml(u.username)}" class="input-text text-xs min-w-[6.5rem]" onchange="changeUserRole(${Number(uid)}, this.value)">${opts}</select>`
                 : `<span class="text-xs text-slate-300">${escapeHtml(u.role)}</span>`}</td>
             <td class="px-5 py-3 text-right">${manage && !locked
                 ? `<button class="btn-secondary text-[11px] py-1 px-2.5 mr-1" onclick="resetUserPassword(${Number(uid)}, ${jsAttr(u.username)})">Reset password</button><button class="btn-secondary text-[11px] py-1 px-2.5 text-red-400" onclick="revokeUser(${Number(uid)}, ${jsAttr(u.username)})">Revoke access</button>` : ''}</td>`;
