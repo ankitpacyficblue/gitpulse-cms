@@ -184,9 +184,9 @@ class TestCrossAccountIsolationViaApi(Base):
         base = f"/api/whatsapp/conversations/{conv['id']}/assign"
         agent_id = self.users["agent"].user["id"]
         self.assertEqual(self.users["admin"]("PUT", base, {"user_id": agent_id})[0], 200)
-        mine = self.users["agent"]("GET", "/api/whatsapp/conversations", query={"assigned": "me"})[1]["conversations"]
+        mine = self.users["agent"]("GET", "/api/whatsapp/conversations", query={"assigned": "me", "include_empty": "1"})[1]["conversations"]
         self.assertEqual([c["id"] for c in mine], [conv["id"]])
-        self.assertEqual(self.users["admin"]("GET", "/api/whatsapp/conversations", query={"assigned": "me"})[1]["conversations"], [])
+        self.assertEqual(self.users["admin"]("GET", "/api/whatsapp/conversations", query={"assigned": "me", "include_empty": "1"})[1]["conversations"], [])
         self.assertEqual(self.users["admin"]("PUT", base, {"user_id": self.outsider_user["id"]})[0], 400)
         self.assertEqual(self.users["admin"]("PUT", base, {"user_id": "abc"})[0], 400)
         self.assertEqual(self.users["viewer"]("PUT", base, {"user_id": agent_id})[0], 403)

@@ -611,8 +611,16 @@ def _conv(row) -> Dict[str, Any]:
     return d
 
 
-def list_conversations(account_id: str, status: str = "", assigned_user_id: Optional[int] = None) -> List[Dict[str, Any]]:
+def list_conversations(account_id: str, status: str = "", assigned_user_id: Optional[int] = None,
+                       include_empty: bool = True, contact_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """include_empty=False hides conversations that have no message yet (the API default). A contact_id
+    filter returns that contact's conversation even when empty."""
     q, p = _CONV_SELECT + " WHERE conv.account_id = ?", [account_id]
+    if contact_id is not None:
+        q += " AND conv.contact_id = ?"
+        p.append(contact_id)
+    elif not include_empty:
+        q += " AND EXISTS (SELECT 1 FROM messages mm WHERE mm.conversation_id = conv.id AND mm.account_id = conv.account_id)"
     if assigned_user_id is not None:
         q += " AND conv.assigned_user_id = ?"
         p.append(assigned_user_id)

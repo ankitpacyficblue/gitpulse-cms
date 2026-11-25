@@ -276,3 +276,26 @@ class OneConversationTests(P1Base):
             importlib.reload(sec)
             self.assertNotIn("vercel.live", dict(sec.SECURITY_HEADERS)["Content-Security-Policy"])
         importlib.reload(sec)
+
+
+class EmptyConversationFilterTests(P1Base):
+    def test_default_hides_empty_and_flags_show_them(self):
+        acct = new_account()
+        u = new_user("emp")
+        join(acct, u, "owner")
+        o = Caller(u, acct)
+        cid = o("POST", "/api/whatsapp/contacts", {"name": "Empty", "phone": "+919811100001"})[1]["id"]
+        self.assertEqual(o("GET", "/api/whatsapp/conversations")[1]["conversations"], [])
+        self.assertEqual(len(o("GET", "/api/whatsapp/conversations", query={"include_empty": "1"})[1]["conversations"]), 1)
+        mine = o("GET", "/api/whatsapp/conversations", query={"contact_id": str(cid)})[1]["conversations"]
+        self.assertEqual(len(mine), 1)
+        cv = mine[0]["id"]
+        cs.create_message(acct, cv, cid, "outbound", "hello")
+        self.assertEqual(len(o("GET", "/api/whatsapp/conversations")[1]["conversations"]), 1)
+
+    def test_contact_id_of_another_account_returns_nothing(self):
+        a, b = new_account(), new_account()
+        ua, ub = new_user("ea"), new_user("eb")
+        join(a, ua, "owner"); join(b, ub, "owner")
+        cid = Caller(ua, a)("POST", "/api/whatsapp/contacts", {"name": "X", "phone": "+919811100002"})[1]["id"]
+        self.assertEqual(Caller(ub, b)("GET", "/api/whatsapp/conversations", query={"contact_id": str(cid)})[1]["conversations"], [])
