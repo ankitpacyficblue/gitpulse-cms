@@ -1482,7 +1482,8 @@ async function loadWhatsAppContacts() {
     const tag = document.getElementById('wa-contact-tag-filter') ? document.getElementById('wa-contact-tag-filter').value : '';
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
     
-    let url = `/api/whatsapp/contacts?search=${encodeURIComponent(search)}&tag=${encodeURIComponent(tag)}`;
+    await loadContactFields();
+    let url = `/api/whatsapp/contacts?search=${encodeURIComponent(search)}&tag=${encodeURIComponent(tag)}` + contactFieldQuery();
     
     const data = await apiGet(url);
     if (!data || !data.contacts) return;
@@ -1494,6 +1495,7 @@ async function loadWhatsAppContacts() {
         tbody.innerHTML = `<tr><td colspan="7">${emptyStateHtml('No contacts yet', 'Add your first lead with "+ New Lead". Contacts appear here when customers message this account on WhatsApp.')}</td></tr>`;
         return;
     }
+    shownContacts = data.contacts;
     data.contacts.forEach(c => {
         const tr = document.createElement('tr');
         tr.className = "hover:bg-slate-950/40 transition-colors";
@@ -1530,10 +1532,11 @@ async function loadWhatsAppContacts() {
             <td class="px-5 py-3 text-xs text-slate-300">${leadSourceHtml(c)}</td>
             <td class="px-5 py-3">${consentHtml(c)}</td>
             <td class="px-5 py-3 text-xs text-slate-400 max-w-xs truncate">
-                ${escapeHtml(c.notes || '-')}
+                ${escapeHtml(c.notes || '-')}${customSummaryHtml(c)}
             </td>
             <td class="px-5 py-3 text-right">
                 <div class="flex items-center justify-end gap-1.5">
+                    ${contactFields.length && can('crm.write') ? `<button type="button" onclick="openContactFields(${Number(c.id)})" class="btn-secondary text-[11px] py-1 px-2.5">Fields</button>` : ''}
                     <button onclick="startChatWithContact(${c.id})" class="btn-secondary text-[11px] py-1 px-2.5 flex items-center gap-1 text-emerald-400 hover:text-emerald-300">
                         <span>💬 Chat</span>
                     </button>
@@ -1909,6 +1912,7 @@ async function simulateIncomingWhatsApp(e) {
 // --- 7. Modals Controllers for WhatsApp CRM ---
 
 function openAddContactModal() {
+    loadContactFields().then(() => renderCustomInputs('new-contact-custom', {}));
     document.getElementById('modal-add-contact').classList.remove('hidden');
 }
 function closeAddContactModal() {
@@ -1922,7 +1926,7 @@ async function submitAddContact(e) {
     const tags = document.getElementById('new-contact-tags').value.split(',').map(t => t.trim()).filter(Boolean);
     const notes = document.getElementById('new-contact-notes').value;
     
-    const res = await apiPost('/api/whatsapp/contacts', { name, phone, email, tags, notes });
+    const res = await apiPost('/api/whatsapp/contacts', { name, phone, email, tags, notes, ...(contactFields.length ? { custom: readCustom('new-contact-custom', true) } : {}) });
     if (res && res.success) {
         showToast(`Contact "${name}" added.`, 'success');
         closeAddContactModal();
@@ -2715,6 +2719,7 @@ async function resolveAlert(id) {
 }
 
 function reloadPhase1() {
+    contactFields = []; cfAccount = null;
     planItems = []; closePlanForm(); document.getElementById('plan-list').innerHTML = '';
     if (!document.getElementById('tab-blog-plan').classList.contains('hidden')) loadPlan();
     approvedTemplates = [];
@@ -2823,14 +2828,16 @@ async function loadEntryLinks() {
         : '<p class="text-xs text-slate-400">No enquiries recorded yet.</p>';
     list.innerHTML = entryLinks.length ? entryLinks.map(l => `<article class="${cardClass}">
         <h3 class="text-sm font-semibold text-white break-words">${escapeHtml(l.label)}</h3>
-        <div class="text-[11px] text-slate-400">Code ${escapeHtml(l.code)}${l.campaign ? ' · Campaign ' + escapeHtml(l.campaign) : ''}</div>
+        <div class="text-[11px] text-slate-400">${l.source ? escapeHtml(l.source) + ' · ' : ''}Code ${escapeHtml(l.code)}${l.campaign ? ' · Campaign ' + escapeHtml(l.campaign) : ''}</div>
         <p class="text-xs text-slate-300 mt-2 break-words">${escapeHtml(l.prefill)}</p>
         ${l.url ? `<p class="text-xs font-mono text-indigo-300 mt-2 break-all">${escapeHtml(l.url)}</p>` : '<p class="text-xs text-amber-300 mt-2">Add the business phone number under WhatsApp API Setup to get the link.</p>'}
         <div class="flex flex-wrap gap-2 mt-3">
             ${l.url ? `<button type="button" class="btn-secondary text-xs" onclick="copyEntry(${Number(l.id)}, false)">Copy link</button>
-            <button type="button" class="btn-secondary text-xs" onclick="copyEntry(${Number(l.id)}, true)">Copy website button</button>` : ''}
+            <button type="button" class="btn-secondary text-xs" onclick="copyEntry(${Number(l.id)}, true)">Copy website button</button>
+            <button type="button" class="btn-secondary text-xs" aria-expanded="false" onclick="toggleQr(${Number(l.id)}, this)">QR code</button>` : ''}
             ${can('automations.manage') ? `<button type="button" class="btn-secondary text-xs text-red-300" onclick="deleteEntryLink(${Number(l.id)})">Delete</button>` : ''}
         </div>
+        <div id="qr-${Number(l.id)}" class="hidden mt-3"></div>
     </article>`).join('') : emptyStateHtml('No entry links yet', 'Create one for your website button and one for each ad.');
 }
 async function copyEntry(id, asButton) {
@@ -2844,7 +2851,7 @@ async function saveEntryLink(e) {
     e.preventDefault();
     const val = i => document.getElementById(i).value.trim();
     const form = e.target;
-    const res = await apiPost('/api/entry-links', { label: val('entry-label'), code: val('entry-code'), campaign: val('entry-campaign'), message: val('entry-message') });
+    const res = await apiPost('/api/entry-links', { source: val('entry-source'), label: val('entry-label'), code: val('entry-code'), campaign: val('entry-campaign'), message: val('entry-message') });
     if (res && res.success) { showToast('Entry link created.', 'success'); form.reset(); loadEntryLinks(); }
 }
 async function deleteEntryLink(id) {
@@ -3002,4 +3009,137 @@ async function deletePlan() {
     if (!planEditing || !confirm('Delete this planned post?')) return;
     const res = await apiDelete(`/api/blog/plan/${planEditing.id}`);
     if (res && !res.error) { closePlanForm(); loadPlan(); }
+}
+
+// QR code for an entry link, drawn in the browser by the vendored qrcode-generator (static/js/qrcode.js).
+function toggleQr(id, btn) {
+    const l = entryLinks.find(x => x.id === id);
+    const box = document.getElementById(`qr-${id}`);
+    const open = box.classList.toggle('hidden') === false;
+    btn.setAttribute('aria-expanded', String(open));
+    if (!open || !l || box.firstChild) return;
+    qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
+    const qr = qrcode(0, 'M');
+    qr.addData(l.url);
+    qr.make();
+    const cell = 8, margin = 4, n = qr.getModuleCount();
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = (n + margin * 2) * cell;
+    const g = canvas.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, canvas.width, canvas.height);
+    g.fillStyle = '#000';
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) g.fillRect((c + margin) * cell, (r + margin) * cell, cell, cell);
+    const img = new Image();
+    img.src = canvas.toDataURL('image/png');
+    img.alt = `QR code that opens WhatsApp: ${l.label}`;
+    img.className = 'w-48 h-48';
+    const a = document.createElement('a');
+    a.href = img.src; a.download = `whatsapp-${l.code}.png`;
+    a.className = 'btn-secondary text-xs inline-block mt-2';
+    a.innerText = 'Download PNG';
+    box.append(img, a);
+}
+
+// Custom contact fields (CF-4)
+let contactFields = [], cfAccount = null, shownContacts = [], editingContactId = null;
+async function loadContactFields(force = false) {
+    const acct = getActiveAccountId();
+    if (!acct || (!force && cfAccount === acct)) return;
+    const data = await apiCall('GET', '/api/contact-fields', undefined, { quiet: true });
+    if (acct !== getActiveAccountId()) return;
+    contactFields = ((data && data.fields) || []).filter(f => !f.archived);
+    cfAccount = data && data.fields ? acct : null;
+    document.getElementById('cf-list').innerHTML = contactFields.length ? contactFields.map(f => `<div class="flex flex-wrap justify-between items-center gap-2 text-xs text-slate-300 border-t border-slate-800 pt-2">
+        <span class="break-words min-w-0">${escapeHtml(f.name)} <span class="text-slate-500">(${escapeHtml(f.type)}${f.options && f.options.length ? ': ' + escapeHtml(f.options.join(', ')) : ''})</span></span>
+        <button type="button" class="btn-secondary text-xs text-red-300" onclick="deleteContactField(${Number(f.id)})">Remove</button></div>`).join('') : '<p class="text-xs text-slate-400">No custom fields yet.</p>';
+    renderContactFilters();
+}
+function fieldControl(f, id, value) {
+    let el;
+    if (f.type === 'select') {
+        el = document.createElement('select');
+        el.add(new Option('-', ''));
+        (f.options || []).forEach(o => el.add(new Option(o, o)));
+        el.className = 'input-select text-sm w-full';
+    } else {
+        el = document.createElement('input');
+        el.type = f.type === 'number' || f.type === 'date' ? f.type : 'text';
+        if (f.type === 'number') el.step = 'any';
+        el.className = 'input-text text-sm w-full';
+    }
+    el.id = id;
+    el.value = value == null ? '' : value;
+    return el;
+}
+function labelled(text, el) {
+    const wrap = document.createElement('div');
+    const label = document.createElement('label');
+    label.htmlFor = el.id; label.innerText = text; label.className = 'block text-xs text-slate-400 mb-1';
+    wrap.append(label, el);
+    return wrap;
+}
+function renderCustomInputs(boxId, values) {
+    const box = document.getElementById(boxId);
+    box.innerHTML = '';
+    contactFields.forEach(f => {
+        const el = fieldControl(f, `${boxId}-${f.id}`, values[f.id]);
+        el.dataset.field = f.id;
+        box.appendChild(labelled(f.name, el));
+    });
+}
+function readCustom(boxId, skipEmpty) {
+    const out = {};
+    document.querySelectorAll(`#${boxId} [data-field]`).forEach(el => { if (!skipEmpty || el.value !== '') out[el.dataset.field] = el.value; });
+    return out;
+}
+function renderContactFilters() {
+    const bar = document.getElementById('cf-filters');
+    bar.innerHTML = '';
+    bar.classList.toggle('hidden', !contactFields.length);
+    contactFields.forEach(f => {
+        const ranged = f.type === 'number' || f.type === 'date';
+        (ranged ? [['_min', ' from'], ['_max', ' to']] : [['', '']]).forEach(([suffix, word]) => {
+            const el = fieldControl(f, `cf-q-${f.id}${suffix}`, '');
+            el.dataset.query = `cf_${f.id}${suffix}`;
+            el.onchange = () => loadWhatsAppContacts();
+            const w = labelled(f.name + word, el);
+            w.className = 'w-36';
+            bar.appendChild(w);
+        });
+    });
+}
+function contactFieldQuery() {
+    return [...document.querySelectorAll('#cf-filters [data-query]')].filter(el => el.value !== '')
+        .map(el => `&${el.dataset.query}=${encodeURIComponent(el.value)}`).join('');
+}
+function customSummaryHtml(c) {
+    return contactFields.filter(f => c.custom && c.custom[f.id] != null && c.custom[f.id] !== '')
+        .map(f => `<div class="text-[11px] text-slate-300 truncate">${escapeHtml(f.name)}: ${escapeHtml(String(c.custom[f.id]))}</div>`).join('');
+}
+function openContactFields(id) {
+    const c = shownContacts.find(x => x.id === id);
+    if (!c) return;
+    editingContactId = id;
+    document.getElementById('modal-contact-fields-h').innerText = `Fields: ${c.name}`;
+    renderCustomInputs('edit-contact-custom', c.custom || {});
+    document.getElementById('modal-contact-fields').classList.remove('hidden');
+}
+async function saveContactValues(e) {
+    e.preventDefault();
+    const res = await apiPut(`/api/whatsapp/contacts/${editingContactId}`, { custom: readCustom('edit-contact-custom', false) });
+    if (res && res.success) { showToast('Saved.', 'success'); document.getElementById('modal-contact-fields').classList.add('hidden'); loadWhatsAppContacts(); }
+}
+async function saveContactField(e) {
+    e.preventDefault();
+    const form = e.target;
+    const type = document.getElementById('cf-type').value;
+    const options = type === 'select' ? document.getElementById('cf-options').value.split(',').map(x => x.trim()).filter(Boolean) : [];
+    if (type === 'select' && !options.length) { showToast('Add at least one choice.', 'error'); return; }
+    const res = await apiPost('/api/contact-fields', { name: document.getElementById('cf-name').value.trim(), type, options });
+    if (res && !res.error) { form.reset(); document.getElementById('cf-options-wrap').classList.add('hidden'); await loadContactFields(true); loadWhatsAppContacts(); }
+}
+async function deleteContactField(id) {
+    if (!confirm('Remove this field? It is hidden everywhere; saved values are kept.')) return;
+    const res = await apiDelete(`/api/contact-fields/${id}`);
+    if (res && !res.error) { await loadContactFields(true); loadWhatsAppContacts(); }
 }

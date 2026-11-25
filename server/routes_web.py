@@ -950,6 +950,18 @@ def render_dashboard_html() -> str:
                 <button onclick="loadWhatsAppContacts()" class="btn-secondary text-xs whitespace-nowrap">Refresh List</button>
             </div>
 
+            <div id="cf-filters" class="hidden flex flex-wrap items-end gap-2 mb-3"></div>
+            <details id="cf-settings" data-requires="automations.manage" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4">
+                <summary class="text-sm font-semibold text-white cursor-pointer">Custom fields</summary>
+                <div id="cf-list" class="mt-3 space-y-2"></div>
+                <form onsubmit="saveContactField(event)" class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+                    <div><label for="cf-name" class="block text-xs text-slate-400 mb-1">Field name</label><input id="cf-name" class="input-text text-sm w-full" required maxlength="60"></div>
+                    <div><label for="cf-type" class="block text-xs text-slate-400 mb-1">Type</label><select id="cf-type" class="input-select text-sm w-full" onchange="document.getElementById('cf-options-wrap').classList.toggle('hidden', this.value !== 'select')"><option value="text">Text</option><option value="number">Number</option><option value="date">Date</option><option value="select">Choice list</option></select></div>
+                    <div id="cf-options-wrap" class="hidden"><label for="cf-options" class="block text-xs text-slate-400 mb-1">Choices (comma separated)</label><input id="cf-options" class="input-text text-sm w-full"></div>
+                    <button type="submit" class="btn-secondary text-xs">Add field</button>
+                </form>
+            </details>
+
             <!-- Contacts Table -->
             <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto shadow-xl">
                 <table class="w-full text-left text-sm text-slate-300">
@@ -1120,7 +1132,9 @@ def render_dashboard_html() -> str:
         <div id="tab-wa-entry" class="tab-content hidden">
             <form data-requires="automations.manage" onsubmit="saveEntryLink(event)" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4 space-y-3">
                 <h2 class="text-sm font-semibold text-white">New entry link</h2>
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div><label for="entry-source" class="block text-xs text-slate-400 mb-1">Source</label>
+                        <select id="entry-source" class="input-select text-sm w-full"><option value="website">Website</option><option value="ad">Ad</option><option value="social">Social</option><option value="other">Other</option></select></div>
                     <div><label for="entry-label" class="block text-xs text-slate-400 mb-1">Label</label><input id="entry-label" class="input-text text-sm w-full" required maxlength="100" placeholder="Website button"></div>
                     <div><label for="entry-code" class="block text-xs text-slate-400 mb-1">Source code (optional)</label><input id="entry-code" class="input-text text-sm w-full" maxlength="40" pattern="[A-Za-z0-9_-]+" placeholder="WEB-HOME"></div>
                     <div><label for="entry-campaign" class="block text-xs text-slate-400 mb-1">Campaign (optional)</label><input id="entry-campaign" class="input-text text-sm w-full" maxlength="100"></div>
@@ -1832,6 +1846,7 @@ def render_dashboard_html() -> str:
                     <label class="block text-xs font-medium text-slate-300 mb-1">Audience Tags (Comma-separated)</label>
                     <input type="text" id="new-contact-tags" value="Lead" class="input-text" placeholder="e.g. VIP, Customer, Lead, Enterprise">
                 </div>
+                <div id="new-contact-custom" class="space-y-2"></div>
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Notes / Company Context</label>
                     <textarea id="new-contact-notes" rows="2" class="input-text text-xs resize-none" placeholder="Notes on lead source, interest, or requirements..."></textarea>
@@ -1982,9 +1997,23 @@ def render_dashboard_html() -> str:
         </div>
     </div>
 
+    <div id="modal-contact-fields" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-contact-fields-h">
+        <div class="modal-dialog max-w-lg">
+            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
+                <h3 id="modal-contact-fields-h" class="text-base font-bold text-white">Contact fields</h3>
+                <button type="button" aria-label="Close" onclick="document.getElementById('modal-contact-fields').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
+            </div>
+            <form onsubmit="saveContactValues(event)" class="space-y-3">
+                <div id="edit-contact-custom" class="space-y-2"></div>
+                <button type="submit" class="btn-primary text-xs">Save</button>
+            </form>
+        </div>
+    </div>
+
     <!-- Notification Toast -->
     <div id="toast" class="toast hidden"></div>
 
+    <script src="/static/js/qrcode.js"></script>
     <script src="/static/js/app.js"></script>
     <script>
         // Automatic runtime fallback if external script failed to load
