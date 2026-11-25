@@ -14,6 +14,7 @@ import os
 from typing import Any, Dict, Optional, Tuple
 
 import crm_store as cs
+import dbcompat
 import database as db
 from engine.whatsapp_client import WhatsAppClient
 
@@ -47,7 +48,9 @@ def _secrets_for_payload(body: Dict[str, Any]):
             if account_id:
                 try:
                     s = cs.get_whatsapp_credentials(account_id).get("app_secret", "")
-                except Exception:
+                except Exception as e:
+                    if dbcompat.is_transient(e):
+                        raise
                     s = ""
                 if s:
                     found.add(s)
@@ -67,7 +70,13 @@ def handle_whatsapp_webhook_post(raw_body: bytes, signature: str = "",
     if not body:
         return 400, {"error": "Missing webhook payload"}
 
-    if not any(_signature_ok(raw_body, signature or "", s) for s in _secrets_for_payload(body)):
+    if not (signature or "").startswith("sha256="):
+        return 403, {"error": "Invalid signature"}      # unsigned: refuse without touching the database
+    try:
+        secrets_list = _secrets_for_payload(body)
+    except Exception:  # noqa: BLE001  database trouble: Meta retries a 503
+        return 503, {"error": "Temporarily unavailable"}
+    if not any(_signature_ok(raw_body, signature or "", s) for s in secrets_list):
         db.log_event("WhatsApp webhook rejected: bad or missing signature.", "WARNING")
         return 403, {"error": "Invalid signature"}
 

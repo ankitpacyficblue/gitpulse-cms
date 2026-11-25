@@ -10,6 +10,7 @@ trusted on their own: a row is only reachable together with its account_id.
 """
 
 import dbcompat
+from currencies import is_valid_currency
 import hashlib
 import hmac
 import json
@@ -198,8 +199,8 @@ def get_account(account_id: str) -> Optional[Dict[str, Any]]:
 
 def set_default_currency(account_id: str, currency: str) -> bool:
     cur_code = (currency or "").strip().upper()
-    if not (len(cur_code) == 3 and cur_code.isalpha()):
-        raise ValueError("Currency must be a 3-letter code such as INR or USD.")
+    if not is_valid_currency(cur_code):
+        raise ValueError("Currency must be a valid ISO code such as INR or USD.")
     with get_connection() as conn:
         cur = conn.execute("UPDATE accounts SET default_currency = ? WHERE id = ? AND status != 'deleted'",
                            (cur_code, account_id))
@@ -721,7 +722,7 @@ def create_deal(account_id: str, title: str, value: float, stage: str = "lead", 
     if not currency:
         currency = (get_account(account_id) or {}).get("default_currency") or "INR"
     currency = currency.strip().upper()
-    if not (len(currency) == 3 and currency.isalpha()):
+    if not is_valid_currency(currency):
         raise ValueError("invalid_currency")
     if float(value) < 0:
         raise ValueError("negative_value")

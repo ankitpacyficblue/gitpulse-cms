@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT_DIR))
 import dbcompat
 from server.security import SECURITY_HEADERS
 from database import init_db
-from engine.auth import validate_session
+from engine.auth import validate_session, AuthUnavailable
 from server.routes_web import render_dashboard_html, render_login_html
 from server.routes_api import handle_api_request
 from server.routes_public import handle_public_request
@@ -119,7 +119,15 @@ class handler(BaseHTTPRequestHandler):
         token = self._get_session_token()
         if not token:
             return None
-        return validate_session(token)
+        try:
+            return validate_session(token)
+        except AuthUnavailable:
+            self._db_down = True       # the caller answers 503; never treat this as "not signed in"
+            return None
+
+    def _send_unavailable(self):
+        self._set_headers(503, "application/json")
+        self.wfile.write(json.dumps({"error": "Service temporarily unavailable. Please retry.", "code": "UNAVAILABLE"}).encode("utf-8"))
 
     def _set_headers(self, status_code=200, content_type="application/json", set_cookie=None, location=None):
         self.send_response(status_code)
@@ -146,7 +154,10 @@ class handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        self._db_down = False
         current_user = self._get_authenticated_user()
+        if self._db_down:
+            return self._send_unavailable()
 
         if path == "/login":
             if current_user:
@@ -219,7 +230,10 @@ class handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        self._db_down = False
         current_user = self._get_authenticated_user()
+        if self._db_down:
+            return self._send_unavailable()
         client_ip = self._get_client_ip()
         user_agent = self.headers.get("User-Agent", "")
 
@@ -293,7 +307,11 @@ def _app(environ, start_response):
         if auth_hdr.lower().startswith("bearer "):
             token = auth_hdr[7:].strip()
 
-    current_user = validate_session(token) if token else None
+    try:
+        current_user = validate_session(token) if token else None
+    except AuthUnavailable:
+        start_response("503 Service Unavailable", list(SECURITY_HEADERS) + [("Content-Type", "application/json")])
+        return [json.dumps({"error": "Service temporarily unavailable. Please retry.", "code": "UNAVAILABLE"}).encode("utf-8")]
     client_ip = environ.get("HTTP_X_FORWARDED_FOR", environ.get("REMOTE_ADDR", "127.0.0.1")).split(",")[0].strip()
     user_agent = environ.get("HTTP_USER_AGENT", "")
 
