@@ -133,6 +133,8 @@ class ValidationTests(P1Base):
 
     def test_deal_value_and_currency(self):
         o = self.c["owner"]
+        self.assertEqual(o("POST", "/api/whatsapp/deals", {"title": "d", "value": 5, "currency": "ZZZ"})[0], 400)
+        self.assertEqual(o("PATCH", f"/api/accounts/{self.acct}", {"default_currency": "ZZZ"})[0], 400)
         self.assertEqual(o("POST", "/api/whatsapp/deals", {"title": "d", "value": -5})[0], 400)
         self.assertEqual(o("POST", "/api/whatsapp/deals", {"title": "d", "value": "nan"})[0], 400)
         self.assertEqual(o("POST", "/api/whatsapp/deals", {"title": "d", "value": 5, "currency": "RUPEES"})[0], 400)
@@ -140,6 +142,27 @@ class ValidationTests(P1Base):
         self.assertEqual((code, body["currency"]), (201, "USD"))
         code, body = o("POST", "/api/whatsapp/deals", {"title": "d2", "value": 0})
         self.assertEqual((code, body["currency"]), (201, "INR"))
+
+
+class AvailabilityTests(P1Base):
+    def test_db_trouble_is_503_not_401(self):
+        from unittest import mock as m
+        token_user = self.c["owner"]
+        with m.patch("engine.auth.get_user_by_id", side_effect=OSError("socket closed")):
+            with self.assertRaises(auth.AuthUnavailable):
+                auth.validate_session(auth.create_session(self.ids["owner"], "1.1.1.1", "t"))
+
+    def test_transient_error_in_handler_is_503(self):
+        from unittest import mock as m
+        with m.patch("crm_store.list_contacts", side_effect=OSError("reset")):
+            code, body = self.c["owner"]("GET", "/api/whatsapp/contacts")
+        self.assertEqual((code, body["code"]), (503, "UNAVAILABLE"))
+
+    def test_unsigned_webhook_is_403_without_database(self):
+        from server.routes_whatsapp import handle_whatsapp_webhook_post
+        with mock.patch("crm_store.find_account_by_phone_number_id", side_effect=OSError("down")):
+            self.assertEqual(handle_whatsapp_webhook_post(b'{"a":1}', "", {"a": 1})[0], 403)
+            self.assertEqual(handle_whatsapp_webhook_post(b'{"a":1}', "sha256=bad", {"entry": [{"changes": [{"value": {"metadata": {"phone_number_id": "x"}}}]}]})[0], 503)
 
 
 class AutomationReplyTests(P1Base):

@@ -238,6 +238,10 @@ def create_session(user_id: int, ip_address: str = "", user_agent: str = "") -> 
         pass
     return token
 
+class AuthUnavailable(Exception):
+    """The database could not be reached while checking a session. Callers answer 503, never 401."""
+
+
 def validate_session(token: str) -> Optional[Dict[str, Any]]:
     """Return the signed-in user, or None for a bad, expired, revoked token or an inactive user."""
     if not token:
@@ -249,15 +253,27 @@ def validate_session(token: str) -> Optional[Dict[str, Any]]:
             return None
         if int(expires_at_str) < time.time():
             return None
-        with get_connection() as conn:
-            if conn.execute("SELECT 1 FROM sessions WHERE token = ? AND expires_at < 0", (token,)).fetchone():
-                return None
-        user = get_user_by_id(int(user_id_str))
+        user_id = int(user_id_str)
+        issued_ms_int = int(issued_ms)
     except Exception:
-        return None
+        return None            # malformed token
+    last_error = None
+    for attempt in (1, 2):
+        try:
+            with get_connection() as conn:
+                if conn.execute("SELECT 1 FROM sessions WHERE token = ? AND expires_at < 0", (token,)).fetchone():
+                    return None
+            user = get_user_by_id(user_id)
+            break
+        except Exception as e:  # noqa: BLE001  database trouble: retry once, then report it as 503
+            last_error = e
+            import dbcompat
+            dbcompat.close_cached()
+    else:
+        raise AuthUnavailable(type(last_error).__name__)
     if not user or not user["is_active"]:
         return None
-    if int(issued_ms) <= int(user["sessions_valid_after_ms"]):
+    if issued_ms_int <= int(user["sessions_valid_after_ms"]):
         return None      # revoked by a password change/reset or deactivation
     return {"id": user["id"], "username": user["username"], "email": user["email"],
             "is_platform_admin": bool(user["is_platform_admin"]),

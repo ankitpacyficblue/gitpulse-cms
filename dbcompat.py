@@ -34,6 +34,16 @@ def is_unique_violation(exc: Exception) -> bool:
     return "UNIQUE" in t or "23505" in t or "duplicate key" in t.lower()
 
 
+def is_transient(exc: BaseException) -> bool:
+    """Connection-level trouble (dropped socket, TLS, pooler full, timeout): worth one retry, and a 503 if it persists."""
+    if isinstance(exc, (OSError, ssl.SSLError, ConnectionError, TimeoutError)):
+        return True
+    name = type(exc).__name__
+    t = str(exc)
+    return name in ("InterfaceError", "OperationalError") or "EMAXCONN" in t or "connection" in t.lower() and "closed" in t.lower() \
+        or "SSL" in t and "EOF" in t or "08006" in t or "57P01" in t
+
+
 def database_url() -> str:
     return os.environ.get("DATABASE_URL", "").strip()
 
@@ -136,8 +146,9 @@ class PGRow:
 
 
 class PGCursor:
-    def __init__(self, raw):
+    def __init__(self, raw, owner=None):
         self._raw = raw
+        self._owner = owner
         self.lastrowid = None
         self.rowcount = -1
         self._names: List[str] = []
@@ -153,7 +164,16 @@ class PGCursor:
         table = insert_table(sql)
         if table:
             pg_sql = pg_sql.rstrip().rstrip(";") + " RETURNING id"
-        self._raw.execute(pg_sql, tuple(params))
+        try:
+            self._raw.execute(pg_sql, tuple(params))
+        except Exception as e:
+            # A dead connection on the first statement of a transaction is safe to replace and retry once.
+            if self._owner is None or not is_transient(e) or not self._owner._first_statement:
+                raise
+            self._raw = self._owner._replace_raw().cursor()
+            self._raw.execute(pg_sql, tuple(params))
+        if self._owner is not None:
+            self._owner._first_statement = False
         self.rowcount = self._raw.rowcount
         desc = self._raw.description
         if desc:
@@ -197,18 +217,34 @@ class PGConnection:
     def __init__(self, raw, keep: bool = False):
         self._raw = raw
         self._keep = keep      # keep=True: close() hands the connection back to the per-thread cache
+        self._first_statement = True
+
+    def _replace_raw(self):
+        if self._keep:
+            _drop_cached(self._raw)
+        else:
+            try:
+                self._raw.close()
+            except Exception:
+                pass
+        self._raw = _open_postgres()
+        if self._keep:
+            _cache.conn = (self._raw, time.time())
+        return self._raw
 
     def cursor(self):
-        return PGCursor(self._raw.cursor())
+        return PGCursor(self._raw.cursor(), self)
 
     def execute(self, sql: str, params: Sequence[Any] = ()):
         return self.cursor().execute(sql, params)
 
     def commit(self):
         self._raw.commit()
+        self._first_statement = True
 
     def rollback(self):
         self._raw.rollback()
+        self._first_statement = True
 
     def close(self):
         if self._keep:
@@ -312,6 +348,16 @@ def connect_postgres() -> PGConnection:
 
 
 def _open_postgres():
+    try:
+        return _open_postgres_once()
+    except Exception as e:
+        if not is_transient(e):
+            raise
+        time.sleep(0.5)
+        return _open_postgres_once()
+
+
+def _open_postgres_once():
     import pg8000.dbapi  # imported lazily: only needed when DATABASE_URL is set
     url = database_url()
     u = urlparse(url)

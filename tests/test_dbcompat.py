@@ -137,6 +137,33 @@ class PoolTests(unittest.TestCase):
             dbcompat._cache = threading.local()
 
 
+class RetryTests(unittest.TestCase):
+    def test_first_statement_on_dead_connection_is_retried_once(self):
+        class Dead(FakeRaw):
+            def execute(self, sql, params=()):
+                raise OSError("socket closed")
+
+        class DeadConn(FakeConn):
+            def __init__(self):
+                super().__init__()
+                self.raw = Dead()
+
+        fresh = FakeConn()
+        orig = dbcompat._open_postgres
+        dbcompat._open_postgres = lambda: fresh
+        try:
+            conn = PGConnection(DeadConn())
+            rows = conn.execute("SELECT id, name FROM t").fetchall()
+            self.assertEqual(len(rows), 2)
+        finally:
+            dbcompat._open_postgres = orig
+
+    def test_is_transient(self):
+        self.assertTrue(dbcompat.is_transient(OSError("x")))
+        self.assertTrue(dbcompat.is_transient(Exception("(EMAXCONNSESSION) max clients reached")))
+        self.assertFalse(dbcompat.is_transient(ValueError("bad")))
+
+
 class UniqueTests(unittest.TestCase):
     def test_detects_sqlite_and_postgres(self):
         self.assertTrue(dbcompat.is_unique_violation(Exception("UNIQUE constraint failed: contacts.phone_norm")))

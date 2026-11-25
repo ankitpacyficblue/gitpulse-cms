@@ -16,6 +16,7 @@ Access control is table driven and default-deny:
 """
 
 import dbcompat
+from currencies import is_valid_currency
 import json
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -101,6 +102,8 @@ def handle_api_request(method: str, path: str, *args, **kwargs) -> Response:
     except Exception as e:  # noqa: BLE001
         import logging
         logging.getLogger("gitpulse").exception("API handler failed: %s %s", method, path)
+        if dbcompat.is_transient(e):
+            return 503, {"error": "Service temporarily unavailable. Please retry.", "code": "UNAVAILABLE"}
         return 500, {"error": "Internal server error", "code": "INTERNAL"}
 
 
@@ -786,8 +789,8 @@ def deals_create(ctx, m, q, body):
     if value < 0 or value != value or value in (float("inf"), float("-inf")):
         return 400, {"error": "invalid_value", "message": "Deal value cannot be negative."}
     cur_in = str(body.get("currency") or "").strip()
-    if cur_in and not re.fullmatch(r"[A-Za-z]{3}", cur_in):
-        return 400, {"error": "invalid_currency", "message": "Currency must be a 3-letter code such as INR or USD."}
+    if cur_in and not is_valid_currency(cur_in):
+        return 400, {"error": "invalid_currency", "message": "Currency must be a valid ISO code such as INR or USD."}
     if str(body.get("stage", "lead")) not in DEAL_STAGES:
         return 400, {"error": "invalid_stage", "allowed": DEAL_STAGES}
     try:
