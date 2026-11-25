@@ -11,7 +11,7 @@ import tests._env  # noqa: F401
 from tests.apihelpers import Caller, new_user, new_account, join, setup_db
 import crm_store as cs
 import database as db
-from engine import assistant, jobs, llm, media, messaging
+from engine import assistant, jobs, llm, media, messaging, writer_tokens
 from engine.whatsapp_client import WhatsAppClient
 from server.routes_api import handle_api_request
 from server.routes_public import handle_public_request
@@ -323,7 +323,7 @@ class TickAndAlertTests(Base):
         self.assertEqual(self.alerts(), [])
 
     def test_worker_stalled_is_reported_and_setup_note_before_the_secret(self):
-        db.set_setting("worker_last_tick", str(time.time() - 4 * 3600))
+        db.set_setting("worker_last_tick", str(time.time() - 7 * 3600))
         with mock.patch.dict(os.environ, {"CRON_SECRET": "x"}):
             self.assertEqual(self.api("GET", "/api/alerts")[1]["alerts"][0]["type"], "worker_stalled")
         with mock.patch.dict(os.environ, {"CRON_SECRET": ""}):
@@ -334,7 +334,7 @@ class TickAndAlertTests(Base):
                                                 headers={"Authorization": "Bearer x"})[0], 200)
 
     def test_normal_requests_drain_the_queue_at_most_once_a_minute(self):
-        db.set_setting("worker_last_tick", str(time.time() - 4 * 3600))
+        db.set_setting("worker_last_tick", str(time.time() - 7 * 3600))
         with mock.patch.dict(os.environ, {"OPPORTUNISTIC_TICK": "1"}), mock.patch.object(jobs, "tick") as tick:
             jobs._checked_at = 0
             self.api("GET", "/api/alerts")
@@ -675,42 +675,59 @@ class MediaTests(Base):
         pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
         self.assertEqual(self.agent_api("POST", "/api/writer-tokens", {"name": "x"})[0], 403)
         token, writer = self.writer()
-        self.assertNotIn(token["token"], json.dumps(self.api("GET", "/api/writer-tokens")[1]))
+        self.assertTrue(token["token"].startswith("gpw_"))
+        listed = self.api("GET", "/api/writer-tokens")[1]["tokens"]
+        self.assertNotIn(token["token"], json.dumps(listed))
+        self.assertEqual(self.api("GET", "/api/writer/posts")[0], 401)          # a session is not a writer token
         pdf = writer("POST", "/api/writer/media/upload-url", {"name": "a.pdf", "mime": "application/pdf", "size": 9})
         self.assertEqual(pdf[1]["error"], "type_not_allowed")
         self.next_upload = self.PNG
         up = writer("POST", "/api/writer/media/upload-url", {"name": "a.png", "mime": "image/png", "size": 16})[1]
         got = writer("POST", "/api/writer/media", {"media_id": up["media_id"]})[1]
         draft = {"title": "Plots", "body": f"Hi ![a]({got['markdown_url']})", "images": [{"media_id": up["media_id"]}],
-                 "publish_at": (datetime.utcnow() - timedelta(1)).isoformat() + "Z", "status": "approved"}
+                 "publish_at": (datetime.utcnow() - timedelta(1)).isoformat() + "Z", "status": "approved", "external_id": "e1"}
         staff_image = self.upload()[1]["item"]["id"]
-        self.assertEqual(writer("POST", "/api/writer/posts", dict(draft, images=[{"media_id": staff_image}]))[0], 404)
-        self.assertEqual(writer("POST", "/api/writer/posts", dict(draft, body="<img src=x onerror=a>"))[1]["error"],
+        self.assertEqual(writer("POST", "/api/writer/posts", dict(draft, images=[{"media_id": staff_image}], external_id="e2"))[0], 404)
+        self.assertEqual(writer("POST", "/api/writer/posts", dict(draft, body="<img src=x onerror=a>", external_id="e3"))[1]["error"],
                          "html_not_allowed")
         code, out = writer("POST", "/api/writer/posts", draft)
-        self.assertEqual(code, 201, out)
+        self.assertEqual((code, out["item"]["state"]), (201, "draft"), out)
         item = out["item"]["id"]
-        self.assertEqual((out["item"]["state"], out["item"]["project_id"]), ("in_review", pid))
-        for path in (f"/api/blog/plan/{item}/approve", "/api/blog/plan", "/api/media"):
-            self.assertEqual(writer("POST", path)[0], 401)          # not a session
+        again = writer("POST", "/api/writer/posts", draft)
+        self.assertEqual((again[0], again[1]["item"]["id"], again[1]["created"]), (200, item, False))
+        self.assertEqual(writer("POST", f"/api/writer/posts/{item}/submit")[1]["item"]["state"], "in_review")
+        for path in (f"/api/blog/plan/{item}/approve", "/api/blog/plan", "/api/media", "/api/whatsapp/contacts",
+                     "/api/internal/tick"):
+            self.assertEqual(writer("POST", path)[0], 401, path)
         other = self.writer("Other", self.api_b)[1]
-        self.assertEqual((other("GET", "/api/writer/posts")[1]["items"], other("PATCH", f"/api/writer/posts/{item}", {})[0]),
-                         ([], 404))
+        self.assertEqual((other("GET", "/api/writer/posts")[1]["items"], other("GET", f"/api/writer/posts/{item}")[0]), ([], 404))
         self.api("POST", f"/api/blog/plan/{item}/reject", {"note": "Shorter"})
-        self.assertEqual(writer("GET", "/api/writer/posts")[1]["items"][0]["state"], "rejected")
-        self.assertEqual(writer("PATCH", f"/api/writer/posts/{item}", {"body": "Short."})[1]["item"]["state"], "in_review")
-        listed = self.api("GET", "/api/blog/plan")[1]
-        self.assertEqual((listed["items"][0]["writer_name"], listed["tick_hours"]), ("Toby", 3))
+        self.assertEqual(writer("GET", f"/api/writer/posts/{item}")[1]["item"]["rejected_note"], "Shorter")
+        self.assertEqual(writer("PATCH", f"/api/writer/posts/{item}", {"body": "Short."})[1]["item"]["state"], "rejected")
+        self.assertEqual(writer("POST", f"/api/writer/posts/{item}/submit")[1]["item"]["state"], "in_review")
+        row = self.api("GET", "/api/blog/plan")[1]
+        self.assertEqual((row["items"][0]["writer"], row["items"][0]["project_id"], row["tick_hours"]), ("Toby", pid, 3))
         cs.save_account_settings(self.a, github_token="t")
         with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}):
             self.assertEqual(self.api("POST", f"/api/blog/plan/{item}/approve")[0], 200)
             self.assertEqual(writer("PATCH", f"/api/writer/posts/{item}", {"body": "Changed."})[1]["error"], "wrong_status")
-            with self.publisher():
+            with self.publisher() as pub:
                 jobs.tick(limit=1000)
+        self.assertEqual(pub.call_args.kwargs["mode"], "direct")
         done = self.api("GET", "/api/blog/plan")[1]["items"][0]
-        self.assertEqual((done["state"], bool(done["published_at"]), done["post_url"]), ("published", True, "u"))
-        self.assertEqual(self.api("DELETE", f"/api/writer-tokens/{token['id']}")[0], 200)
+        self.assertEqual((done["state"], bool(done["published_at"])), ("published", True))
+        self.assertEqual(self.api("DELETE", f"/api/writer-tokens/{token['item']['id']}")[0], 200)
         self.assertEqual(writer("GET", "/api/writer/posts")[0], 401)
+
+    def test_a_planned_slot_can_be_given_to_a_writer_and_requests_are_limited(self):
+        token, writer = self.writer()
+        slot = self.agent_api("POST", "/api/blog/plan", {"title": "Slot"})[1]["item"]["id"]
+        tid = token["item"]["id"]
+        self.assertEqual(self.agent_api("PATCH", f"/api/blog/plan/{slot}", {"writer_token_id": tid})[0], 403)
+        self.assertEqual(self.api("PATCH", f"/api/blog/plan/{slot}", {"writer_token_id": tid})[0], 200)
+        self.assertEqual(writer("PATCH", f"/api/writer/posts/{slot}", {"body": "Text."})[0], 200)
+        with mock.patch.object(writer_tokens, "MAX_PER_HOUR", 2):
+            self.assertEqual([writer("GET", "/api/writer/posts")[0] for _ in range(2)], [200, 429])
 
     def test_template_header_and_incoming_file(self):
         image = self.upload()[1]["item"]["id"]

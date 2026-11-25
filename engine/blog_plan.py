@@ -13,7 +13,7 @@ import database as db
 from engine import alerts, assistant, jobs, llm, media
 from engine.messaging import IST
 
-EDITABLE = ("title", "topic", "keyword", "publish_at", "project_id", "assignee_id", "body", "images")
+EDITABLE = ("title", "topic", "keyword", "publish_at", "project_id", "assignee_id", "body", "images", "writer_token_id")
 MAX_IMAGES = 20
 
 
@@ -49,7 +49,8 @@ def _view(row: Dict[str, Any], names: Dict[int, str], files: Dict[int, Dict[str,
     d["state"] = ("rejected" if row["status"] == "draft" and row["rejected_note"]
                   else {"needs_approval": "in_review", "approved": "scheduled"}.get(row["status"], row["status"]))
     d["published_at"] = row["published_at"] + "Z" if row["published_at"] else None
-    d["writer_name"] = writers.get(row["writer_token_id"])
+    d["writer_token_id"] = row["writer_token_id"]
+    d["writer"] = writers.get(row["writer_token_id"])
     origin = f"https://{host}" if host else ""
     d["images"] = []
     for image in json.loads(row["images"] or "[]"):
@@ -137,6 +138,16 @@ def _clean(account_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
         value = data[key]
         if key == "publish_at":
             out[key] = _parse_time(value)
+        elif key == "writer_token_id":
+            if value in (None, "", 0):
+                out[key] = None
+                continue
+            with db.get_connection() as conn:
+                token = conn.execute("SELECT id FROM writer_tokens WHERE id = ? AND account_id = ? AND revoked_at = ''",
+                                     (int(value) if str(value).isdigit() else 0, account_id)).fetchone()
+            if not token:
+                raise PlanError(404, "writer_not_found", "No active writer token with that id.")
+            out[key] = token["id"]
         elif key == "images":
             out[key] = _clean_images(account_id, value)
         elif key in ("project_id", "assignee_id"):
@@ -159,16 +170,17 @@ def _clean(account_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def create(account_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+def create(account_id: str, data: Dict[str, Any], external_id: str = "") -> Dict[str, Any]:
     f = _clean(account_id, data)
     if not f.get("title"):
         raise PlanError(400, "title_required", "Give the post a title.")
     now = _now()
     with db.get_connection() as conn:
         cur = conn.execute("""INSERT INTO blog_plan (account_id, project_id, title, topic, keyword, publish_at, status, body,
-                              assignee_id, created_at, updated_at, images) VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?)""",
+                              assignee_id, created_at, updated_at, images, writer_token_id, external_id) VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?,?,?)""",
                            (account_id, f.get("project_id"), f["title"], f.get("topic", ""), f.get("keyword", ""),
-                            f.get("publish_at", ""), f.get("body", ""), f.get("assignee_id"), now, now, f.get("images", "[]")))
+                            f.get("publish_at", ""), f.get("body", ""), f.get("assignee_id"), now, now, f.get("images", "[]"),
+                            f.get("writer_token_id"), external_id))
         item_id = cur.lastrowid
         conn.commit()
     return get_item(account_id, item_id)
@@ -196,7 +208,7 @@ def update(account_id: str, item_id: int, data: Dict[str, Any]) -> Dict[str, Any
     if "title" in f and not f["title"]:
         raise PlanError(400, "title_required", "Give the post a title.")
     if f:
-        content = set(f) - {"assignee_id"}          # reassigning does not change what was approved
+        content = set(f) - {"assignee_id", "writer_token_id"}    # reassigning does not change what was approved
         if row["status"] == "approved" and content:
             f["status"] = "needs_approval"
         elif row["status"] == "failed":
@@ -445,7 +457,7 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
     res = GitHubClient(token=token).publish_post(
         repo=project["github_repo"], branch=project["github_branch"], target_path=path,
         file_content=assemble_post_document(front, full), post_title=title, post_excerpt=excerpt, post_tags=tags,
-        mode=project.get("publishing_mode", "pr"))
+        mode="direct")      # approval was the review: "published" must mean live, not waiting for a merge
     if not res.get("success"):
         db.update_post_status(post_id=post_id, status="failed", error=res.get("error", ""))
         return {"success": False, "error": res.get("error", "publishing error")}

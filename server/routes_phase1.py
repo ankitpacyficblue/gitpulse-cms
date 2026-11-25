@@ -12,6 +12,7 @@ import database as db
 import dbcompat
 from engine import alerts, assistant, blog_plan, contact_fields, jobs, media, messaging, writer_tokens
 from engine.whatsapp_client import WhatsAppClient
+from engine.permissions import has_permission
 from server.routes_api import route
 
 
@@ -247,11 +248,15 @@ def plan_list(ctx, m, q, body):
 
 @route("POST", r"/api/blog/plan", "acct:content.write")
 def plan_create(ctx, m, q, body):
+    if body.get("writer_token_id") and not has_permission(ctx.role, "content.publish"):
+        return 403, {"error": "forbidden", "required": "content.publish"}
     return _plan(lambda: blog_plan.create(ctx.account_id, body), 201)
 
 
 @route("PATCH", r"/api/blog/plan/(?P<id>\d+)", "acct:content.write")
 def plan_update(ctx, m, q, body):
+    if "writer_token_id" in body and not has_permission(ctx.role, "content.publish"):
+        return 403, {"error": "forbidden", "required": "content.publish"}
     return _plan(lambda: blog_plan.update(ctx.account_id, int(m.group("id")), body))
 
 
@@ -338,9 +343,10 @@ def writer_token_list(ctx, m, q, body):
 
 @route("POST", r"/api/writer-tokens", "acct:users.manage")
 def writer_token_create(ctx, m, q, body):
-    res = _writer(lambda: writer_tokens.create(ctx.account_id, body.get("name"), ctx.user["id"]), 201)
+    res = _writer(lambda: writer_tokens.create(ctx.account_id, body.get("name"), ctx.user["id"], body.get("project_id")),
+                  201)
     if res[0] == 201:
-        db.log_event(f"Writer token '{res[1]['name']}' created by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
+        db.log_event(f"Writer token '{res[1]['item']['name']}' created by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
     return res
 
 
@@ -350,11 +356,6 @@ def writer_token_revoke(ctx, m, q, body):
     if res[0] == 200:
         db.log_event(f"Writer token #{m.group('id')} revoked by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
     return res
-
-
-@route("GET", r"/api/writer/projects", "writer")
-def writer_projects(ctx, m, q, body):
-    return 200, {"projects": writer_tokens.projects(ctx.writer)}
 
 
 @route("POST", r"/api/writer/media/upload-url", "writer")
@@ -372,11 +373,22 @@ def writer_posts(ctx, m, q, body):
     return 200, {"items": writer_tokens.posts(ctx.writer)}
 
 
+@route("GET", r"/api/writer/posts/(?P<id>\d+)", "writer")
+def writer_post(ctx, m, q, body):
+    return _writer(lambda: {"item": writer_tokens.post(ctx.writer, int(m.group("id")))})
+
+
 @route("POST", r"/api/writer/posts", "writer")
-def writer_submit(ctx, m, q, body):
-    return _writer(lambda: {"item": writer_tokens.submit_draft(ctx.writer, body)}, 201)
+def writer_create(ctx, m, q, body):
+    res = _writer(lambda: dict(zip(("item", "created"), writer_tokens.create_draft(ctx.writer, body))))
+    return (201 if res[0] == 200 and res[1]["created"] else res[0]), res[1]
 
 
 @route("PATCH", r"/api/writer/posts/(?P<id>\d+)", "writer")
 def writer_revise(ctx, m, q, body):
     return _writer(lambda: {"item": writer_tokens.revise(ctx.writer, int(m.group("id")), body)})
+
+
+@route("POST", r"/api/writer/posts/(?P<id>\d+)/submit", "writer")
+def writer_submit(ctx, m, q, body):
+    return _writer(lambda: {"item": writer_tokens.submit(ctx.writer, int(m.group("id")))})

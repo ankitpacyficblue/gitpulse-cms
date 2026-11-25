@@ -3,8 +3,9 @@ never approve or publish, and sees only what it wrote. Only the token's hash is 
 import hashlib
 import re
 import secrets
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import crm_store as cs
 import database as db
@@ -12,8 +13,8 @@ from engine import blog_plan, media
 
 PREFIX = "gpw_"
 MAX_TOKENS = 20
-MAX_WAITING = 50        # drafts of one account waiting for approval, so a runaway writer cannot flood it
-FIELDS = ("title", "topic", "keyword", "publish_at", "project_id", "body", "images")
+MAX_PER_HOUR = 100      # requests per token, so a looping agent cannot fill the shared database
+FIELDS = ("title", "topic", "keyword", "publish_at", "body", "images")
 _RAW_HTML = re.compile(r"<[a-zA-Z/!?]|\]\(\s*<?\s*(?:javascript|data|vbscript):", re.I)
 
 
@@ -33,26 +34,36 @@ def _hash(raw: str) -> str:
 
 def list_tokens(account_id: str) -> List[Dict[str, Any]]:
     with db.get_connection() as conn:
-        rows = conn.execute("SELECT id, name, hint, created_at, last_used_at, revoked_at FROM writer_tokens "
-                            "WHERE account_id = ? ORDER BY id DESC", (account_id,)).fetchall()
-    return [{"id": r["id"], "name": r["name"], "hint": r["hint"], "created_at": r["created_at"] + "Z",
+        rows = [dict(r) for r in conn.execute("SELECT * FROM writer_tokens WHERE account_id = ? ORDER BY id DESC",
+                                              (account_id,)).fetchall()]
+    names = {m["user_id"]: m["username"] for m in cs.list_members(account_id)}
+    return [{"id": r["id"], "name": r["name"], "prefix": f"{PREFIX}…{r['hint']}", "project_id": r["project_id"],
+             "created_at": r["created_at"] + "Z", "created_by_name": names.get(r["created_by"]),
              "last_used_at": r["last_used_at"] + "Z" if r["last_used_at"] else None,
              "revoked_at": r["revoked_at"] + "Z" if r["revoked_at"] else None} for r in rows]
 
 
-def create(account_id: str, name: Any, user_id: int) -> Dict[str, Any]:
+def create(account_id: str, name: Any, user_id: int, project_id: Any = None) -> Dict[str, Any]:
     """The raw token is returned here and nowhere else."""
     name = str(name or "").strip()[:60]
     if not name:
         raise WriterError(400, "name_required", "Name the writer this token is for.")
+    if project_id not in (None, "", 0):
+        project = db.get_project(int(project_id)) if str(project_id).isdigit() else None
+        if not project or project.get("account_id") != account_id:
+            raise WriterError(404, "project_not_found", "Blog project not found.")
+        project_id = project["id"]
+    else:
+        project_id = None
     if sum(1 for t in list_tokens(account_id) if not t["revoked_at"]) >= MAX_TOKENS:
         raise WriterError(409, "too_many_tokens", f"An account can have {MAX_TOKENS} active tokens.")
     raw = PREFIX + secrets.token_urlsafe(32)
     with db.get_connection() as conn:
-        token_id = conn.execute("INSERT INTO writer_tokens (account_id, name, token_hash, hint, created_by, created_at) "
-                                "VALUES (?,?,?,?,?,?)", (account_id, name, _hash(raw), raw[-4:], user_id, _now())).lastrowid
+        token_id = conn.execute("INSERT INTO writer_tokens (account_id, name, token_hash, hint, created_by, created_at, "
+                                "project_id) VALUES (?,?,?,?,?,?,?)",
+                                (account_id, name, _hash(raw), raw[-4:], user_id, _now(), project_id)).lastrowid
         conn.commit()
-    return {"id": token_id, "name": name, "token": raw}
+    return {"token": raw, "item": next(t for t in list_tokens(account_id) if t["id"] == token_id)}
 
 
 def revoke(account_id: str, token_id: int) -> None:
@@ -65,17 +76,24 @@ def revoke(account_id: str, token_id: int) -> None:
 
 
 def authenticate(authorization: str) -> Optional[Dict[str, Any]]:
+    """The token's writer, with `over_limit` set once it has used up this hour. None: not a valid token."""
     raw = authorization.removeprefix("Bearer ").strip()
     if not raw.startswith(PREFIX):
         return None
+    now = time.time()
     with db.get_connection() as conn:
-        row = conn.execute("SELECT t.id, t.account_id, t.name FROM writer_tokens t JOIN accounts a ON a.id = t.account_id "
+        row = conn.execute("SELECT t.id FROM writer_tokens t JOIN accounts a ON a.id = t.account_id "
                            "WHERE t.token_hash = ? AND t.revoked_at = '' AND a.status = 'active'", (_hash(raw),)).fetchone()
         if not row:
             return None
-        conn.execute("UPDATE writer_tokens SET last_used_at = ? WHERE id = ?", (_now(), row["id"]))
+        conn.execute("UPDATE writer_tokens SET window_count = CASE WHEN window_start > ? THEN window_count + 1 ELSE 1 END, "
+                     "window_start = CASE WHEN window_start > ? THEN window_start ELSE ? END, last_used_at = ? WHERE id = ?",
+                     (now - 3600, now - 3600, now, _now(), row["id"]))
+        writer = dict(conn.execute("SELECT id, account_id, name, project_id, window_count FROM writer_tokens WHERE id = ?",
+                                   (row["id"],)).fetchone())
         conn.commit()
-    return dict(row)
+    writer["over_limit"] = writer["window_count"] > MAX_PER_HOUR
+    return writer
 
 
 # ------------------------------------------------------------------ used by the writer
@@ -105,7 +123,8 @@ def confirm(writer: Dict[str, Any], media_id: Any, host: str) -> Dict[str, Any]:
     return {"media_id": item["id"], "name": item["name"], "markdown_url": item["blog_url"]}
 
 
-def _clean(writer: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+def _clean(writer: Dict[str, Any], data: Dict[str, Any], attached: List[int] = ()) -> Dict[str, Any]:
+    """`attached`: images already on the post (an admin may have added them), which may be sent back."""
     out = {k: data[k] for k in FIELDS if k in data}
     for key in ("title", "body"):
         if _RAW_HTML.search(str(out.get(key) or "")):
@@ -113,15 +132,15 @@ def _clean(writer: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
     images = out.get("images")
     for image in images if isinstance(images, list) else []:
         media_id = image.get("media_id") if isinstance(image, dict) else None
-        if not str(media_id).isdigit() or not _own_file(writer, id=int(media_id)):
+        if not str(media_id).isdigit() or not (int(media_id) in attached or _own_file(writer, id=int(media_id))):
             raise WriterError(404, "media_not_found", "A writer can attach only images it uploaded.")
     if any(not _own_file(writer, token=t) for t in media.tokens_in(str(out.get("body") or ""))):
         raise WriterError(404, "media_not_found", "The text links to a file this writer did not upload.")
     return out
 
 
-def _view(writer: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
-    keys = ("id", "title", "topic", "keyword", "publish_at", "project_id", "body", "state", "rejected_note",
+def _view(item: Dict[str, Any]) -> Dict[str, Any]:
+    keys = ("id", "title", "topic", "keyword", "publish_at", "body", "status", "state", "rejected_note",
             "published_at", "post_url", "error")
     return dict({k: item[k] for k in keys},
                 images=[{k: i[k] for k in ("media_id", "alt", "cover")} for i in item["images"]])
@@ -133,56 +152,66 @@ def _ids(writer: Dict[str, Any]) -> List[int]:
                                               (writer["account_id"], writer["id"])).fetchall()]
 
 
+def _mine(writer: Dict[str, Any], item_id: int) -> Dict[str, Any]:
+    """A post this token created or was given."""
+    if item_id not in _ids(writer):
+        raise WriterError(404, "not_found", "Planned post not found.")
+    return blog_plan.get_item(writer["account_id"], item_id)
+
+
 def posts(writer: Dict[str, Any]) -> List[Dict[str, Any]]:
     mine = set(_ids(writer))
-    return [_view(writer, i) for i in blog_plan.list_items(writer["account_id"]) if i["id"] in mine]
+    return [_view(i) for i in blog_plan.list_items(writer["account_id"]) if i["id"] in mine]
 
 
-def projects(writer: Dict[str, Any]) -> List[Dict[str, Any]]:
+def post(writer: Dict[str, Any], item_id: int) -> Dict[str, Any]:
+    return _view(_mine(writer, item_id))
+
+
+def _default_project(writer: Dict[str, Any]) -> Optional[int]:
     with db.get_connection() as conn:
-        rows = conn.execute("SELECT id, name FROM projects WHERE account_id = ? ORDER BY id", (writer["account_id"],)).fetchall()
-    return [{"id": r["id"], "name": r["name"]} for r in rows]
+        ids = [r["id"] for r in conn.execute("SELECT id FROM projects WHERE account_id = ?", (writer["account_id"],)).fetchall()]
+    if writer["project_id"] in ids:
+        return writer["project_id"]
+    return ids[0] if len(ids) == 1 else None
 
 
-def _check_room(account_id: str) -> None:
+def _by_external(writer: Dict[str, Any], external_id: str) -> Optional[Dict[str, Any]]:
     with db.get_connection() as conn:
-        n = conn.execute("SELECT COUNT(*) AS n FROM blog_plan WHERE account_id = ? AND status = 'needs_approval'",
-                         (account_id,)).fetchone()["n"]
-    if n >= MAX_WAITING:
-        raise WriterError(409, "too_many_waiting", "Too many posts are waiting for approval. Try again later.")
+        row = conn.execute("SELECT id FROM blog_plan WHERE account_id = ? AND writer_token_id = ? AND external_id = ?",
+                           (writer["account_id"], writer["id"], external_id)).fetchone()
+    return post(writer, row["id"]) if row else None
 
 
-def submit_draft(writer: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
-    """A new post that goes straight to review."""
-    account_id = writer["account_id"]
-    fields = _clean(writer, data)
-    if not str(fields.get("body") or "").strip():
-        raise WriterError(400, "body_required", "Send the post text.")
-    _check_room(account_id)
-    if not fields.get("project_id") and len(projects(writer)) == 1:
-        fields["project_id"] = projects(writer)[0]["id"]
-    item_id = blog_plan.create(account_id, fields)["id"]
-    with db.get_connection() as conn:
-        conn.execute("UPDATE blog_plan SET writer_token_id = ? WHERE id = ? AND account_id = ?",
-                     (writer["id"], item_id, account_id))
-        conn.commit()
-    return _view(writer, blog_plan.submit(account_id, item_id))
+def create_draft(writer: Dict[str, Any], data: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    """(post, created). Always a draft. A repeated external_id returns the first post, so a retry adds nothing."""
+    external_id = str(data.get("external_id") or "").strip()[:200]
+    if external_id:
+        existing = _by_external(writer, external_id)
+        if existing:
+            return existing, False
+    fields = dict(_clean(writer, data), writer_token_id=writer["id"], project_id=_default_project(writer))
+    try:
+        item_id = blog_plan.create(writer["account_id"], fields, external_id=external_id)["id"]
+    except blog_plan.PlanError:
+        raise
+    except Exception:      # the same external_id arrived twice at once and the unique index refused the second
+        existing = _by_external(writer, external_id) if external_id else None
+        if not existing:
+            raise
+        return existing, False
+    return post(writer, item_id), True
 
 
 def revise(writer: Dict[str, Any], item_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
-    """Fix a rejected or still waiting post and send it to review again. Approved text is out of reach."""
-    account_id = writer["account_id"]
-    if item_id not in _ids(writer):
-        raise WriterError(404, "not_found", "Planned post not found.")
-    status = blog_plan.get_item(account_id, item_id)["status"]
-    if status not in ("draft", "needs_approval"):
+    """Change a draft (rejected ones too) or a post still waiting. Approved text is out of reach."""
+    item = _mine(writer, item_id)
+    if item["status"] not in ("draft", "needs_approval"):
         raise WriterError(409, "wrong_status", "Only a post that is not yet approved can be changed.")
-    fields = _clean(writer, data)
-    if "body" in fields and not str(fields["body"] or "").strip():
-        raise WriterError(400, "body_required", "Send the post text.")
-    if status == "draft":
-        _check_room(account_id)
-    item = blog_plan.update(account_id, item_id, fields)
-    if item["status"] == "draft":
-        item = blog_plan.submit(account_id, item_id)
-    return _view(writer, item)
+    fields = _clean(writer, data, [i["media_id"] for i in item["images"]])
+    return _view(blog_plan.update(writer["account_id"], item_id, fields))
+
+
+def submit(writer: Dict[str, Any], item_id: int) -> Dict[str, Any]:
+    _mine(writer, item_id)
+    return _view(blog_plan.submit(writer["account_id"], item_id))

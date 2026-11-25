@@ -137,6 +137,8 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
                 return 401, {"error": "invalid_writer_token", "message": "This writer token is not valid."}
             ctx = Ctx(None, writer["account_id"], ip=client_ip, user_agent=user_agent,
                       host=hdrs.get("x-forwarded-host") or hdrs.get("host", ""))
+            if writer["over_limit"]:
+                return 429, {"error": "rate_limited", "message": "This writer token has used its requests for this hour."}
             ctx.writer = writer
             return fn(ctx, match, query_params, body)
 
