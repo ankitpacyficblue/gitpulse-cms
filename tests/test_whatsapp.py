@@ -8,6 +8,7 @@ import tests._env  # noqa: F401
 from tests.apihelpers import Caller, new_user, new_account, join, setup_db
 import crm_store as cs
 from database import get_connection
+from engine import jobs
 from engine.whatsapp_client import WhatsAppClient
 from server.routes_whatsapp import handle_whatsapp_webhook_get, handle_whatsapp_webhook_post
 
@@ -209,13 +210,15 @@ class TestSendingAndAutomations(Base):
         cs.create_contact(self.a, "A1", "+15550100001", tags=["VIP"])
         cs.create_contact(self.a, "A2", "+15550100002", tags=["Lead"])
         cs.create_contact(self.b, "B1", "+15550100003", tags=["VIP"])
-        bid = cs.create_broadcast(self.a, "Promo", "Hi {{name}}", target_tag="VIP")
+        self.api_a("POST", "/api/whatsapp/templates/sync")      # mock_approved is a UTILITY template
+        bid = cs.create_broadcast(self.a, "Promo", "Hi", target_tag="VIP", template_name="mock_approved",
+                                  template_language="en", template_params=["{{name}}"])
         code, out = self.api_a("POST", f"/api/whatsapp/broadcasts/{bid}/run")
         self.assertEqual(code, 200)
-        self.assertEqual((out["stats"]["total_recipients"], out["stats"]["sent_count"]), (1, 1))
-        self.assertEqual((out["stats"]["delivered_count"], out["stats"]["read_count"]), (0, 0))
+        self.assertEqual((out["stats"]["total_recipients"], out["stats"]["queued_count"]), (1, 1))
         self.assertTrue(out["stats"]["mock"])
-        conv = cs.list_conversations(self.a)[0]
+        jobs.tick(limit=1000)
+        conv = cs.list_conversations(self.a, include_empty=False)[0]
         self.assertEqual([m["status"] for m in cs.list_messages(self.a, conv["id"])], ["mock"])
         self.assertTrue(self.api_a("GET", "/api/whatsapp/config")[1]["mock_mode"])
         self.assertEqual(cs.list_conversations(self.b), [])
@@ -232,7 +235,9 @@ class TestSendingAndAutomations(Base):
         os.environ["WHATSAPP_MOCK"] = "1"
         cs.create_contact(self.a, "Vip", "+15550200001", tags=["VIP"])
         cs.create_contact(self.a, "Cold", "+15550200002", tags=["Lead"])
-        cs.create_automation(self.a, "Alert", "blog_publish", "New: {{title}} {{url}}")
+        self.api_a("POST", "/api/whatsapp/templates/sync")
+        cs.create_automation(self.a, "Alert", "blog_publish", "New post", template_name="mock_approved",
+                             template_language="en", template_params=["{{title}} {{url}}"])
         self.assertEqual(WhatsAppClient(self.a).trigger_blog_publish_alert("T", "https://x/y"), 1)
 
     def test_send_message_endpoint_records_failure_when_unconfigured(self):
@@ -241,9 +246,10 @@ class TestSendingAndAutomations(Base):
         join(acct, u, "agent")
         cid = cs.create_contact(acct, "C", "+15550300001")
         conv = cs.get_or_create_conversation(acct, cid)
+        cs.create_message(acct, conv["id"], cid, "inbound", "hi")     # opens the 24-hour window
         code, out = Caller(u, acct)("POST", f"/api/whatsapp/conversations/{conv['id']}/messages", {"body": "hello"})
         self.assertEqual(code, 502)
-        self.assertEqual(cs.list_messages(acct, conv["id"])[0]["status"], "failed")
+        self.assertEqual(cs.list_messages(acct, conv["id"])[-1]["status"], "failed")
 
     def test_simulate_incoming_off_unless_mock_and_scoped(self):
         self.assertEqual(self.api_a("POST", "/api/whatsapp/simulate-incoming", {"phone": "+15550400001"})[0], 404)

@@ -5,6 +5,9 @@
       "destination": "/api/index.py"
     }
   ],
+  "crons": [
+    { "path": "/api/internal/tick", "schedule": "35 3 * * *" }
+  ],
   "regions": [
     "hnd1"
   ]

@@ -13,7 +13,7 @@ _VIEWER = frozenset({"crm.read", "content.read"})
 _AGENT = _VIEWER | {"crm.write"}
 _ADMIN = _AGENT | {
     "crm.delete", "wa.config", "automations.manage", "broadcasts.run",
-    "content.publish", "users.manage", "audit.read",
+    "content.publish", "users.manage", "audit.read", "ai.manage",
 }
 _OWNER = _ADMIN | {"account.manage", "owners.manage"}
 

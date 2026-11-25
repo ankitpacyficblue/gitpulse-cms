@@ -10,6 +10,11 @@ import urllib.error
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from engine.formatters import slugify, calculate_reading_time
+from engine.llm import GEMINI_MODEL, OPENAI_MODEL
+
+class GenerationError(Exception):
+    """Message is safe to show: it never holds a key or a URL."""
+
 
 class AIGenerator:
     def __init__(self, provider: str = "gemini", api_key: str = ""):
@@ -18,27 +23,29 @@ class AIGenerator:
 
     def generate_article(self, topic_plan: Dict[str, Any], project: Dict[str, Any]) -> Dict[str, Any]:
         """Generate structured blog post from topic plan."""
-        # Check if an API key is available for the chosen provider
-        if self.provider == "gemini" and self.api_key:
-            try:
-                return self._generate_with_gemini(topic_plan, project)
-            except Exception as e:
-                # Log and fallback gracefully
-                pass
-
-        if self.provider == "openai" and self.api_key:
-            try:
-                return self._generate_with_openai(topic_plan, project)
-            except Exception as e:
-                pass
-
-        # High-fidelity built-in generator fallback
-        return self._generate_builtin_article(topic_plan, project)
+        # No silent fallback: publishing a generic built-in article under a client's name is worse than not publishing.
+        # The built-in generator runs only when it is chosen on purpose ("mock" or "local").
+        if self.provider in ("mock", "local"):
+            return self._generate_builtin_article(topic_plan, project)
+        make = {"gemini": self._generate_with_gemini, "openai": self._generate_with_openai}.get(self.provider)
+        if not make:
+            raise GenerationError(f"unsupported AI provider '{self.provider}'")
+        if not self.api_key:
+            raise GenerationError("no AI key is configured")
+        try:
+            article = make(topic_plan, project)
+        except urllib.error.HTTPError as e:
+            raise GenerationError(f"the AI provider returned HTTP {e.code}")
+        except Exception as e:
+            raise GenerationError(f"the AI provider failed ({type(e).__name__})")
+        if not article.get("content_markdown", "").strip():
+            raise GenerationError("the AI provider returned an empty article")
+        return article
 
     def _generate_with_gemini(self, topic_plan: Dict[str, Any], project: Dict[str, Any]) -> Dict[str, Any]:
         """Generate article using Google Gemini REST API."""
         prompt = self._build_prompt(topic_plan, project)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
         
         payload = {
             "contents": [{
@@ -53,7 +60,7 @@ class AIGenerator:
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
             method="POST"
         )
         
@@ -69,9 +76,9 @@ class AIGenerator:
         url = "https://api.openai.com/v1/chat/completions"
         
         payload = {
-            "model": "gpt-4o-mini",
+            "model": OPENAI_MODEL,
             "messages": [
-                {"role": "system", "content": "You are a world-class technical writer and developer advocate."},
+                {"role": "system", "content": "You are a careful writer. Output JSON only."},
                 {"role": "user", "content": prompt}
             ],
             "response_format": {"type": "json_object"},
@@ -95,6 +102,25 @@ class AIGenerator:
             return self._normalize_output(parsed, topic_plan)
 
     def _build_prompt(self, plan: Dict[str, Any], project: Dict[str, Any]) -> str:
+        if project.get("business_knowledge"):
+            return f"""
+Write one blog post for a business website, as valid JSON.
+
+Subject area: {project.get('topic')}
+Keywords: {project.get('keywords')}
+Tone: {project.get('tone')}
+Readers: {project.get('target_audience')}
+
+Use ONLY the facts between <knowledge> tags. Do not invent facts, prices, numbers, approvals, availability,
+returns or promises. No code. 500 to 900 words, Markdown with H2 headers.
+Never say any of these: {json.dumps(project.get('banned_claims') or [])}
+<knowledge>
+{project['business_knowledge']}
+</knowledge>
+
+JSON schema: {{"title": "...", "slug": "...", "excerpt": "...", "tags": ["..."], "content_markdown": "...",
+"image_prompt": "...", "meta_seo": {{"og_title": "...", "description": "...", "canonical_keywords": ["..."]}}}}
+"""
         return f"""
 Generate an end-to-end, highly comprehensive technical blog post in valid JSON format.
 

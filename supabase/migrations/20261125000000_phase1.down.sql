@@ -1,0 +1,27 @@
+-- Reverses 20261125000000_phase1.sql. Deletes the data in these tables and columns.
+ALTER TABLE contacts DROP COLUMN IF EXISTS consent_status;
+ALTER TABLE contacts DROP COLUMN IF EXISTS consent_source;
+ALTER TABLE contacts DROP COLUMN IF EXISTS consent_at;
+ALTER TABLE contacts DROP COLUMN IF EXISTS consent_wording;
+ALTER TABLE contacts DROP COLUMN IF EXISTS source;
+ALTER TABLE contacts DROP COLUMN IF EXISTS source_detail;
+ALTER TABLE conversations DROP COLUMN IF EXISTS last_inbound_at;
+ALTER TABLE conversations DROP COLUMN IF EXISTS needs_human;
+ALTER TABLE conversations DROP COLUMN IF EXISTS handoff_reason;
+ALTER TABLE conversations DROP COLUMN IF EXISTS ai_mode;
+ALTER TABLE conversations DROP COLUMN IF EXISTS ai_paused_at;
+ALTER TABLE messages DROP COLUMN IF EXISTS sent_by;
+ALTER TABLE messages DROP COLUMN IF EXISTS sent_at;
+ALTER TABLE messages DROP COLUMN IF EXISTS broadcast_id;
+ALTER TABLE broadcasts DROP COLUMN IF EXISTS template_name;
+ALTER TABLE broadcasts DROP COLUMN IF EXISTS template_language;
+ALTER TABLE broadcasts DROP COLUMN IF EXISTS template_params;
+ALTER TABLE broadcasts DROP COLUMN IF EXISTS skipped_count;
+ALTER TABLE automations DROP COLUMN IF EXISTS template_name;
+ALTER TABLE automations DROP COLUMN IF EXISTS template_language;
+ALTER TABLE automations DROP COLUMN IF EXISTS template_params;
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS alerts;
+DROP TABLE IF EXISTS ai_knowledge;
+DROP TABLE IF EXISTS wa_templates;
+DROP TABLE IF EXISTS entry_links;

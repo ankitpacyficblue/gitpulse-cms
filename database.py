@@ -438,7 +438,7 @@ def create_project(data: Dict[str, Any], account_id: str) -> int:
             data.get("publishing_mode", "pr"),
             data.get("publish_time", "09:00").strip(),
             1 if data.get("is_active", True) else 0,
-            1 if data.get("auto_publish", True) else 0,
+            1 if data.get("auto_publish", False) else 0,   # default: review first
             data.get("forbidden_words", "").strip(),
             data.get("webhook_secret", "").strip(),
             1 if data.get("zero_redeploy_enabled", True) else 0,
@@ -469,7 +469,7 @@ def create_project(data: Dict[str, Any], account_id: str) -> int:
                     "publishing_mode": data.get("publishing_mode", "pr"),
                     "publish_time": data.get("publish_time", "09:00").strip(),
                     "is_active": bool(data.get("is_active", True)),
-                    "auto_publish": bool(data.get("auto_publish", True)),
+                    "auto_publish": bool(data.get("auto_publish", False)),
                     "forbidden_words": data.get("forbidden_words", "").strip(),
                     "webhook_secret": data.get("webhook_secret", "").strip(),
                     "zero_redeploy_enabled": bool(data.get("zero_redeploy_enabled", True)),

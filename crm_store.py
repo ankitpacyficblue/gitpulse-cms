@@ -166,7 +166,59 @@ def init_schema(conn) -> None:
     dup = cur.execute("SELECT 1 FROM conversations GROUP BY account_id, contact_id HAVING COUNT(*) > 1").fetchone()
     if not dup:
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_one_per_contact ON conversations (account_id, contact_id)")
+    # Phase 1: job queue, alerts, assistant knowledge, templates, entry links (all additive)
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{{}}', run_at REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending', last_error TEXT NOT NULL DEFAULT '', dedupe_key TEXT UNIQUE,
+        locked_at REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""")
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        type TEXT NOT NULL, severity TEXT NOT NULL DEFAULT 'warning', message TEXT NOT NULL, link TEXT NOT NULL DEFAULT '',
+        count INTEGER NOT NULL DEFAULT 1, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, resolved_at TEXT NOT NULL DEFAULT ''
+    )""")
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS ai_knowledge (
+        account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE RESTRICT,
+        data TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""")
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS wa_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        name TEXT NOT NULL, language TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'MARKETING',
+        status TEXT NOT NULL DEFAULT 'PENDING', body TEXT NOT NULL DEFAULT '', variables INTEGER NOT NULL DEFAULT 0,
+        synced_at TEXT NOT NULL, UNIQUE (account_id, name, language)
+    )""")
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS entry_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        label TEXT NOT NULL, code TEXT NOT NULL, prefill TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+        UNIQUE (account_id, code)
+    )""")
+    for table, columns in (
+        ("contacts", (("consent_status", "TEXT NOT NULL DEFAULT 'unknown'"), ("consent_source", "TEXT NOT NULL DEFAULT ''"),
+                      ("consent_at", "TEXT NOT NULL DEFAULT ''"), ("consent_wording", "TEXT NOT NULL DEFAULT ''"),
+                      ("source", "TEXT NOT NULL DEFAULT ''"), ("source_detail", "TEXT NOT NULL DEFAULT ''"))),
+        ("conversations", (("last_inbound_at", "TEXT NOT NULL DEFAULT ''"), ("needs_human", "INTEGER NOT NULL DEFAULT 0"),
+                           ("handoff_reason", "TEXT NOT NULL DEFAULT ''"), ("ai_mode", "TEXT NOT NULL DEFAULT 'on'"),
+                           ("ai_paused_at", "REAL NOT NULL DEFAULT 0"))),
+        ("messages", (("sent_by", "TEXT NOT NULL DEFAULT ''"), ("sent_at", "TEXT NOT NULL DEFAULT ''"),
+                      ("broadcast_id", "INTEGER"))),
+        ("broadcasts", (("template_name", "TEXT NOT NULL DEFAULT ''"), ("template_language", "TEXT NOT NULL DEFAULT ''"),
+                        ("template_params", "TEXT NOT NULL DEFAULT '[]'"), ("skipped_count", "INTEGER NOT NULL DEFAULT 0"))),
+        ("automations", (("template_name", "TEXT NOT NULL DEFAULT ''"), ("template_language", "TEXT NOT NULL DEFAULT ''"),
+                         ("template_params", "TEXT NOT NULL DEFAULT '[]'"))),
+    ):
+        have = {r[1] for r in cur.execute(f"PRAGMA table_info({table})").fetchall()}
+        for col, ddl in columns:
+            if col not in have:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
     for stmt in (
+        "CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs (status, run_at)",
+        "CREATE INDEX IF NOT EXISTS idx_alerts_acct ON alerts (account_id, resolved_at)",
         "CREATE INDEX IF NOT EXISTS idx_contacts_acct ON contacts (account_id, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_conv_acct ON conversations (account_id, last_message_at)",
         "CREATE INDEX IF NOT EXISTS idx_msg_acct_conv ON messages (account_id, conversation_id)",
@@ -709,6 +761,9 @@ def create_message(account_id: str, conversation_id: int, contact_id: int, direc
                            (account_id, conversation_id, contact_id, direction, message_type, body.strip(),
                             media_url.strip(), wa_message_id.strip(), status, error_message, now))
         unread = ", unread_count = unread_count + 1" if direction == "inbound" else ""
+        if direction == "inbound":
+            conn.execute("UPDATE conversations SET last_inbound_at = ? WHERE id = ? AND account_id = ?",
+                         (now, conversation_id, account_id))
         conn.execute(f"""UPDATE conversations SET last_message_at = ?, last_message_preview = ?, updated_at = ?{unread}
                          WHERE id = ? AND account_id = ?""", (now, preview, now, conversation_id, account_id))
         conn.commit()
@@ -791,11 +846,14 @@ def get_broadcast(account_id: str, broadcast_id: int) -> Optional[Dict[str, Any]
 
 
 def create_broadcast(account_id: str, name: str, template_body: str, target_tag: str = "all",
-                     scheduled_at: str = "") -> int:
+                     scheduled_at: str = "", template_name: str = "", template_language: str = "",
+                     template_params: Optional[list] = None) -> int:
     with get_connection() as conn:
         cur = conn.execute("""INSERT INTO broadcasts (account_id, name, template_body, target_tag, status, scheduled_at,
-                              created_at) VALUES (?,?,?,?,'draft',?,?)""",
-                           (account_id, name.strip(), template_body.strip(), target_tag.strip(), scheduled_at, _now()))
+                              created_at, template_name, template_language, template_params)
+                              VALUES (?,?,?,?,'draft',?,?,?,?,?)""",
+                           (account_id, name.strip(), template_body.strip(), target_tag.strip(), scheduled_at, _now(),
+                            template_name, template_language, json.dumps(template_params or [])))
         conn.commit()
         return cur.lastrowid
 
@@ -817,13 +875,16 @@ def list_automations(account_id: str) -> List[Dict[str, Any]]:
 
 
 def create_automation(account_id: str, name: str, trigger_type: str, message_template: str,
-                      trigger_keyword: str = "", action_type: str = "send_message", is_active: bool = True) -> int:
+                      trigger_keyword: str = "", action_type: str = "send_message", is_active: bool = True,
+                      template_name: str = "", template_language: str = "", template_params: Optional[list] = None) -> int:
     now = _now()
     with get_connection() as conn:
         cur = conn.execute("""INSERT INTO automations (account_id, name, trigger_type, trigger_keyword, action_type,
-                              message_template, is_active, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+                              message_template, is_active, created_at, updated_at, template_name, template_language,
+                              template_params) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                            (account_id, name.strip(), trigger_type.strip(), trigger_keyword.strip().lower(),
-                            action_type.strip(), message_template.strip(), 1 if is_active else 0, now, now))
+                            action_type.strip(), message_template.strip(), 1 if is_active else 0, now, now,
+                            template_name, template_language, json.dumps(template_params or [])))
         conn.commit()
         return cur.lastrowid
 

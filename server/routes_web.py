@@ -435,6 +435,12 @@ def render_dashboard_html() -> str:
                         </span>
                         <span id="sidebar-badge-automations" class="sidebar-badge bg-indigo-500/20 text-indigo-300">3 live</span>
                     </a>
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-knowledge')">
+                        <span class="flex items-center gap-2"><span aria-hidden="true">📚</span><span>AI Assistant</span></span>
+                    </a>
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-templates')">
+                        <span class="flex items-center gap-2"><span aria-hidden="true">🧾</span><span>Message Templates</span></span>
+                    </a>
                 </div>
 
                 <!-- SECTION 3: PLATFORM & CLOUD -->
@@ -527,6 +533,13 @@ def render_dashboard_html() -> str:
             <main class="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto" id="main-content">
                 <p class="text-[11px] text-slate-400 mb-3">Working in: <strong id="account-banner-name" class="text-slate-200">All accounts</strong></p>
                 <!-- 5 Top Metric Stat Cards -->
+                <section id="alerts-panel" class="hidden mb-4 bg-slate-900 border border-slate-800 rounded-xl p-4" aria-labelledby="alerts-h">
+                    <div class="flex justify-between items-center gap-3 mb-2">
+                        <h2 id="alerts-h" class="text-sm font-semibold text-white">Problems <span id="alerts-count" class="hidden ml-1 text-[10px] px-1.5 rounded-full bg-red-500 text-white"></span></h2>
+                        <button type="button" class="btn-secondary text-xs" onclick="loadAlerts()">Refresh</button>
+                    </div>
+                    <div id="alerts-list" aria-live="polite"></div>
+                </section>
                 <div id="kpi-cards" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
                     <div class="metric-card">
                         <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">Connected Repos</div>
@@ -598,7 +611,7 @@ def render_dashboard_html() -> str:
                 </div>
             </div>
 
-            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto shadow-xl">
                 <table class="w-full text-left text-sm text-slate-300">
                     <thead class="bg-slate-950/60 border-b border-slate-800 text-xs uppercase text-slate-400">
                         <tr>
@@ -815,6 +828,7 @@ def render_dashboard_html() -> str:
                     <select id="wa-assigned-filter" class="input-select text-xs py-1.5" onchange="loadWhatsAppInbox()">
                         <option value="">All conversations</option>
                         <option value="me">Assigned to me</option>
+                        <option value="human">Needs human</option>
                     </select>
                     <button onclick="loadWhatsAppInbox()" class="btn-secondary text-xs">🔄 Refresh Chats</button>
                     <button data-requires="crm.write" onclick="openAddContactModal()" class="btn-primary text-xs">+ New Lead</button>
@@ -862,11 +876,24 @@ def render_dashboard_html() -> str:
                         </div>
 
                         <!-- Chat Messages Scroll Feed -->
+                        <div id="wa-needs-human" class="hidden flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs text-amber-200 bg-amber-500/10 border-b border-amber-500/30" role="status">
+                            <span id="wa-needs-human-text"></span>
+                            <button type="button" id="wa-ai-btn" data-requires="crm.write" class="btn-secondary text-xs" onclick="toggleConversationAi()">Resume AI</button>
+                        </div>
                         <div id="wa-messages-container" class="chat-messages-scroll">
                             <!-- Populated dynamically -->
                         </div>
 
                         <!-- Message Composer Input -->
+                        <p id="wa-window-note" class="px-3 text-[11px] text-slate-500"></p>
+                        <form id="wa-window-closed" class="hidden px-3 py-2 border-t border-slate-800 space-y-2" onsubmit="sendChatTemplate(event)">
+                            <p class="text-xs text-amber-200">More than 24 hours since their last message: only an approved template can be sent.</p>
+                            <label for="chat-tpl" class="block text-xs font-medium text-slate-300 mb-1">Template</label>
+                    <select id="chat-tpl" class="input-select text-xs w-full" onchange="showTemplateFields('chat')"></select>
+                    <div id="chat-tpl-vars" class="space-y-2 mt-2"></div>
+                    <p id="chat-tpl-preview" class="text-[11px] text-slate-400 mt-1 whitespace-pre-wrap break-words" aria-live="polite"></p>
+                            <button type="submit" class="btn-primary text-xs">Send template</button>
+                        </form>
                         <form onsubmit="sendWhatsAppReply(event)" data-requires="crm.write" class="p-3 border-t border-slate-800 bg-slate-950 flex items-center gap-2">
                             <input type="text" id="wa-message-input" placeholder="Type WhatsApp message (Enter to send)..." class="input-text text-xs flex-1 py-2">
                             <button type="submit" class="btn-primary text-xs py-2 px-4 flex items-center gap-1.5 shadow-indigo-500/30">
@@ -918,13 +945,15 @@ def render_dashboard_html() -> str:
             </div>
 
             <!-- Contacts Table -->
-            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto shadow-xl">
                 <table class="w-full text-left text-sm text-slate-300">
                     <thead class="bg-slate-950/60 border-b border-slate-800 text-xs uppercase text-slate-400">
                         <tr>
                             <th class="px-5 py-3">Contact Profile</th>
                             <th class="px-5 py-3">WhatsApp Phone</th>
                             <th class="px-5 py-3">Audience Tags</th>
+                            <th class="px-5 py-3">Lead source</th>
+                            <th class="px-5 py-3">Consent</th>
                             <th class="px-5 py-3">Internal Notes</th>
                             <th class="px-5 py-3 text-right">Quick Actions</th>
                         </tr>
@@ -1038,6 +1067,47 @@ def render_dashboard_html() -> str:
             <div id="wa-automations-container" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <!-- Populated dynamically -->
             </div>
+        </div>
+
+        <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
+        <div id="tab-wa-knowledge" class="tab-content hidden">
+            <p id="ai-viewonly" class="hidden mb-3 text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2" role="note">View only. Only an owner or admin can change what the AI knows.</p>
+            <form id="kb-form" onsubmit="saveKnowledge(event)">
+              <fieldset id="kb-fields" class="space-y-4" disabled>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <label class="flex items-center gap-3 text-sm text-white font-semibold cursor-pointer"><input type="checkbox" id="kb-ai-enabled" class="w-5 h-5"> AI auto-reply to incoming WhatsApp messages</label>
+                    <p id="kb-status" class="text-xs text-slate-400 mt-2" role="status">Loading...</p>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+                    <div><label for="kb-facts" class="block text-xs text-slate-400 mb-1">Business facts</label><p class="text-[11px] text-slate-500 mb-1">What you do, services, opening hours, next step for a customer.</p><textarea id="kb-facts" class="input-text text-sm w-full" rows="6"></textarea></div>
+                    <div><label for="kb-locations" class="block text-xs text-slate-400 mb-1">Locations (one per line)</label><textarea id="kb-locations" class="input-text text-sm w-full" rows="3"></textarea></div>
+                    <div><label for="kb-tone" class="block text-xs text-slate-400 mb-1">Tone</label><textarea id="kb-tone" class="input-text text-sm w-full" rows="2"></textarea></div>
+                    <div><label for="kb-languages" class="block text-xs text-slate-400 mb-1">Languages (one per line)</label><textarea id="kb-languages" class="input-text text-sm w-full" rows="2"></textarea></div>
+                    <div><label for="kb-banned" class="block text-xs text-slate-400 mb-1">Claims the AI must never make (one per line)</label><textarea id="kb-banned" class="input-text text-sm w-full" rows="4"></textarea></div>
+                    <div><label for="kb-handoff" class="block text-xs text-slate-400 mb-1">Handoff message</label><p class="text-[11px] text-slate-500 mb-1">Sent once when the AI passes the chat to a person.</p><textarea id="kb-handoff" class="input-text text-sm w-full" rows="2"></textarea></div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4"><h2 class="text-sm font-semibold text-white mb-2">Questions and answers</h2><div id="kb-faq" class="space-y-3"></div>
+                    <button type="button" class="btn-secondary text-xs mt-3" onclick="addFaqRow()">+ Add question</button></div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4"><h2 class="text-sm font-semibold text-white mb-1">Price items</h2><p class="text-[11px] text-slate-500 mb-2">The AI quotes a price only when its box is ticked.</p><div id="kb-prices" class="space-y-2"></div>
+                    <button type="button" class="btn-secondary text-xs mt-3" onclick="addPriceRow()">+ Add price item</button></div>
+                <button type="submit" class="btn-primary text-xs">Save</button>
+              </fieldset>
+            </form>
+            <form onsubmit="testQuestion(event)" data-requires="ai.manage" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mt-4 space-y-3">
+                <h2 class="text-sm font-semibold text-white">Test a question</h2>
+                <p class="text-[11px] text-slate-500">Uses the saved settings. Nothing is sent to any customer.</p>
+                <div><label for="kb-test-q" class="block text-xs text-slate-400 mb-1">Customer question</label><input id="kb-test-q" class="input-text text-sm w-full" required></div>
+                <button type="submit" id="kb-test-btn" class="btn-secondary text-xs">Test</button>
+                <div id="kb-test-result" class="text-sm text-slate-200 whitespace-pre-wrap break-words" aria-live="polite"></div>
+            </form>
+        </div>
+
+        <div id="tab-wa-templates" class="tab-content hidden">
+            <div class="flex flex-wrap justify-between items-center gap-3 mb-4">
+                <p class="text-xs text-slate-400">Create templates in Meta's WhatsApp Manager, then sync them here. Only approved ones can be sent.</p>
+                <button type="button" data-requires="automations.manage" class="btn-primary text-xs" onclick="syncTemplates(this)">Sync from Meta</button>
+            </div>
+            <div id="tpl-list" class="space-y-3"></div>
         </div>
 
         <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
@@ -1781,9 +1851,10 @@ def render_dashboard_html() -> str:
                     <p id="new-broadcast-count" class="text-[11px] text-slate-400 mt-1" aria-live="polite"></p>
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-slate-300 mb-1">Message Template *</label>
-                    <textarea id="new-broadcast-template" required rows="4" class="input-text text-xs font-mono resize-none" placeholder="Hi {{name}}! 🚀 Big news from GitPulse: we have just launched..."></textarea>
-                    <p class="text-[11px] text-slate-500 mt-1">Available variables: <code>{{name}}</code>, <code>{{phone}}</code></p>
+                    <label for="bc-tpl" class="block text-xs font-medium text-slate-300 mb-1">Approved template *</label>
+                    <select id="bc-tpl" class="input-select text-xs w-full" onchange="showTemplateFields('bc')"></select>
+                    <div id="bc-tpl-vars" class="space-y-2 mt-2"></div>
+                    <p id="bc-tpl-preview" class="text-[11px] text-slate-400 mt-1 whitespace-pre-wrap break-words" aria-live="polite"></p>
                 </div>
                 <div class="flex items-center gap-2 pt-1">
                     <input type="checkbox" id="new-broadcast-send-now" class="w-4 h-4 rounded text-indigo-600">
@@ -1814,7 +1885,7 @@ def render_dashboard_html() -> str:
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-medium text-slate-300 mb-1">Trigger Event *</label>
-                        <select id="new-auto-trigger" required class="input-select text-xs">
+                        <select id="new-auto-trigger" onchange="updateAutomationFields()" required class="input-select text-xs">
                             <option value="welcome">Welcome (First inbound message from new lead)</option>
                             <option value="keyword" selected>Keyword Match (Contains trigger keywords)</option>
                             <option value="blog_publish">Blog Publish (Auto-alert when article goes live)</option>
@@ -1825,7 +1896,13 @@ def render_dashboard_html() -> str:
                         <input type="text" id="new-auto-keyword" class="input-text text-xs" placeholder="e.g. hours, price, book">
                     </div>
                 </div>
-                <div>
+                <div id="au-tpl-wrap" class="hidden">
+                    <label for="au-tpl" class="block text-xs font-medium text-slate-300 mb-1">Approved template *</label>
+                    <select id="au-tpl" class="input-select text-xs w-full" onchange="showTemplateFields('au')"></select>
+                    <div id="au-tpl-vars" class="space-y-2 mt-2"></div>
+                    <p id="au-tpl-preview" class="text-[11px] text-slate-400 mt-1 whitespace-pre-wrap break-words" aria-live="polite"></p>
+                </div>
+                <div id="au-text-wrap">
                     <label class="block text-xs font-medium text-slate-300 mb-1">Outbound Reply Message Template *</label>
                     <textarea id="new-auto-template" required rows="4" class="input-text text-xs font-mono resize-none" placeholder="Hi {{name}}! Thanks for your message. We will get back to you shortly."></textarea>
                     <p class="text-[11px] text-slate-500 mt-1">Variables: <code>{{name}}</code>, <code>{{phone}}</code>, <code>{{title}}</code>, <code>{{url}}</code></p>

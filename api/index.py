@@ -276,6 +276,11 @@ class handler(BaseHTTPRequestHandler):
         self._set_headers(404, "application/json")
         self.wfile.write(json.dumps({"error": "Endpoint not found"}).encode("utf-8"))
 
+def _wsgi_headers(environ):
+    return {"X-Account-Id": environ.get("HTTP_X_ACCOUNT_ID", ""), "X-Cron-Secret": environ.get("HTTP_X_CRON_SECRET", ""),
+            "Authorization": environ.get("HTTP_AUTHORIZATION", "")}
+
+
 # WSGI Application compatibility
 def app(environ, start_response):
     try:
@@ -368,7 +373,7 @@ def _app(environ, start_response):
             return [resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body]
 
         if path.startswith("/api/"):
-            code, resp = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent, headers={"X-Account-Id": environ.get("HTTP_X_ACCOUNT_ID", "")})
+            code, resp = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent, headers=_wsgi_headers(environ))
             headers.append(("Content-Type", "application/json"))
             status_str = f"{code} OK" if code == 200 else f"{code} Error"
             start_response(status_str, headers)
@@ -403,7 +408,7 @@ def _app(environ, start_response):
         return [json.dumps(resp).encode("utf-8")]
 
     if path.startswith("/api/"):
-        code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent, headers={"X-Account-Id": environ.get("HTTP_X_ACCOUNT_ID", "")})
+        code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent, headers=_wsgi_headers(environ))
         headers.append(("Content-Type", "application/json"))
         if path == "/api/auth/login" and code == 200 and "token" in resp:
             is_https = (environ.get("HTTP_X_FORWARDED_PROTO") == "https") or bool(os.environ.get("VERCEL"))
