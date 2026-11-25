@@ -12,26 +12,42 @@ from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler
 import io
+import logging
 
 # Add parent directory to sys.path so modules resolve on Vercel
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
-from database import init_db, seed_demo_data
-from engine.auth import init_default_admin, validate_session
+import dbcompat
+from server.security import SECURITY_HEADERS
+from database import init_db
+from engine.auth import validate_session, AuthUnavailable
 from server.routes_web import render_dashboard_html, render_login_html
 from server.routes_api import handle_api_request
 from server.routes_public import handle_public_request
 from server.routes_webhook import handle_github_webhook
 from server.routes_whatsapp import handle_whatsapp_webhook_get, handle_whatsapp_webhook_post
 
-# Initialize DB on cold start
-try:
-    init_db()
-    seed_demo_data()
-    init_default_admin()
-except Exception as e:
-    pass
+# Initialize DB on cold start; if it fails (e.g. database not reachable yet), retry lazily on requests.
+_DB_READY = False
+
+
+def ensure_db() -> bool:
+    global _DB_READY
+    if _DB_READY:
+        return True
+    try:
+        init_db()
+        from engine.auth import bootstrap_platform_admin_from_env
+        bootstrap_platform_admin_from_env()
+        _DB_READY = True
+    except Exception:
+        logging.getLogger("gitpulse").exception("init_db/bootstrap failed; will retry on next request")
+    return _DB_READY
+
+
+ensure_db()
+dbcompat.close_cached()
 
 STATIC_DIR = ROOT_DIR / "static"
 
@@ -75,6 +91,12 @@ class handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        finally:
+            dbcompat.close_cached()
+
     def _get_client_ip(self) -> str:
         forwarded = self.headers.get("X-Forwarded-For")
         if forwarded:
@@ -97,14 +119,24 @@ class handler(BaseHTTPRequestHandler):
         token = self._get_session_token()
         if not token:
             return None
-        return validate_session(token)
+        try:
+            return validate_session(token)
+        except AuthUnavailable:
+            self._db_down = True       # the caller answers 503; never treat this as "not signed in"
+            return None
+
+    def _send_unavailable(self):
+        self._set_headers(503, "application/json")
+        self.wfile.write(json.dumps({"error": "Service temporarily unavailable. Please retry.", "code": "UNAVAILABLE"}).encode("utf-8"))
 
     def _set_headers(self, status_code=200, content_type="application/json", set_cookie=None, location=None):
         self.send_response(status_code)
         self.send_header("Content-Type", content_type)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        for k, v in SECURITY_HEADERS:
+            self.send_header(k, v)
+        if getattr(self, "path", "").split("?")[0].startswith("/api/public/"):
+            # Read-only public blog data may be embedded on client sites; everything else is same-origin.
+            self.send_header("Access-Control-Allow-Origin", "*")
         if set_cookie:
             self.send_header("Set-Cookie", set_cookie)
         if location:
@@ -118,10 +150,14 @@ class handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_GET(self):
+        ensure_db()
         parsed = urlparse(self.path)
         path = parsed.path
         query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        self._db_down = False
         current_user = self._get_authenticated_user()
+        if self._db_down:
+            return self._send_unavailable()
 
         if path == "/login":
             if current_user:
@@ -169,7 +205,7 @@ class handler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             client_ip = self._get_client_ip()
             user_agent = self.headers.get("User-Agent", "")
-            code, resp = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent)
+            code, resp = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent, headers=dict(self.headers))
             self._set_headers(code, "application/json")
             self.wfile.write(json.dumps(resp).encode("utf-8"))
             return
@@ -180,6 +216,9 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self._handle_body("POST")
 
+    def do_PATCH(self):
+        self._handle_body("PATCH")
+
     def do_PUT(self):
         self._handle_body("PUT")
 
@@ -187,10 +226,14 @@ class handler(BaseHTTPRequestHandler):
         self._handle_body("DELETE")
 
     def _handle_body(self, method):
+        ensure_db()
         parsed = urlparse(self.path)
         path = parsed.path
         query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        self._db_down = False
         current_user = self._get_authenticated_user()
+        if self._db_down:
+            return self._send_unavailable()
         client_ip = self._get_client_ip()
         user_agent = self.headers.get("User-Agent", "")
 
@@ -206,7 +249,7 @@ class handler(BaseHTTPRequestHandler):
                 body_data = {}
 
         if path == "/api/webhook/whatsapp" and method == "POST":
-            code, resp = handle_whatsapp_webhook_post(body_data or {})
+            code, resp = handle_whatsapp_webhook_post(raw_body_bytes, self.headers.get("X-Hub-Signature-256", ""), body_data or {})
             self._set_headers(code, "application/json")
             self.wfile.write(json.dumps(resp).encode("utf-8"))
             return
@@ -220,7 +263,7 @@ class handler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/api/"):
-            code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent)
+            code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent, headers=dict(self.headers))
             set_cookie = None
             if path == "/api/auth/login" and code == 200 and "token" in resp:
                 is_https = (self.headers.get("X-Forwarded-Proto") == "https") or bool(os.environ.get("VERCEL"))
@@ -238,6 +281,14 @@ class handler(BaseHTTPRequestHandler):
 
 # WSGI Application compatibility
 def app(environ, start_response):
+    try:
+        return _app(environ, start_response)
+    finally:
+        dbcompat.close_cached()
+
+
+def _app(environ, start_response):
+    ensure_db()
     path = environ.get("PATH_INFO", "/")
     method = environ.get("REQUEST_METHOD", "GET")
     query_string = environ.get("QUERY_STRING", "")
@@ -256,15 +307,17 @@ def app(environ, start_response):
         if auth_hdr.lower().startswith("bearer "):
             token = auth_hdr[7:].strip()
 
-    current_user = validate_session(token) if token else None
+    try:
+        current_user = validate_session(token) if token else None
+    except AuthUnavailable:
+        start_response("503 Service Unavailable", list(SECURITY_HEADERS) + [("Content-Type", "application/json")])
+        return [json.dumps({"error": "Service temporarily unavailable. Please retry.", "code": "UNAVAILABLE"}).encode("utf-8")]
     client_ip = environ.get("HTTP_X_FORWARDED_FOR", environ.get("REMOTE_ADDR", "127.0.0.1")).split(",")[0].strip()
     user_agent = environ.get("HTTP_USER_AGENT", "")
 
-    headers = [
-        ("Access-Control-Allow-Origin", "*"),
-        ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
-        ("Access-Control-Allow-Headers", "Content-Type, Authorization")
-    ]
+    headers = list(SECURITY_HEADERS)
+    if path.startswith("/api/public/"):
+        headers.append(("Access-Control-Allow-Origin", "*"))
 
     if method == "OPTIONS":
         headers.append(("Content-Type", "text/plain"))
@@ -318,7 +371,7 @@ def app(environ, start_response):
             return [resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body]
 
         if path.startswith("/api/"):
-            code, resp = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent)
+            code, resp = handle_api_request("GET", path, query, None, current_user, client_ip, user_agent, headers={"X-Account-Id": environ.get("HTTP_X_ACCOUNT_ID", "")})
             headers.append(("Content-Type", "application/json"))
             status_str = f"{code} OK" if code == 200 else f"{code} Error"
             start_response(status_str, headers)
@@ -339,7 +392,7 @@ def app(environ, start_response):
             body_data = {}
 
     if path == "/api/webhook/whatsapp" and method == "POST":
-        code, resp = handle_whatsapp_webhook_post(body_data or {})
+        code, resp = handle_whatsapp_webhook_post(body_bytes, environ.get("HTTP_X_HUB_SIGNATURE_256", ""), body_data or {})
         headers.append(("Content-Type", "application/json"))
         start_response(f"{code} OK" if code == 200 else f"{code} Error", headers)
         return [json.dumps(resp).encode("utf-8")]
@@ -353,7 +406,7 @@ def app(environ, start_response):
         return [json.dumps(resp).encode("utf-8")]
 
     if path.startswith("/api/"):
-        code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent)
+        code, resp = handle_api_request(method, path, query, body_data, current_user, client_ip, user_agent, headers={"X-Account-Id": environ.get("HTTP_X_ACCOUNT_ID", "")})
         headers.append(("Content-Type", "application/json"))
         if path == "/api/auth/login" and code == 200 and "token" in resp:
             is_https = (environ.get("HTTP_X_FORWARDED_PROTO") == "https") or bool(os.environ.get("VERCEL"))

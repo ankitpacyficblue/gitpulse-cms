@@ -26,11 +26,11 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+import tests._env  # noqa: F401  isolates the SQLite file; must come before database imports
 
 from database import (
     get_connection,
     init_db,
-    seed_demo_data,
     list_projects,
     get_project,
     create_project,
@@ -52,7 +52,6 @@ from engine.auth import (
     create_session,
     validate_session,
     revoke_session,
-    init_default_admin,
     check_login_lockout,
     create_user
 )
@@ -74,11 +73,25 @@ class TestGitPulseCMS(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         init_db()
-        seed_demo_data()
-        init_default_admin()
+        import crm_store
+        from engine.auth import create_user as _cu, get_user_by_id as _gu
+        suffix = secrets.token_hex(3)
+        cls.username = f"owner_{suffix}"
+        cls.user_id = _cu(cls.username, "OwnerPass123!")
+        cls.account_id = crm_store.create_account(f"Test Account {suffix}")["id"]
+        crm_store.add_membership(cls.account_id, cls.user_id, "owner")
+        cls.user = dict(_gu(cls.user_id))
+        cls.hdr = {"X-Account-Id": cls.account_id}
+        for name, repo, fw in (("CloudScale", "acme/cloudscale", "nextjs"), ("AI Pulse", "acme/ai-pulse", "astro"),
+                               ("DocsHub", "acme/docs-hub", "hugo")):
+            create_project({"name": name, "github_repo": repo, "target_framework": fw,
+                            "topic": "Kubernetes, Terraform and cloud security", "github_branch": "main"}, cls.account_id)
+
+    def _api(self, method, path, body=None, query=None):
+        return handle_api_request(method, path, query or {}, body or {}, current_user=self.user, headers=self.hdr)
 
     def test_database_and_projects(self):
-        projects = list_projects()
+        projects = list_projects(self.account_id)
         self.assertGreaterEqual(len(projects), 3)
         p = projects[0]
         self.assertIn("github_repo", p)
@@ -112,7 +125,7 @@ class TestGitPulseCMS(unittest.TestCase):
         self.assertEqual(path_jekyll, "_posts/2026-11-24-my-post.md")
 
     def test_topic_planner(self):
-        projects = list_projects()
+        projects = list_projects(self.account_id)
         project = projects[0]
         plan = plan_daily_topic(project)
         self.assertIn("title", plan)
@@ -202,7 +215,7 @@ class TestGitPulseCMS(unittest.TestCase):
         summary = summarize_readme_context(raw_readme)
         self.assertIn("high-throughput database", summary)
 
-        projects = list_projects()
+        projects = list_projects(self.account_id)
         suggestions = get_internal_linking_suggestions(projects[0]["id"])
         self.assertIsInstance(suggestions, list)
 
@@ -214,7 +227,7 @@ class TestGitPulseCMS(unittest.TestCase):
         self.assertIn("marked.parse", html)
 
     def test_public_headless_content_api(self):
-        projects = list_projects()
+        projects = list_projects(self.account_id)
         p_id = projects[0]["id"]
 
         # Public posts listing
@@ -236,7 +249,7 @@ class TestGitPulseCMS(unittest.TestCase):
         self.assertEqual(code, 200)
 
         # 2. PR Merged Event
-        projects = list_projects()
+        projects = list_projects(self.account_id)
         post_id = create_post({
             "project_id": projects[0]["id"],
             "title": "Webhook Test Article",
@@ -265,7 +278,7 @@ class TestGitPulseCMS(unittest.TestCase):
         self.assertEqual(updated_post["github_commit_sha"], "merge-sha-12345")
 
     def test_editorial_staging_and_approval_workflow(self):
-        projects = list_projects()
+        projects = list_projects(self.account_id)
         # Create an in_review draft post
         post_id = create_post({
             "project_id": projects[0]["id"],
@@ -279,57 +292,36 @@ class TestGitPulseCMS(unittest.TestCase):
         })
 
         # Test updating content in staging
-        fake_user = {"id": 1, "username": "admin", "role": "admin"}
         put_payload = {
             "title": "Reviewed and Polished Title for 2026",
             "excerpt": "A polished meta description meeting the recommended length requirements.",
             "content_markdown": "## Polished Heading\n\n```python\nprint('hello')\n```\n\n## Next Steps\nConclusion." + (" word" * 500)
         }
-        code, data = handle_api_request("PUT", f"/api/posts/{post_id}", {}, put_payload, current_user=fake_user)
+        code, data = self._api("PUT", f"/api/posts/{post_id}", put_payload)
         self.assertEqual(code, 200)
         self.assertIn("seo_score", data)
 
         # Test approving staged post
-        code, approve_data = handle_api_request("POST", f"/api/posts/{post_id}/approve", {}, {}, current_user=fake_user)
+        code, approve_data = self._api("POST", f"/api/posts/{post_id}/approve", {})
         self.assertEqual(code, 200)
         self.assertTrue(approve_data["success"])
 
         final_post = get_post(post_id)
         self.assertEqual(final_post["status"], "published")
 
-    def test_multitenant_client_crud_and_project_linkage(self):
-        from database import create_client, list_clients, get_client, delete_client, create_project, list_projects
-        # Create clients
-        c1 = create_client("Fintech Innovations", "lead@fintech.io")
-        c2 = create_client("HealthTech Labs", "team@healthtech.com")
-        self.assertIsInstance(c1, int)
-        self.assertIsInstance(c2, int)
-
-        client_list = list_clients()
-        names = [c["name"] for c in client_list]
-        self.assertIn("Fintech Innovations", names)
-        self.assertIn("HealthTech Labs", names)
-
-        # Create project under client 1
-        p_id = create_project({
-            "client_id": c1,
-            "name": "Fintech Alpha Portal",
-            "github_repo": "fintech-org/alpha-site",
-            "topic": "Quantitative finance and algorithmic market making"
-        })
-
-        # Test filtering by client
-        c1_projects = list_projects(client_id=c1)
-        self.assertEqual(len(c1_projects), 1)
-        self.assertEqual(c1_projects[0]["name"], "Fintech Alpha Portal")
-        self.assertEqual(c1_projects[0]["client_name"], "Fintech Innovations")
-
-        c2_projects = list_projects(client_id=c2)
-        self.assertEqual(len(c2_projects), 0)
-
-        # Cleanup
-        delete_client(c1)
-        delete_client(c2)
+    def test_projects_are_isolated_between_accounts(self):
+        import crm_store
+        other = crm_store.create_account("Other Co " + secrets.token_hex(3))["id"]
+        p_other = create_project({"name": "Other Alpha", "github_repo": "other/alpha", "topic": "Quant finance"}, other)
+        mine = [p["name"] for p in list_projects(self.account_id)]
+        self.assertNotIn("Other Alpha", mine)
+        self.assertEqual([p["name"] for p in list_projects(other)], ["Other Alpha"])
+        # API: cannot read, update or delete another account's project by guessing its id
+        self.assertEqual(self._api("GET", f"/api/projects/{p_other}")[0], 404)
+        self.assertEqual(self._api("PUT", f"/api/projects/{p_other}", {"name": "Hacked"})[0], 404)
+        self.assertEqual(self._api("DELETE", f"/api/projects/{p_other}")[0], 404)
+        self.assertEqual(self._api("POST", f"/api/projects/{p_other}/trigger")[0], 404)
+        self.assertEqual(get_project(p_other)["name"], "Other Alpha")
 
     def test_supabase_client_and_connection_testing(self):
         from engine.supabase_client import SupabaseClient
@@ -353,14 +345,13 @@ class TestGitPulseCMS(unittest.TestCase):
         self.assertIn("url", status)
 
     def test_github_repo_verification_endpoint(self):
-        fake_user = {"id": 1, "username": "admin", "role": "admin"}
         # Missing repo
-        code, resp = handle_api_request("POST", "/api/github/verify", {}, {"github_repo": ""}, current_user=fake_user)
+        code, resp = self._api("POST", "/api/github/verify", {"github_repo": ""})
         self.assertEqual(code, 400)
         self.assertFalse(resp["valid"])
 
         # Simulated verification with mock token
-        code, resp = handle_api_request("POST", "/api/github/verify", {}, {"github_repo": "test-org/test-repo", "github_token": "mock"}, current_user=fake_user)
+        code, resp = self._api("POST", "/api/github/verify", {"github_repo": "test-org/test-repo", "github_token": "mock"})
         self.assertEqual(code, 200)
         self.assertTrue(resp["valid"])
         self.assertEqual(resp["repo"], "test-org/test-repo")
@@ -397,14 +388,14 @@ class TestGitPulseCMS(unittest.TestCase):
 
     def test_stateless_hmac_session_across_containers(self):
         # 1. Create a session in Container A
-        token = create_session(1, ip_address="127.0.0.1")
+        token = create_session(self.user_id, ip_address="127.0.0.1")
         self.assertTrue(token)
 
         # 2. Validate session in Container A (with local DB present)
         user = validate_session(token)
         self.assertIsNotNone(user)
-        self.assertEqual(user["id"], 1)
-        self.assertEqual(user["username"], "admin")
+        self.assertEqual(user["id"], self.user_id)
+        self.assertEqual(user["username"], self.username)
 
         # 3. Simulate Container B: clear sessions table completely
         with get_connection() as conn:
@@ -414,8 +405,8 @@ class TestGitPulseCMS(unittest.TestCase):
         # 4. Validate session in Container B (stateless HMAC verification without DB row)
         user_container_b = validate_session(token)
         self.assertIsNotNone(user_container_b)
-        self.assertEqual(user_container_b["id"], 1)
-        self.assertEqual(user_container_b["username"], "admin")
+        self.assertEqual(user_container_b["id"], self.user_id)
+        self.assertEqual(user_container_b["username"], self.username)
 
         # 5. Tampered token must fail
         tampered = token[:-4] + "xxxx"
@@ -429,7 +420,7 @@ class TestGitPulseCMS(unittest.TestCase):
         import api.index as vercel_app
         import io
 
-        token = create_session(1)
+        token = create_session(self.user_id)
 
         def call_wsgi_auth(path, cookie="", auth_hdr=""):
             status_box = []
@@ -463,7 +454,7 @@ class TestGitPulseCMS(unittest.TestCase):
         # Authenticated GET /api/auth/me with Authorization Bearer must return 200 user
         st, hdrs, body = call_wsgi_auth("/api/auth/me", auth_hdr=f"Bearer {token}")
         self.assertIn("200 OK", st)
-        self.assertIn('"username": "admin"', body)
+        self.assertIn(f'"username": "{self.username}"', body)
 
 if __name__ == "__main__":
     unittest.main()

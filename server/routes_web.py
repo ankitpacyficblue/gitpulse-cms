@@ -87,7 +87,7 @@ def render_login_html() -> str:
                 const token = localStorage.getItem('gitpulse_token');
                 if (token && !document.cookie.includes('session_token=')) {
                     const isHttps = window.location.protocol === 'https:';
-                    document.cookie = `session_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                    document.cookie = `session_token=${token}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
                 }
             } catch (e) {}
         })();
@@ -108,7 +108,7 @@ def render_login_html() -> str:
         <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
             <div class="mb-6">
                 <h2 class="text-lg font-semibold text-white">Sign In to Dashboard</h2>
-                <p class="text-xs text-slate-400 mt-0.5">Enter your administrative credentials to continue.</p>
+                <p class="text-xs text-slate-400 mt-0.5">Sign in with the username and password from your account owner.</p>
             </div>
 
             <!-- Error / Lockout Banner -->
@@ -129,7 +129,7 @@ def render_login_html() -> str:
             <form id="login-form" onsubmit="handleLoginSubmit(event)" class="space-y-4">
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Username</label>
-                    <input type="text" id="login-username" required class="input-text" placeholder="admin" autofocus autocomplete="username">
+                    <input type="text" id="login-username" required class="input-text" placeholder="your username" autofocus autocomplete="username">
                 </div>
 
                 <div>
@@ -154,21 +154,9 @@ def render_login_html() -> str:
                 </button>
             </form>
 
-            <!-- Initial Credentials Helper Notice -->
-            <div class="mt-6 p-3 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] text-slate-400 space-y-1">
-                <div class="text-indigo-400 font-semibold flex items-center gap-1">
-                    <span>🔑 Initial Setup Credentials</span>
-                </div>
-                <div>Username: <code class="text-slate-200">admin</code></div>
-                <div>Password: <code class="text-slate-200">GitPulse@Admin2026!</code></div>
-                <div class="text-[10px] text-slate-500 pt-1">You can change your password inside Settings after logging in.</div>
-            </div>
-
             <!-- Security Footprint -->
             <div class="mt-6 pt-4 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-500">
-                <span class="flex items-center gap-1">🛡️ Rate-Limit Protected</span>
-                <span>PBKDF2-HMAC-256</span>
-                <span>Strict Cookie</span>
+                <span>Forgot your password? Ask your account owner to reset it.</span>
             </div>
         </div>
     </div>
@@ -186,6 +174,17 @@ def render_login_html() -> str:
             }
         }
 
+        (function () {
+            try {
+                const r = sessionStorage.getItem('gitpulse_login_reason');
+                if (r) {
+                    sessionStorage.removeItem('gitpulse_login_reason');
+                    const b = document.getElementById('login-error-banner'), t = document.getElementById('login-error-text');
+                    if (b && t) { t.innerText = r; b.classList.remove('hidden'); }
+                }
+            } catch (e) {}
+        })();
+
         async function handleLoginSubmit(e) {
             e.preventDefault();
             const btn = document.getElementById('login-btn');
@@ -199,6 +198,8 @@ def render_login_html() -> str:
             lockBanner.classList.add('hidden');
             btn.disabled = true;
             btnText.innerText = 'Verifying...';
+            const slowTimer = setTimeout(() => { btnText.innerText = 'Still working... the server may be waking up'; }, 5000);
+            window.__loginSlow = slowTimer;
 
             const username = document.getElementById('login-username').value;
             const password = document.getElementById('login-password').value;
@@ -217,10 +218,11 @@ def render_login_html() -> str:
                     try {
                         localStorage.setItem('gitpulse_token', data.token);
                         const isHttps = window.location.protocol === 'https:';
-                        document.cookie = `session_token=${encodeURIComponent(data.token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                        document.cookie = `session_token=${data.token}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
                     } catch (e) {
                         console.error('Local token store error', e);
                     }
+                    try { if (data.must_change_password) localStorage.setItem('gitpulse_must_change', '1'); else localStorage.removeItem('gitpulse_must_change'); } catch (e) {}
                     setTimeout(() => {
                         window.location.href = '/';
                     }, 50);
@@ -244,6 +246,7 @@ def render_login_html() -> str:
                     }
                 }
             } catch (err) {
+                clearTimeout(window.__loginSlow);
                 btn.disabled = false;
                 btnText.innerText = 'Authenticate & Continue';
                 errBanner.classList.remove('hidden');
@@ -256,7 +259,7 @@ def render_login_html() -> str:
                 const token = localStorage.getItem('gitpulse_token');
                 if (token) {
                     const isHttps = window.location.protocol === 'https:';
-                    document.cookie = `session_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                    document.cookie = `session_token=${token}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
                     const res = await fetch('/api/auth/me', {
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
@@ -314,7 +317,7 @@ def render_dashboard_html() -> str:
                 const token = localStorage.getItem('gitpulse_token');
                 if (token && !document.cookie.includes('session_token=')) {
                     const isHttps = window.location.protocol === 'https:';
-                    document.cookie = `session_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
+                    document.cookie = `session_token=${token}; Path=/; SameSite=Lax; Max-Age=172800${isHttps ? '; Secure' : ''}`;
                 }
             } catch (e) {}
         })();
@@ -323,7 +326,8 @@ def render_dashboard_html() -> str:
 <body class="bg-slate-950 text-slate-100">
     <div class="app-layout">
         <!-- Persistent Left Sidebar Navigation with Clear Sections -->
-        <aside class="sidebar">
+        <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="toggleSidebar(false)"></div>
+        <aside class="sidebar" id="sidebar" aria-label="Main navigation">
             <!-- Sidebar Header & Brand -->
             <div class="p-4 border-b border-slate-800/80">
                 <div class="flex items-center space-x-3 mb-3">
@@ -345,11 +349,11 @@ def render_dashboard_html() -> str:
                 <!-- Multi-Tenant Client Selector -->
                 <div class="bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
                     <div class="flex justify-between items-center mb-1">
-                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Business / Client</span>
-                        <button onclick="openAddClientModal()" class="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold">+ Add</button>
+                        <label for="client-select-filter" class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Client account</label>
+                        <button data-platform-admin onclick="openAddClientModal()" class="hidden text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold">+ New account</button>
                     </div>
                     <select id="client-select-filter" onchange="onClientFilterChange()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-slate-200 outline-none">
-                        <option value="">All Clients & Orgs</option>
+                        <option value="">All accounts (admin view)</option>
                     </select>
                 </div>
             </div>
@@ -362,27 +366,27 @@ def render_dashboard_html() -> str:
                         <span>📰</span>
                         <span>Blog & Content Engine</span>
                     </div>
-                    <a class="sidebar-nav-item active" onclick="switchTab('repos')">
+                    <a class="sidebar-nav-item active" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('repos')">
                         <span class="flex items-center gap-2">
                             <span>📦</span>
                             <span>Connected Repos</span>
                         </span>
                         <span id="sidebar-badge-repos" class="sidebar-badge bg-slate-800 text-slate-300">-</span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('staging')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('staging')">
                         <span class="flex items-center gap-2">
                             <span>✍️</span>
                             <span>Editorial Staging</span>
                         </span>
                         <span id="badge-staging-count" class="sidebar-badge bg-amber-500/20 text-amber-300 border border-amber-500/30">0</span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('posts')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('posts')">
                         <span class="flex items-center gap-2">
                             <span>📑</span>
                             <span>Articles Feed</span>
                         </span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('zeroredeploy')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('zeroredeploy')">
                         <span class="flex items-center gap-2">
                             <span>⚡</span>
                             <span>1-Click Blog Embed</span>
@@ -397,34 +401,34 @@ def render_dashboard_html() -> str:
                         <span>💬</span>
                         <span>WhatsApp CRM & Automation</span>
                     </div>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-inbox')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-inbox')">
                         <span class="flex items-center gap-2">
                             <span>📥</span>
                             <span>Shared Team Inbox</span>
                         </span>
                         <span id="sidebar-badge-inbox" class="sidebar-badge bg-slate-800 text-slate-400">0</span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-contacts')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-contacts')">
                         <span class="flex items-center gap-2">
                             <span>👥</span>
                             <span>Contacts & Audience</span>
                         </span>
                         <span id="sidebar-badge-contacts" class="sidebar-badge bg-slate-800 text-slate-400">0</span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-deals')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-deals')">
                         <span class="flex items-center gap-2">
                             <span>🎯</span>
                             <span>Sales Pipeline (Kanban)</span>
                         </span>
                         <span id="sidebar-badge-deals" class="sidebar-badge bg-emerald-500/10 text-emerald-400 font-mono">$0</span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-broadcasts')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-broadcasts')">
                         <span class="flex items-center gap-2">
                             <span>📢</span>
                             <span>Broadcast Campaigns</span>
                         </span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-automations')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-automations')">
                         <span class="flex items-center gap-2">
                             <span>🤖</span>
                             <span>No-Code Automations</span>
@@ -434,30 +438,36 @@ def render_dashboard_html() -> str:
                 </div>
 
                 <!-- SECTION 3: PLATFORM & CLOUD -->
-                <div class="sidebar-section">
+                <div class="sidebar-section" id="nav-platform-section">
                     <div class="sidebar-section-title">
                         <span>⚙️</span>
                         <span>Platform & Settings</span>
                     </div>
-                    <a class="sidebar-nav-item" onclick="switchTab('wa-config')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-config')">
                         <span class="flex items-center gap-2">
                             <span>📱</span>
                             <span>WhatsApp API Setup</span>
                         </span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('supabase')">
+                    <a class="sidebar-nav-item" id="nav-users" role="button" tabindex="0" onclick="switchTab('users')" onkeydown="navKey(event,this)">
+                        <span class="flex items-center gap-2">
+                            <span>👥</span>
+                            <span>Users & Roles</span>
+                        </span>
+                    </a>
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('supabase')">
                         <span class="flex items-center gap-2">
                             <span>☁️</span>
                             <span>Supabase Cloud DB</span>
                         </span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('logs')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('logs')">
                         <span class="flex items-center gap-2">
                             <span>📋</span>
                             <span>Activity & Webhook Logs</span>
                         </span>
                     </a>
-                    <a class="sidebar-nav-item" onclick="switchTab('settings')">
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('settings')">
                         <span class="flex items-center gap-2">
                             <span>🛡️</span>
                             <span>Security & 2FA</span>
@@ -470,12 +480,12 @@ def render_dashboard_html() -> str:
             <div class="sidebar-footer">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center space-x-2 min-w-0">
-                        <div class="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-xs text-white">
-                            A
+                        <div class="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-xs text-white" id="header-avatar" aria-hidden="true">
+                            &nbsp;
                         </div>
                         <div class="min-w-0">
-                            <div id="header-username" class="text-xs font-semibold text-white truncate">admin</div>
-                            <div class="text-[10px] text-slate-400">Super Administrator</div>
+                            <div id="header-username" class="text-xs font-semibold text-white truncate">&nbsp;</div>
+                            <div class="text-[10px] text-slate-400">&nbsp;</div>
                         </div>
                     </div>
                     <button onclick="handleLogout()" class="text-slate-400 hover:text-red-400 text-xs p-1" title="Sign Out">
@@ -489,12 +499,14 @@ def render_dashboard_html() -> str:
         <div class="main-content">
             <!-- Top Action Bar -->
             <header class="top-bar">
-                <div>
+                <button type="button" class="menu-toggle" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false" onclick="toggleSidebar()">☰</button>
+                <div class="min-w-0 flex-1">
                     <h1 id="view-header-title" class="text-lg font-bold text-white tracking-tight">Connected Projects</h1>
                     <p id="view-header-sub" class="text-xs text-slate-400">Autonomous multi-repo daily blog publishing targets</p>
                 </div>
 
-                <div class="flex items-center space-x-2.5">
+                <button type="button" id="new-menu-btn" class="new-menu-btn btn-primary text-xs py-2 px-3" aria-haspopup="true" aria-expanded="false" onclick="toggleNewMenu()">New ▾</button>
+                <div id="top-actions" class="top-actions flex items-center space-x-2.5">
                     <button onclick="openAddProjectModal()" class="btn-primary flex items-center space-x-1.5 text-xs py-2 px-3 shadow-indigo-500/25">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
                         <span>Connect Website in 60s</span>
@@ -512,9 +524,10 @@ def render_dashboard_html() -> str:
             </header>
 
             <!-- Dashboard Body -->
-            <main class="flex-1 p-6 max-w-7xl w-full mx-auto">
+            <main class="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto" id="main-content">
+                <p class="text-[11px] text-slate-400 mb-3">Working in: <strong id="account-banner-name" class="text-slate-200">All accounts</strong></p>
                 <!-- 5 Top Metric Stat Cards -->
-                <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+                <div id="kpi-cards" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
                     <div class="metric-card">
                         <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">Connected Repos</div>
                         <div class="text-xl font-bold mt-1 text-white" id="stat-repos-count">-</div>
@@ -636,20 +649,20 @@ def render_dashboard_html() -> str:
                 <div class="space-y-3">
                     <h3 class="text-sm font-semibold text-slate-200">Public Headless Content API Endpoints</h3>
                     <div class="space-y-2 text-xs font-mono">
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
-                            <span class="text-cyan-400">GET /api/public/projects/{id}/posts</span>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
+                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/posts</span>
                             <span class="text-slate-500">Paginated JSON feed of published posts</span>
                         </div>
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
-                            <span class="text-cyan-400">GET /api/public/projects/{id}/posts/{slug}</span>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
+                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/posts/{slug}</span>
                             <span class="text-slate-500">Full post markdown, frontmatter, & view counter</span>
                         </div>
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
-                            <span class="text-cyan-400">GET /api/public/projects/{id}/posts/{slug}/og-image.svg</span>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
+                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/posts/{slug}/og-image.svg</span>
                             <span class="text-slate-500">Dynamic 1200x630 OpenGraph hero banner</span>
                         </div>
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
-                            <span class="text-cyan-400">GET /api/public/projects/{id}/rss.xml</span>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
+                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/rss.xml</span>
                             <span class="text-slate-500">Auto-generated RSS 2.0 XML feed</span>
                         </div>
                     </div>
@@ -789,19 +802,22 @@ def render_dashboard_html() -> str:
 
         <!-- TAB: WHATSAPP SHARED TEAM INBOX -->
         <div id="tab-wa-inbox" class="tab-content hidden">
-            <div class="flex justify-between items-center mb-4">
+            <div class="flex flex-wrap justify-between items-center gap-3 mb-4">
                 <div>
                     <h2 class="text-lg font-semibold text-white flex items-center gap-2">
                         <span>💬 WhatsApp Shared Team Inbox</span>
-                        <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 font-normal">
-                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Meta Cloud API Live
-                        </span>
+                        <span id="wa-mode-badge" class="hidden text-xs px-2 py-0.5 rounded-full border flex items-center gap-1 font-normal"></span>
                     </h2>
-                    <p class="text-sm text-slate-400">Two-way live threaded messaging, delivery ticks (sent, delivered, read), quick replies, and lead assignment.</p>
+                    <p class="text-sm text-slate-400">Two-way threaded WhatsApp messaging for this client account.</p>
                 </div>
-                <div class="flex items-center gap-2">
+                <div class="flex flex-wrap items-center gap-2">
+                    <label class="sr-only" for="wa-assigned-filter">Show conversations</label>
+                    <select id="wa-assigned-filter" class="input-select text-xs py-1.5" onchange="loadWhatsAppInbox()">
+                        <option value="">All conversations</option>
+                        <option value="me">Assigned to me</option>
+                    </select>
                     <button onclick="loadWhatsAppInbox()" class="btn-secondary text-xs">🔄 Refresh Chats</button>
-                    <button onclick="openAddContactModal()" class="btn-primary text-xs">+ New Lead</button>
+                    <button data-requires="crm.write" onclick="openAddContactModal()" class="btn-primary text-xs">+ New Lead</button>
                 </div>
             </div>
 
@@ -822,7 +838,7 @@ def render_dashboard_html() -> str:
                     <!-- Active State -->
                     <div id="wa-chat-active-state" class="flex flex-col h-full">
                         <!-- Chat Header -->
-                        <div class="p-3.5 border-b border-slate-800 bg-slate-950/60 flex justify-between items-center">
+                        <div class="p-3.5 border-b border-slate-800 bg-slate-950/60 flex flex-wrap justify-between items-center gap-2">
                             <div class="flex items-center space-x-3">
                                 <div class="w-9 h-9 rounded-full bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center font-bold text-sm text-indigo-300">
                                     WA
@@ -836,8 +852,10 @@ def render_dashboard_html() -> str:
                                 </div>
                             </div>
 
-                            <div class="flex items-center space-x-2">
-                                <button onclick="openAddDealModal(activeConversationId)" class="btn-secondary text-xs py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <label class="sr-only" for="wa-assign-select">Assign conversation</label>
+                                <select id="wa-assign-select" data-requires="crm.write" class="input-select text-xs py-1 min-w-[9rem]" onchange="assignConversation(this.value)"></select>
+                                <button data-requires="crm.write" onclick="openAddDealModal(activeConversationId)" class="btn-secondary text-xs py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
                                     💰 + Create Deal
                                 </button>
                             </div>
@@ -848,17 +866,8 @@ def render_dashboard_html() -> str:
                             <!-- Populated dynamically -->
                         </div>
 
-                        <!-- Canned Quick Replies -->
-                        <div class="px-4 py-2 border-t border-slate-800/80 bg-slate-950/40 flex items-center gap-1.5 overflow-x-auto">
-                            <span class="text-[10px] text-slate-500 uppercase font-semibold mr-1 flex-shrink-0">Quick Replies:</span>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply('Hi! 👋 Thanks for reaching out to GitPulse. How can our autonomous blog publishing and CRM help your company grow?')">👋 Welcome</button>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply('Here is our pricing: Starter $49/mo (3 Repos), Pro $149/mo (10 Repos, Unlimited WA CRM). Reply demo to schedule a call!')">📊 Pricing</button>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply('We would love to show you the zero-redeploy 1-click blog embed! Are you free for a 15-minute demo this week?')">⚡ 1-Click Embed Demo</button>
-                            <button type="button" class="quick-chip" onclick="insertCannedReply('Thanks for your message! Our engineering team has received this and will follow up shortly.')">🙏 Thank You</button>
-                        </div>
-
                         <!-- Message Composer Input -->
-                        <form onsubmit="sendWhatsAppReply(event)" class="p-3 border-t border-slate-800 bg-slate-950 flex items-center gap-2">
+                        <form onsubmit="sendWhatsAppReply(event)" data-requires="crm.write" class="p-3 border-t border-slate-800 bg-slate-950 flex items-center gap-2">
                             <input type="text" id="wa-message-input" placeholder="Type WhatsApp message (Enter to send)..." class="input-text text-xs flex-1 py-2">
                             <button type="submit" class="btn-primary text-xs py-2 px-4 flex items-center gap-1.5 shadow-indigo-500/30">
                                 <span>Send</span>
@@ -888,7 +897,7 @@ def render_dashboard_html() -> str:
                     <h2 class="text-lg font-semibold text-white">Contacts & Audience CRM</h2>
                     <p class="text-sm text-slate-400">Manage customer audience, customer data platform (CDP) tags, and launch instant 1-click WhatsApp conversations.</p>
                 </div>
-                <button onclick="openAddContactModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-emerald-500/20">
+                <button data-requires="crm.write" onclick="openAddContactModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-emerald-500/20">
                     <span>+ Add New Lead</span>
                 </button>
             </div>
@@ -939,7 +948,7 @@ def render_dashboard_html() -> str:
                 </div>
                 <div class="flex items-center gap-2">
                     <button onclick="loadWhatsAppDeals()" class="btn-secondary text-xs">🔄 Refresh</button>
-                    <button onclick="openAddDealModal()" class="btn-primary text-xs">+ Add Sales Deal</button>
+                    <button data-requires="crm.write" onclick="openAddDealModal()" class="btn-primary text-xs">+ Add Sales Deal</button>
                 </div>
             </div>
 
@@ -994,12 +1003,13 @@ def render_dashboard_html() -> str:
 
         <!-- TAB: WHATSAPP BROADCAST CAMPAIGNS -->
         <div id="tab-wa-broadcasts" class="tab-content hidden">
+            <p id="wa-bc-viewonly" class="hidden mb-3 text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2" role="note">View only. Your role can read campaigns but not create or send them.</p>
             <div class="flex justify-between items-center mb-4">
                 <div>
                     <h2 class="text-lg font-semibold text-white">Broadcast Campaigns</h2>
                     <p class="text-sm text-slate-400">Dispatch mass WhatsApp announcements, product updates, and newsletters targeted by audience tags.</p>
                 </div>
-                <button onclick="openAddBroadcastModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
+                <button data-requires="broadcasts.run" onclick="openAddBroadcastModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
                     <span>+ New Broadcast Campaign</span>
                 </button>
             </div>
@@ -1011,6 +1021,7 @@ def render_dashboard_html() -> str:
 
         <!-- TAB: NO-CODE AUTOMATIONS ENGINE -->
         <div id="tab-wa-automations" class="tab-content hidden">
+            <p id="wa-auto-viewonly" class="hidden mb-3 text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2" role="note">View only. Your role can read the rules but not change them.</p>
             <div class="flex justify-between items-center mb-4">
                 <div>
                     <h2 class="text-lg font-semibold text-white flex items-center gap-2">
@@ -1019,7 +1030,7 @@ def render_dashboard_html() -> str:
                     </h2>
                     <p class="text-sm text-slate-400">Automate welcome greetings, keyword auto-replies, and automatic WhatsApp broadcasts whenever blog articles are published.</p>
                 </div>
-                <button onclick="openAddAutomationModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
+                <button data-requires="automations.manage" onclick="openAddAutomationModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
                     <span>+ New Automation Rule</span>
                 </button>
             </div>
@@ -1030,14 +1041,93 @@ def render_dashboard_html() -> str:
         </div>
 
         <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
+        <div id="tab-users" class="tab-content hidden">
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <section class="xl:col-span-2 bg-slate-900 border border-slate-800 rounded-xl shadow-xl" aria-labelledby="users-h">
+                    <div class="p-5 border-b border-slate-800 flex flex-wrap justify-between items-center gap-2">
+                        <h2 id="users-h" class="text-base font-semibold text-white">People with access to <span id="users-account-name">this account</span></h2>
+                        <span id="users-role-note" class="text-[11px] text-slate-400"></span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead class="text-[11px] uppercase text-slate-400 bg-slate-950/40"><tr>
+                                <th scope="col" class="px-5 py-3">User</th><th scope="col" class="px-5 py-3">Role</th><th scope="col" class="px-5 py-3 text-right">Actions</th>
+                            </tr></thead>
+                            <tbody id="users-table-body" class="divide-y divide-slate-800"></tbody>
+                        </table>
+                    </div>
+                    <div id="users-empty"></div>
+                </section>
+                <section id="account-manage-card" class="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-3" aria-labelledby="acct-h" data-requires="account.manage">
+                    <h2 id="acct-h" class="text-base font-semibold text-white">Account settings</h2>
+                    <form onsubmit="renameAccount(event)" class="flex flex-wrap items-end gap-2">
+                        <div class="flex-1 min-w-[12rem]">
+                            <label for="acct-name" class="block text-xs font-medium text-slate-300 mb-1">Account name</label>
+                            <input type="text" id="acct-name" required class="input-text text-xs">
+                        </div>
+                        <button type="submit" class="btn-secondary text-xs py-2 px-3">Rename</button>
+                        <button type="button" onclick="deleteAccount()" class="btn-secondary text-xs py-2 px-3 text-red-400">Delete account</button>
+                    </form>
+                    <p class="text-[11px] text-slate-500">Deleting hides the account and its data from everyone. Type the account name to confirm.</p>
+                </section>
+                <section id="account-keys-card" class="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-3" aria-labelledby="keys-h" data-requires="account.manage">
+                    <h2 id="keys-h" class="text-base font-semibold text-white">Blog AI, GitHub and currency</h2>
+                    <p class="text-[11px] text-slate-500">Keys are stored encrypted and never shown again. Leave a field blank to keep what is saved.</p>
+                    <form onsubmit="saveAccountSettings(event)" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                            <label for="set-ai-provider" class="block text-xs font-medium text-slate-300 mb-1">AI provider</label>
+                            <select id="set-ai-provider" class="input-text text-xs"><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="mock">Built-in template (no key)</option></select>
+                            <p id="set-ai-source" class="text-[11px] text-slate-500 mt-1"></p>
+                        </div>
+                        <div>
+                            <label for="set-currency" class="block text-xs font-medium text-slate-300 mb-1">Default deal currency</label>
+                            <select id="set-currency" class="input-text text-xs"><option value="INR">INR ₹</option><option value="USD">USD $</option><option value="EUR">EUR €</option><option value="GBP">GBP £</option><option value="AED">AED</option></select>
+                        </div>
+                        <div>
+                            <label for="set-ai-key" class="block text-xs font-medium text-slate-300 mb-1">AI API key</label>
+                            <input type="password" id="set-ai-key" autocomplete="new-password" class="input-text text-xs font-mono" placeholder="Paste a key">
+                            <label class="text-[11px] text-slate-400 flex items-center gap-1 mt-1"><input type="checkbox" id="set-ai-clear"> Remove the saved key</label>
+                        </div>
+                        <div>
+                            <label for="set-gh-token" class="block text-xs font-medium text-slate-300 mb-1">GitHub token</label>
+                            <input type="password" id="set-gh-token" autocomplete="new-password" class="input-text text-xs font-mono" placeholder="Paste a token">
+                            <label class="text-[11px] text-slate-400 flex items-center gap-1 mt-1"><input type="checkbox" id="set-gh-clear"> Remove the saved token</label>
+                        </div>
+                        <div class="md:col-span-2"><button type="submit" class="btn-primary text-xs py-2 px-3">Save settings</button></div>
+                    </form>
+                </section>
+                <section id="users-invite-card" class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-4" aria-labelledby="invite-h" data-requires="users.manage">
+                    <h2 id="invite-h" class="text-base font-semibold text-white">Add a person</h2>
+                    <form onsubmit="submitInviteUser(event)" class="space-y-3">
+                        <div>
+                            <label for="invite-username" class="block text-xs font-medium text-slate-300 mb-1">Username or email *</label>
+                            <input type="text" id="invite-username" required class="input-text text-xs" autocomplete="off">
+                        </div>
+                        <div>
+                            <label for="invite-role" class="block text-xs font-medium text-slate-300 mb-1">Role</label>
+                            <select id="invite-role" class="input-text text-xs"></select>
+                            <p id="invite-role-help" class="text-[11px] text-slate-500 mt-1"></p>
+                        </div>
+                        <button type="submit" class="btn-primary text-xs py-2 px-3 w-full">Add to account</button>
+                        <p id="invite-result" class="text-[11px] text-slate-300" role="status" aria-live="polite"></p>
+                    </form>
+                </section>
+            </div>
+        </div>
+
         <div id="tab-wa-config" class="tab-content hidden">
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <!-- Meta Cloud API Credentials Form -->
-                <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-5">
+            <nav aria-label="WhatsApp setup steps" class="max-w-3xl mb-5">
+                <ol id="wa-stepper" class="grid grid-cols-4 gap-2 text-[11px]"></ol>
+            </nav>
+            <div class="grid grid-cols-1 gap-6 max-w-3xl">
+                <!-- Step 1: Meta Cloud API Credentials Form -->
+                <div class="wa-step bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-5" data-step="1">
+                    <h3 class="text-sm font-semibold text-indigo-300">Step 1 of 4: Credentials</h3>
                     <div class="flex justify-between items-center">
                         <h2 class="text-base font-semibold text-white flex items-center gap-2">
                             <span>📱 Meta WhatsApp Cloud API Credentials</span>
                             <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">Official Graph API v21.0</span>
+                            <span id="wa-mock-badge" class="hidden text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/30">Mock mode: messages are not sent</span>
                         </h2>
                     </div>
                     <p class="text-xs text-slate-400">Configure your official Meta Business Cloud API credentials. Leave tokens set to mock mode for offline simulation.</p>
@@ -1056,8 +1146,15 @@ def render_dashboard_html() -> str:
 
                         <div>
                             <label class="block text-xs font-medium text-slate-300 mb-1">Permanent System User Access Token *</label>
-                            <input type="password" id="wa-cfg-token" required class="input-text font-mono text-xs" placeholder="EAABwzLIXnzYBO...">
+                            <input type="password" id="wa-cfg-token" autocomplete="new-password" class="input-text font-mono text-xs" placeholder="Paste the access token from Meta">
                             <p class="text-[11px] text-slate-500 mt-1">Permanent Meta Business Token with <code>whatsapp_business_messaging</code> permissions.</p>
+                        </div>
+
+                        <div>
+                            <label for="wa-cfg-app-secret" class="block text-xs font-medium text-slate-300 mb-1">Meta App Secret</label>
+                            <input type="password" id="wa-cfg-app-secret" autocomplete="new-password" class="input-text font-mono text-xs" placeholder="Paste the Meta app secret">
+                            <p class="text-[11px] text-slate-500 mt-1">Needed to check that incoming messages really come from Meta. Without it they are rejected.</p>
+                            <p id="wa-cfg-status" class="text-[11px] text-slate-300 mt-1" role="status"></p>
                         </div>
 
                         <div>
@@ -1067,16 +1164,18 @@ def render_dashboard_html() -> str:
 
                         <div class="pt-2">
                             <button type="submit" class="btn-primary text-xs py-2 px-4 shadow-indigo-500/25">
-                                Save WhatsApp Credentials
+                                Save and continue
                             </button>
+                            <button type="button" onclick="waGoStep(2)" id="wa-skip-1" class="hidden btn-secondary text-xs py-2 px-4 ml-2">Already saved: next</button>
                         </div>
                     </form>
                 </div>
 
                 <!-- Webhook Callback URL & Verify Token + Live Simulator -->
-                <div class="space-y-6">
-                    <!-- Webhook Callback Box -->
-                    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+                <div class="contents">
+                    <!-- Step 2: Webhook Callback Box -->
+                    <div class="wa-step hidden bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4" data-step="2">
+                        <h3 class="text-sm font-semibold text-indigo-300">Step 2 of 4: Connect the webhook in Meta</h3>
                         <h2 class="text-base font-semibold text-white flex items-center gap-2">
                             <span>⚡ Meta Webhook Verification Handshake</span>
                         </h2>
@@ -1086,7 +1185,7 @@ def render_dashboard_html() -> str:
                             <div>
                                 <label class="block font-medium text-slate-400 mb-1">Callback URL (GET / POST)</label>
                                 <div class="flex gap-2">
-                                    <input type="text" id="wa-webhook-url-display" readonly value="https://gitpulse-cms.vercel.app/api/webhook/whatsapp" class="input-text font-mono text-xs bg-slate-950 flex-1">
+                                    <input type="text" id="wa-webhook-url-display" readonly value="" class="input-text font-mono text-xs bg-slate-950 flex-1">
                                     <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('wa-webhook-url-display').value); showToast('Webhook URL copied to clipboard!', 'success')" class="btn-secondary text-xs">Copy</button>
                                 </div>
                             </div>
@@ -1094,15 +1193,53 @@ def render_dashboard_html() -> str:
                             <div>
                                 <label class="block font-medium text-slate-400 mb-1">Verify Token</label>
                                 <div class="flex gap-2">
-                                    <input type="text" id="wa-cfg-verify-token" value="gitpulse_webhook_verify" class="input-text font-mono text-xs bg-slate-950 flex-1">
+                                    <input type="text" id="wa-cfg-verify-token" readonly placeholder="Created by the server and shown once when you first save" class="input-text font-mono text-xs bg-slate-950 flex-1">
+                                    <button type="button" onclick="rotateVerifyToken()" class="btn-secondary text-xs">New token</button>
                                     <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('wa-cfg-verify-token').value); showToast('Verify token copied!', 'success')" class="btn-secondary text-xs">Copy</button>
                                 </div>
                             </div>
                         </div>
+                        <ol class="text-xs text-slate-300 list-decimal pl-5 space-y-1">
+                            <li>In Meta, open your app, then WhatsApp, then Configuration, then Edit webhook.</li>
+                            <li>Paste the Callback URL and the Verify token above, then Verify and save.</li>
+                            <li>Subscribe to the <code>messages</code> field.</li>
+                            <li>Send a WhatsApp message to your business number. This page turns green when Meta reaches us.</li>
+                        </ol>
+                        <p id="wa-verify-once" class="hidden text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded p-2">This verify token is shown only now. Copy it before you leave this page.</p>
+                        <p id="wa-hook-state" class="text-xs text-slate-300" role="status"></p>
+                        <div class="flex gap-2 flex-wrap">
+                            <button type="button" onclick="waGoStep(1)" class="btn-secondary text-xs">Back</button>
+                            <button type="button" onclick="waGoStep(3)" class="btn-primary text-xs">Next: test</button>
+                        </div>
+                    </div>
+
+                    <!-- Step 3: test -->
+                    <div class="wa-step hidden bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4" data-step="3">
+                        <h3 class="text-sm font-semibold text-indigo-300">Step 3 of 4: Test the connection</h3>
+                        <p class="text-xs text-slate-400">This asks Meta to confirm your Phone Number ID and token. It does not send any message.</p>
+                        <div class="flex gap-2 flex-wrap items-center">
+                            <button type="button" id="wa-test-btn" onclick="waRunTest()" class="btn-primary text-xs">Run test</button>
+                            <span id="wa-test-result" class="text-xs" role="status"></span>
+                        </div>
+                        <p id="wa-hook-state-3" class="text-xs text-slate-300" role="status"></p>
+                        <div class="flex gap-2 flex-wrap">
+                            <button type="button" onclick="waGoStep(2)" class="btn-secondary text-xs">Back</button>
+                            <button type="button" onclick="waGoStep(4)" class="btn-primary text-xs">Next: finish</button>
+                        </div>
+                    </div>
+
+                    <!-- Step 4: done -->
+                    <div class="wa-step hidden bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4" data-step="4">
+                        <h3 class="text-sm font-semibold text-indigo-300">Step 4 of 4: Done</h3>
+                        <div id="wa-done-box" class="rounded-lg border p-4 text-sm" role="status"></div>
+                        <div class="flex gap-2 flex-wrap">
+                            <button type="button" onclick="waGoStep(3)" class="btn-secondary text-xs">Back</button>
+                            <button type="button" onclick="refreshWaStatus()" class="btn-secondary text-xs">Check again</button>
+                        </div>
                     </div>
 
                     <!-- Interactive Live WhatsApp Message Simulator -->
-                    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+                    <div id="wa-sim-card" data-requires="wa.config" class="hidden bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
                         <div class="flex justify-between items-center">
                             <h2 class="text-base font-semibold text-white flex items-center gap-2">
                                 <span>🧪 Inbound WhatsApp Simulator</span>
@@ -1115,18 +1252,18 @@ def render_dashboard_html() -> str:
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
                                     <label class="block text-xs font-medium text-slate-400 mb-1">Sender Name</label>
-                                    <input type="text" id="wa-sim-name" value="Michael Chang" class="input-text text-xs">
+                                    <input type="text" id="wa-sim-name" placeholder="Contact name" class="input-text text-xs">
                                 </div>
                                 <div>
                                     <label class="block text-xs font-medium text-slate-400 mb-1">Sender Phone</label>
-                                    <input type="text" id="wa-sim-phone" value="+12065554321" class="input-text text-xs font-mono">
+                                    <input type="text" id="wa-sim-phone" placeholder="+countrycode number" class="input-text text-xs font-mono">
                                 </div>
                             </div>
 
                             <div>
                                 <label class="block text-xs font-medium text-slate-400 mb-1">Incoming Message Body</label>
                                 <div class="flex gap-2">
-                                    <input type="text" id="wa-sim-message" value="Hi! Can you share your pricing and schedule a demo?" class="input-text text-xs flex-1">
+                                    <input type="text" id="wa-sim-message" placeholder="Message text" class="input-text text-xs flex-1">
                                     <button type="submit" class="btn-primary text-xs py-2 px-3 whitespace-nowrap shadow-cyan-500/20">
                                         Test Message
                                     </button>
@@ -1194,11 +1331,11 @@ def render_dashboard_html() -> str:
 </div>
 
     <!-- Post Preview & Markdown Modal -->
-    <div id="modal-post" class="modal-backdrop hidden">
+    <div id="modal-post" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-post-title">
         <div class="modal-dialog max-w-4xl">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
                 <h3 class="text-lg font-bold text-white" id="modal-post-title">Article Preview</h3>
-                <button onclick="closePostModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <button type="button" aria-label="Close" onclick="closePostModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -1221,11 +1358,11 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Split Screen Editorial Staging Editor Modal -->
-    <div id="modal-staging-editor" class="modal-backdrop hidden">
+    <div id="modal-staging-editor" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-staging-editor-heading">
         <div class="modal-dialog max-w-6xl">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
                 <div class="flex items-center gap-3">
-                    <h3 class="text-lg font-bold text-white">Editorial Staging & Split Markdown Editor</h3>
+                    <h3 id="modal-staging-editor-heading" class="text-lg font-bold text-white">Editorial Staging & Split Markdown Editor</h3>
                     <span id="editor-seo-badge" class="text-xs px-2.5 py-0.5 rounded-full font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">SEO: 100/100</span>
                 </div>
                 <button onclick="closeStagingEditor()" class="text-slate-400 hover:text-white">&times;</button>
@@ -1273,18 +1410,18 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Interactive 3-Step Website Connection Wizard (Built for Non-Technical Users) -->
-    <div id="modal-add-project" class="modal-backdrop hidden">
+    <div id="modal-add-project" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-project-heading">
         <div class="modal-dialog max-w-2xl">
             <!-- Header -->
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
                 <div>
-                    <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                    <h3 id="modal-add-project-heading" class="text-lg font-bold text-white flex items-center gap-2">
                         <span>⚡ Connect Your Website</span>
                         <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-normal">3-Step Easy Setup</span>
                     </h3>
                     <p class="text-xs text-slate-400 mt-0.5">Automate daily SEO blog publishing directly into any GitHub project.</p>
                 </div>
-                <button onclick="closeAddProjectModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+                <button type="button" aria-label="Close" onclick="closeAddProjectModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
             </div>
 
             <!-- Visual Step Indicator -->
@@ -1506,11 +1643,11 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Modal: Add New Business / Client -->
-    <div id="modal-add-client" class="modal-backdrop hidden">
+    <div id="modal-add-client" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-client-heading">
         <div class="modal-dialog max-w-md">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-base font-bold text-white">Add New Client or Business</h3>
-                <button onclick="closeAddClientModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <h3 id="modal-add-client-heading" class="text-base font-bold text-white">New client account</h3>
+                <button type="button" aria-label="Close" onclick="closeAddClientModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <form onsubmit="submitAddClient(event)" class="space-y-4">
                 <div>
@@ -1518,25 +1655,28 @@ def render_dashboard_html() -> str:
                     <input type="text" id="new-client-name" required class="input-text" placeholder="e.g. Acme Digital or Fintech Labs">
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-slate-300 mb-1">Contact Email (Optional)</label>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Owner username</label>
+                    <input type="text" id="new-client-owner" class="input-text mb-3" placeholder="Existing or new login for the account owner">
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Owner email (optional)</label>
                     <input type="email" id="new-client-email" class="input-text" placeholder="team@business.com">
                 </div>
                 <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
                     <button type="button" onclick="closeAddClientModal()" class="btn-secondary text-xs">Cancel</button>
-                    <button type="submit" class="btn-primary text-xs">Save Client</button>
+                    <button type="submit" class="btn-primary text-xs">Create account</button>
                 </div>
+            <p id="new-client-result" class="text-xs text-slate-300 mt-3" role="status" aria-live="polite"></p>
             </form>
         </div>
     </div>
 
     <!-- Modal: Add WhatsApp Contact / Lead -->
-    <div id="modal-add-contact" class="modal-backdrop hidden">
+    <div id="modal-add-contact" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-contact-heading">
         <div class="modal-dialog max-w-md">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <h3 id="modal-add-contact-heading" class="text-base font-bold text-white flex items-center gap-2">
                     <span>👥 Add Contact / Lead</span>
                 </h3>
-                <button onclick="closeAddContactModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <button type="button" aria-label="Close" onclick="closeAddContactModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <form onsubmit="submitAddContact(event)" class="space-y-4">
                 <div>
@@ -1568,13 +1708,13 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Modal: Add Sales Pipeline Deal -->
-    <div id="modal-add-deal" class="modal-backdrop hidden">
+    <div id="modal-add-deal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-deal-heading">
         <div class="modal-dialog max-w-md">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <h3 id="modal-add-deal-heading" class="text-base font-bold text-white flex items-center gap-2">
                     <span>💰 Add Sales Pipeline Deal</span>
                 </h3>
-                <button onclick="closeAddDealModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <button type="button" aria-label="Close" onclick="closeAddDealModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <form onsubmit="submitAddDeal(event)" class="space-y-4">
                 <input type="hidden" id="new-deal-contact-id">
@@ -1584,8 +1724,13 @@ def render_dashboard_html() -> str:
                 </div>
                 <div class="grid grid-cols-2 gap-3">
                     <div>
-                        <label class="block text-xs font-medium text-slate-300 mb-1">Deal Value ($) *</label>
-                        <input type="number" step="100" id="new-deal-value" required class="input-text font-mono" placeholder="4200">
+                        <label for="new-deal-value" class="block text-xs font-medium text-slate-300 mb-1">Deal value *</label>
+                        <div class="flex gap-2">
+                            <select id="new-deal-currency" aria-label="Currency" class="input-text text-xs w-24">
+                                <option value="INR" selected>INR ₹</option><option value="USD">USD $</option><option value="EUR">EUR €</option><option value="GBP">GBP £</option><option value="AED">AED</option>
+                            </select>
+                            <input type="number" step="1" min="0" id="new-deal-value" required class="input-text font-mono flex-1" placeholder="45000">
+                        </div>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-300 mb-1">Pipeline Stage</label>
@@ -1615,13 +1760,13 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Modal: New Broadcast Campaign -->
-    <div id="modal-add-broadcast" class="modal-backdrop hidden">
+    <div id="modal-add-broadcast" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-broadcast-heading">
         <div class="modal-dialog max-w-lg">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <h3 id="modal-add-broadcast-heading" class="text-base font-bold text-white flex items-center gap-2">
                     <span>📢 New WhatsApp Broadcast Campaign</span>
                 </h3>
-                <button onclick="closeAddBroadcastModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <button type="button" aria-label="Close" onclick="closeAddBroadcastModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <form onsubmit="submitAddBroadcast(event)" class="space-y-4">
                 <div>
@@ -1630,12 +1775,10 @@ def render_dashboard_html() -> str:
                 </div>
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Target Audience Tag</label>
-                    <select id="new-broadcast-tag" class="input-select text-xs">
-                        <option value="all">All Contacts</option>
-                        <option value="VIP">VIP Contacts</option>
-                        <option value="Customer">Current Customers</option>
-                        <option value="Lead">Inbound Leads</option>
+                    <select id="new-broadcast-tag" class="input-select text-xs" onchange="updateBroadcastAudience()">
+                        <option value="all">All contacts</option>
                     </select>
+                    <p id="new-broadcast-count" class="text-[11px] text-slate-400 mt-1" aria-live="polite"></p>
                 </div>
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Message Template *</label>
@@ -1655,18 +1798,18 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Modal: New No-Code Automation Rule -->
-    <div id="modal-add-automation" class="modal-backdrop hidden">
+    <div id="modal-add-automation" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-automation-heading">
         <div class="modal-dialog max-w-lg">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <h3 id="modal-add-automation-heading" class="text-base font-bold text-white flex items-center gap-2">
                     <span>🤖 Create No-Code Automation Rule</span>
                 </h3>
-                <button onclick="closeAddAutomationModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <button type="button" aria-label="Close" onclick="closeAddAutomationModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <form onsubmit="submitAddAutomation(event)" class="space-y-4">
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Rule Name *</label>
-                    <input type="text" id="new-auto-name" required class="input-text" placeholder="e.g. Schedule Demo Auto-Responder">
+                    <input type="text" id="new-auto-name" required class="input-text" placeholder="e.g. Opening hours reply">
                 </div>
                 <div class="grid grid-cols-2 gap-3">
                     <div>
@@ -1679,12 +1822,12 @@ def render_dashboard_html() -> str:
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-300 mb-1">Keywords (Comma-separated)</label>
-                        <input type="text" id="new-auto-keyword" class="input-text text-xs" placeholder="e.g. demo, call, talk, meet">
+                        <input type="text" id="new-auto-keyword" class="input-text text-xs" placeholder="e.g. hours, price, book">
                     </div>
                 </div>
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Outbound Reply Message Template *</label>
-                    <textarea id="new-auto-template" required rows="4" class="input-text text-xs font-mono resize-none" placeholder="Hey {{name}}! 📅 We would love to show you a demo. Book a time here: https://cal.com/gitpulse or reply with your preferred day!"></textarea>
+                    <textarea id="new-auto-template" required rows="4" class="input-text text-xs font-mono resize-none" placeholder="Hi {{name}}! Thanks for your message. We will get back to you shortly."></textarea>
                     <p class="text-[11px] text-slate-500 mt-1">Variables: <code>{{name}}</code>, <code>{{phone}}</code>, <code>{{title}}</code>, <code>{{url}}</code></p>
                 </div>
                 <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
@@ -1705,6 +1848,32 @@ def render_dashboard_html() -> str:
 """ + _get_embedded_js() + """
         }
     </script>
+
+    <div id="overlay-no-access" role="dialog" aria-modal="true" aria-label="Account access" class="hidden fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6" role="alertdialog" aria-labelledby="noaccess-h">
+        <div class="max-w-md text-center space-y-3">
+            <h1 id="noaccess-h" class="text-xl font-bold text-white">No access to a client account</h1>
+            <p id="noaccess-text" class="text-sm text-slate-400">Your access was removed or has not been set up yet. Ask an account owner to add you.</p>
+            <div id="noaccess-actions" class="flex justify-center gap-2">
+                <button type="button" class="btn-secondary text-xs py-2 px-3" onclick="handleLogout()">Sign out</button>
+            </div>
+        </div>
+    </div>
+    <div id="overlay-change-password" role="dialog" aria-modal="true" aria-labelledby="chpw-h" class="hidden fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6">
+        <form onsubmit="submitFirstLoginPassword(event)" class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-3">
+            <h1 id="chpw-h" class="text-lg font-bold text-white">Choose a new password</h1>
+            <p class="text-xs text-slate-400">You signed in with a temporary password. Set your own to continue.</p>
+            <label for="chpw-current" class="block text-xs text-slate-300">Temporary password</label>
+            <input type="password" id="chpw-current" required autocomplete="current-password" class="input-text text-xs">
+            <label for="chpw-new" class="block text-xs text-slate-300">New password (8+ characters)</label>
+            <input type="password" id="chpw-new" required minlength="8" autocomplete="new-password" class="input-text text-xs" aria-describedby="chpw-rule">
+            <p id="chpw-rule" class="text-[11px] text-slate-500">At least 8 characters. Use a password you do not use elsewhere.</p>
+            <label for="chpw-confirm" class="block text-xs text-slate-300">Repeat the new password</label>
+            <input type="password" id="chpw-confirm" required minlength="8" autocomplete="new-password" class="input-text text-xs">
+            <label class="flex items-center gap-2 text-xs text-slate-400"><input type="checkbox" onchange="['chpw-current','chpw-new','chpw-confirm'].forEach(i=>document.getElementById(i).type=this.checked?'text':'password')"> Show passwords</label>
+            <p id="chpw-msg" class="text-xs text-red-400" role="alert"></p>
+            <button type="submit" class="btn-primary text-xs py-2 px-3 w-full">Save and continue</button>
+        </form>
+    </div>
 </body>
 </html>
 """

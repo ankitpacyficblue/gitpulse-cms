@@ -10,8 +10,8 @@ import hashlib
 import hmac
 import base64
 import os
-from datetime import datetime
-from typing import Optional, Dict, Any, Tuple
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List, Tuple
 from database import get_connection, log_event
 
 # Security Parameters
@@ -48,9 +48,13 @@ def verify_password(password: str, salt_hex: str, expected_hash_hex: str) -> boo
 
 # --- Malicious Login & Brute Force Prevention ---
 
+MAX_FAILED_PER_USERNAME = 25  # across all IPs, so a spread-out attack on one account still stops
+
 def check_login_lockout(ip_address: str, username: str) -> Tuple[bool, int]:
     """
-    Check if the IP or username is currently locked out due to repeated failures.
+    Locked out when this username+IP pair has MAX_FAILED_ATTEMPTS recent failures, or the
+    username has MAX_FAILED_PER_USERNAME failures from any IPs. Failures for other usernames
+    from the same IP never count, so unknown names do not lock out real users.
     Returns (is_locked_out, remaining_lockout_seconds).
     """
     now = time.time()
@@ -58,23 +62,18 @@ def check_login_lockout(ip_address: str, username: str) -> Tuple[bool, int]:
 
     with get_connection() as conn:
         cursor = conn.cursor()
-        # Find failed attempts within the lockout window
         cursor.execute("""
-            SELECT attempt_time FROM login_attempts
-            WHERE (ip_address = ? OR username = ?)
-              AND attempt_time > ?
-              AND success = 0
+            SELECT ip_address, attempt_time FROM login_attempts
+            WHERE username = ? AND attempt_time > ? AND success = 0
             ORDER BY attempt_time DESC
-        """, (ip_address, username, cutoff))
+        """, (username, cutoff))
         rows = cursor.fetchall()
 
-    if len(rows) >= MAX_FAILED_ATTEMPTS:
-        # User is locked out. Calculate remaining time based on latest failed attempt
-        latest_attempt_time = rows[0]["attempt_time"]
-        elapsed = now - latest_attempt_time
-        remaining = max(1, int(LOCKOUT_DURATION_SEC - elapsed))
+    pair = [r for r in rows if r["ip_address"] == ip_address]
+    hit = pair if len(pair) >= MAX_FAILED_ATTEMPTS else (rows if len(rows) >= MAX_FAILED_PER_USERNAME else None)
+    if hit:
+        remaining = max(1, int(LOCKOUT_DURATION_SEC - (now - hit[0]["attempt_time"])))
         return True, remaining
-
     return False, 0
 
 def record_login_attempt(ip_address: str, username: str, success: bool):
@@ -91,7 +90,7 @@ def record_login_attempt(ip_address: str, username: str, success: bool):
         if success:
             cursor.execute("""
                 DELETE FROM login_attempts
-                WHERE (ip_address = ? OR username = ?) AND success = 0
+                WHERE ip_address = ? AND username = ? AND success = 0
             """, (ip_address, username))
 
         # Cleanup old attempts older than 24 hours to keep table small
@@ -110,171 +109,201 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, username, role, created_at FROM users WHERE id = ?", (user_id,))
+        cursor.execute("""SELECT id, username, COALESCE(email, '') AS email, COALESCE(is_active, 1) AS is_active,
+                                 COALESCE(is_platform_admin, 0) AS is_platform_admin, created_at,
+                                 COALESCE(must_change_password, 0) AS must_change_password,
+                                 COALESCE(sessions_valid_after_ms, 0) AS sessions_valid_after_ms
+                          FROM users WHERE id = ?""", (user_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
-def create_user(username: str, password: str, role: str = "admin") -> int:
+def list_users_with_account_counts() -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT u.id, u.username, COALESCE(u.email, '') AS email, COALESCE(u.is_active, 1) AS is_active,
+                   COALESCE(u.is_platform_admin, 0) AS is_platform_admin, u.created_at,
+                   (SELECT COUNT(*) FROM memberships m JOIN accounts a ON a.id = m.account_id
+                    WHERE m.user_id = u.id AND a.status = 'active') AS account_count
+            FROM users u ORDER BY u.username""").fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_user(user_id: int) -> bool:
+    """Delete a login that belongs to no account. Callers must check memberships first.
+    Audit rows keep their text; sessions go with the user (FK cascade, explicit for safety)."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM memberships WHERE user_id = ?", (user_id,))
+        cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+TEMP_PASSWORD_HOURS = 72
+
+
+def _temp_expiry() -> str:
+    return (datetime.utcnow() + timedelta(hours=TEMP_PASSWORD_HOURS)).isoformat()
+
+
+def temp_password_expired(user: Dict[str, Any]) -> bool:
+    exp = user.get("temp_password_expires") or ""
+    return bool(user.get("must_change_password") and exp and exp < datetime.utcnow().isoformat())
+
+
+def create_user(username: str, password: str, email: str = "", is_platform_admin: bool = False,
+                temporary: bool = False) -> int:
+    """Create a login. Roles live on account memberships, not on the user."""
+    username = username.strip().lower()
+    if not username or len(password) < 8:
+        raise ValueError("A username and a password of at least 8 characters are required.")
     salt_hex, hash_hex = hash_password(password)
     now = datetime.utcnow().isoformat()
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO users (username, password_hash, salt, role, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, (username.strip().lower(), hash_hex, salt_hex, role, now))
+            INSERT INTO users (username, password_hash, salt, role, email, is_active, is_platform_admin, created_at,
+                               must_change_password, temp_password_expires)
+            VALUES (?, ?, ?, 'member', ?, 1, ?, ?, ?, ?)
+        """, (username, hash_hex, salt_hex, email.strip().lower(), 1 if is_platform_admin else 0, now,
+              1 if temporary else 0, _temp_expiry() if temporary else ""))
         conn.commit()
         return cursor.lastrowid
 
-def update_user_password(user_id: int, new_password: str) -> bool:
+def set_user_active(user_id: int, active: bool) -> bool:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET is_active = ? WHERE id = ?", (1 if active else 0, user_id))
+        if not active:
+            cursor.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            cursor.execute("UPDATE users SET sessions_valid_after_ms = ? WHERE id = ?", (int(time.time() * 1000), user_id))
+        conn.commit()
+        return cursor.rowcount > 0
+
+def update_user_password(user_id: int, new_password: str, temporary: bool = False) -> bool:
+    """temporary=True (admin reset): user must change it at next login, and it expires in 72 h."""
     salt_hex, hash_hex = hash_password(new_password)
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            UPDATE users SET password_hash = ?, salt = ? WHERE id = ?
-        """, (hash_hex, salt_hex, user_id))
-        conn.commit()
+            UPDATE users SET password_hash = ?, salt = ?, must_change_password = ?, temp_password_expires = ?,
+                             sessions_valid_after_ms = ?
+            WHERE id = ?
+        """, (hash_hex, salt_hex, 1 if temporary else 0, _temp_expiry() if temporary else "",
+              int(time.time() * 1000), user_id))
+        updated = cursor.rowcount > 0
         # Invalidate all existing sessions for this user on password change
         cursor.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         conn.commit()
-        return cursor.rowcount > 0
+        return updated
 
-def init_default_admin() -> Dict[str, str]:
-    """Ensure an administrator account exists upon initial startup."""
-    admin = get_user_by_username("admin")
-    if not admin:
-        default_pass = "GitPulse@Admin2026!"
-        create_user("admin", default_pass, role="admin")
-        log_event("Created initial default admin account.", "WARN")
-        return {"username": "admin", "password": default_pass, "is_new": True}
-    return {"username": "admin", "is_new": False}
+def bootstrap_platform_admin_from_env() -> Optional[int]:
+    """For hosts with no shell (Vercel): create the first platform admin from environment variables
+    BOOTSTRAP_ADMIN_USERNAME / BOOTSTRAP_ADMIN_PASSWORD (min 12 chars). Does nothing if either is
+    missing or the user already exists. There is no built-in default login."""
+    username = (os.environ.get("BOOTSTRAP_ADMIN_USERNAME") or "").strip().lower()
+    password = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD") or ""
+    if not username or len(password) < 12 or get_user_by_username(username):
+        return None
+    user_id = create_user(username, password, is_platform_admin=True)
+    log_event(f"Platform admin '{username}' created from environment.", "INFO")
+    return user_id
+
+def generate_temporary_password() -> str:
+    return secrets.token_urlsafe(12)
 
 # --- Session Management ---
 
 def get_auth_secret_key() -> str:
-    """Returns persistent secret key for signing tokens."""
-    key = os.environ.get("SESSION_SECRET") or os.environ.get("SUPABASE_KEY")
+    """Signing key for session tokens. SESSION_SECRET is required on serverless hosts.
+    Local runs without it generate a random key once and keep it in the settings table."""
+    key = os.environ.get("SESSION_SECRET")
     if key:
         return key
-    return "gitpulse_cms_stateless_master_auth_secret_key_2026_v1"
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        raise RuntimeError("SESSION_SECRET must be set in the environment.")
+    from database import get_setting, set_setting
+    stored = get_setting("session_secret", "")
+    if not stored:
+        stored = secrets.token_hex(32)
+        set_setting("session_secret", stored)
+    return stored
+
+def _sign(body: str) -> str:
+    return hmac.new(get_auth_secret_key().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
 
 def create_session(user_id: int, ip_address: str = "", user_agent: str = "") -> str:
-    """Generate an HMAC-signed stateless session token with 48h validity and DB audit trail."""
-    user = get_user_by_id(user_id)
-    username = user["username"] if user else "admin"
-    role = user["role"] if user else "admin"
-    
+    """HMAC-signed token (user id, expiry, nonce). Role and account access are NOT in the token:
+    they are read from the database on every request, so changes apply immediately."""
     expires_at = int(time.time()) + SESSION_DURATION_SEC
-    nonce = secrets.token_hex(8)
-    body = f"{user_id}:{expires_at}:{role}:{username}:{nonce}"
-    sig = hmac.new(get_auth_secret_key().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
-    raw = f"{body}:{sig}"
-    token = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8")
-
-    now = datetime.utcnow().isoformat()
+    body = f"{user_id}:{expires_at}:{secrets.token_hex(8)}:{int(time.time() * 1000)}"
+    token = base64.urlsafe_b64encode(f"{body}:{_sign(body)}".encode("utf-8")).decode("utf-8")
     try:
         with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
+            conn.execute("""
                 INSERT INTO sessions (token, user_id, expires_at, ip_address, user_agent, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (token, user_id, float(expires_at), ip_address, user_agent, now))
+            """, (token, user_id, float(expires_at), ip_address, user_agent, datetime.utcnow().isoformat()))
             conn.commit()
     except Exception:
         pass
-
     return token
 
+class AuthUnavailable(Exception):
+    """The database could not be reached while checking a session. Callers answer 503, never 401."""
+
+
 def validate_session(token: str) -> Optional[Dict[str, Any]]:
-    """
-    Validate a session token.
-    Supports both HMAC-SHA256 signed stateless verification (for serverless instances)
-    and SQLite database session store with revocation checks.
-    """
+    """Return the signed-in user, or None for a bad, expired, revoked token or an inactive user."""
     if not token:
         return None
-
-    now = time.time()
-
-    # 1. Cryptographic verification of HMAC-signed token (Works across any serverless instance)
     try:
         raw = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
-        parts = raw.split(":")
-        if len(parts) == 6:
-            user_id_str, expires_at_str, role, username, nonce, sig = parts
-            body = f"{user_id_str}:{expires_at_str}:{role}:{username}:{nonce}"
-            expected_sig = hmac.new(get_auth_secret_key().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
-            if hmac.compare_digest(expected_sig, sig):
-                expires_at = int(expires_at_str)
-                if expires_at < now:
-                    return None  # Token expired
-
-                # Check if explicitly revoked in sessions table
-                try:
-                    with get_connection() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT id FROM sessions WHERE token = ? AND expires_at < 0", (token,))
-                        if cursor.fetchone():
-                            return None
-                except Exception:
-                    pass
-
-                return {
-                    "id": int(user_id_str),
-                    "username": username,
-                    "role": role,
-                    "token": token
-                }
+        user_id_str, expires_at_str, nonce, issued_ms, sig = raw.split(":")
+        if not hmac.compare_digest(_sign(f"{user_id_str}:{expires_at_str}:{nonce}:{issued_ms}"), sig):
+            return None
+        if int(expires_at_str) < time.time():
+            return None
+        user_id = int(user_id_str)
+        issued_ms_int = int(issued_ms)
     except Exception:
-        pass
-
-    # 2. Fallback to direct DB query (for legacy tokens or local SQLite)
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT s.token, s.expires_at, u.id, u.username, u.role
-                FROM sessions s
-                JOIN users u ON s.user_id = u.id
-                WHERE s.token = ?
-            """, (token,))
-            row = cursor.fetchone()
-
-            if not row:
-                return None
-
-            if row["expires_at"] < now:
-                cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
-                conn.commit()
-                return None
-
-            return {
-                "id": row["id"],
-                "username": row["username"],
-                "role": row["role"],
-                "token": row["token"]
-            }
-    except Exception:
+        return None            # malformed token
+    last_error = None
+    for attempt in (1, 2):
+        try:
+            with get_connection() as conn:
+                if conn.execute("SELECT 1 FROM sessions WHERE token = ? AND expires_at < 0", (token,)).fetchone():
+                    return None
+            user = get_user_by_id(user_id)
+            break
+        except Exception as e:  # noqa: BLE001  database trouble: retry once, then report it as 503
+            last_error = e
+            import dbcompat
+            dbcompat.close_cached()
+    else:
+        raise AuthUnavailable(type(last_error).__name__)
+    if not user or not user["is_active"]:
         return None
+    if issued_ms_int <= int(user["sessions_valid_after_ms"]):
+        return None      # revoked by a password change/reset or deactivation
+    return {"id": user["id"], "username": user["username"], "email": user["email"],
+            "is_platform_admin": bool(user["is_platform_admin"]),
+            "must_change_password": bool(user["must_change_password"]), "token": token}
 
 def revoke_session(token: str):
-    """Revoke a session (logout)."""
+    """Revoke a session (logout) by recording a tombstone for the token."""
     if not token:
         return
-    user_id = 1
+    user_id = None
     try:
         raw = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
-        parts = raw.split(":")
-        if len(parts) >= 1 and parts[0].isdigit():
-            user_id = int(parts[0])
+        user_id = int(raw.split(":")[0])
     except Exception:
-        pass
-
+        return
     try:
         with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
-            cursor.execute("""
+            conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            conn.execute("""
                 INSERT INTO sessions (token, user_id, expires_at, ip_address, user_agent, created_at)
                 VALUES (?, ?, -1, '', '', ?)
             """, (token, user_id, datetime.utcnow().isoformat()))
@@ -305,11 +334,18 @@ def authenticate_user(username: str, password: str, ip_address: str = "", user_a
         # Generic error message to prevent user enumeration
         return False, None, None, "Invalid username or password."
 
+    if not user.get("is_active", 1):
+        record_login_attempt(ip_address, clean_user, success=False)
+        return False, None, None, "Invalid username or password."
+
     # 3. Verify password
     if not verify_password(password, user["salt"], user["password_hash"]):
         record_login_attempt(ip_address, clean_user, success=False)
         log_event(f"Failed password attempt for '{clean_user}' from {ip_address}.", "WARN")
         return False, None, None, "Invalid username or password."
+    if temp_password_expired(user):
+        record_login_attempt(ip_address, clean_user, success=False)
+        return False, None, None, "This temporary password has expired. Ask an admin for a new one."
 
     # 4. Successful login
     record_login_attempt(ip_address, clean_user, success=True)
@@ -319,5 +355,6 @@ def authenticate_user(username: str, password: str, ip_address: str = "", user_a
     return True, token, {
         "id": user["id"],
         "username": user["username"],
-        "role": user["role"]
+        "is_platform_admin": bool(user.get("is_platform_admin", 0)),
+        "must_change_password": bool(user.get("must_change_password", 0)),
     }, None

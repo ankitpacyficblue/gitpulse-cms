@@ -1,321 +1,248 @@
 """
-GitPulse CMS - WhatsApp Business Cloud API & Automation Client
-Built on the official Meta WhatsApp Cloud API (v21.0) architecture.
-Zero third-party pip dependencies; uses standard library urllib and json.
+GitPulse CMS - WhatsApp Business Cloud API client and automation engine (per account).
+
+A WhatsAppClient belongs to exactly one account: credentials are read from that
+account's encrypted config, and every database read and write carries its
+account_id. Access tokens are never logged, never put in return values and never
+included in error text. Message bodies are not logged.
+
+Mock mode (simulated sends) is only enabled by the WHATSAPP_MOCK=1 environment
+variable for dev and tests. It is never a silent fallback for a missing config.
 """
 
-import os
 import json
-import uuid
+import os
 import re
-from datetime import datetime
-from typing import Dict, Any, List, Optional
-import urllib.request
+import uuid
 import urllib.error
+import urllib.request
+from typing import Any, Dict, List, Optional
 
+import crm_store as cs
 import database as db
 
-class WhatsAppClient:
-    """Official Meta WhatsApp Business Cloud API Client & Auto-Responder Engine."""
 
+def mock_enabled() -> bool:
+    return os.environ.get("WHATSAPP_MOCK") == "1"
+
+
+class WhatsAppClient:
     META_API_VERSION = "v21.0"
     BASE_URL = "https://graph.facebook.com"
 
-    def __init__(self, phone_number_id: Optional[str] = None, access_token: Optional[str] = None):
-        cfg = db.get_whatsapp_config()
-        self.phone_number_id = phone_number_id or cfg.get("phone_number_id") or ""
-        self.access_token = access_token or cfg.get("access_token") or ""
+    def __init__(self, account_id: str):
+        if not account_id:
+            raise ValueError("account_id is required")
+        self.account_id = account_id
+        self._creds: Optional[Dict[str, str]] = None
 
-    def is_mock_mode(self) -> bool:
-        """Determines if the client should run in mock simulation mode."""
-        return not self.access_token or self.access_token.startswith("mock") or self.access_token == "test"
+    def _credentials(self) -> Dict[str, str]:
+        if self._creds is None:
+            self._creds = cs.get_whatsapp_credentials(self.account_id)
+        return self._creds
 
-    def send_text_message(self, to_phone: str, body: str,
-                          phone_number_id: Optional[str] = None,
-                          access_token: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Dispatches an individual outbound text message via Meta Graph API.
-        Simulates delivery in mock mode if live Meta credentials are not configured.
-        """
-        p_id = phone_number_id or self.phone_number_id
-        token = access_token or self.access_token
+    def is_configured(self) -> bool:
+        c = self._credentials()
+        return bool(c["phone_number_id"] and c["access_token"])
+
+    # ------------------------------------------------------------------ send
+
+    def send_text_message(self, to_phone: str, body: str) -> Dict[str, Any]:
         clean_phone = re.sub(r"[^\d+]", "", to_phone)
+        if mock_enabled():
+            return {"success": True, "message_id": f"wamid.mock_{uuid.uuid4().hex[:16]}", "status": "sent",
+                    "mock": True, "recipient": clean_phone}
+        if not self.is_configured():
+            return {"success": False, "status": "failed", "error": "WhatsApp is not configured for this account."}
 
-        if not p_id or not token or self.is_mock_mode():
-            sim_id = f"wamid.mock_{uuid.uuid4().hex[:16]}"
-            return {
-                "success": True,
-                "message_id": sim_id,
-                "status": "sent",
-                "mock": True,
-                "recipient": clean_phone,
-                "body": body
-            }
-
-        url = f"{self.BASE_URL}/{self.META_API_VERSION}/{p_id}/messages"
-        payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": clean_phone,
-            "type": "text",
-            "text": {
-                "preview_url": True,
-                "body": body
-            }
-        }
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-
+        creds = self._credentials()
+        url = f"{self.BASE_URL}/{self.META_API_VERSION}/{creds['phone_number_id']}/messages"
+        payload = {"messaging_product": "whatsapp", "recipient_type": "individual", "to": clean_phone,
+                   "type": "text", "text": {"preview_url": True, "body": body}}
+        headers = {"Authorization": f"Bearer {creds['access_token']}", "Content-Type": "application/json"}
         try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers=headers,
-                method="POST"
-            )
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=15) as resp:
-                resp_data = json.loads(resp.read().decode("utf-8"))
-                msg_id = resp_data.get("messages", [{}])[0].get("id", f"wamid.{uuid.uuid4().hex[:16]}")
-                return {
-                    "success": True,
-                    "message_id": msg_id,
-                    "status": "sent",
-                    "raw": resp_data
-                }
+                data = json.loads(resp.read().decode("utf-8"))
+            msg_id = data.get("messages", [{}])[0].get("id", f"wamid.{uuid.uuid4().hex[:16]}")
+            return {"success": True, "message_id": msg_id, "status": "sent"}
         except urllib.error.HTTPError as e:
-            err_msg = e.read().decode("utf-8")
-            return {
-                "success": False,
-                "error": f"Meta WhatsApp API HTTP {e.code}: {err_msg}",
-                "status": "failed"
-            }
+            detail = ""
+            try:
+                detail = (json.loads(e.read().decode("utf-8")).get("error", {}) or {}).get("message", "")[:200]
+            except Exception:
+                pass
+            return {"success": False, "status": "failed", "error": f"Meta WhatsApp API HTTP {e.code}: {detail}".strip()}
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"WhatsApp dispatch failed: {str(e)}",
-                "status": "failed"
-            }
+            return {"success": False, "status": "failed", "error": f"WhatsApp dispatch failed ({type(e).__name__})."}
 
-    def execute_broadcast(self, broadcast_id: int, client_id: Optional[int] = None) -> Dict[str, Any]:
-        """
-        Executes a targeted broadcast campaign to contacts filtered by audience tags.
-        """
-        broadcast = db.get_broadcast(broadcast_id)
+    def test_connection(self) -> Dict[str, Any]:
+        """Check the saved credentials without sending a message: a read-only lookup of the phone number
+        at Meta. In mock mode nothing leaves this server. The result is stored for the setup wizard."""
+        if mock_enabled():
+            res = {"ok": True, "message": "Mock mode: no request was made to Meta.", "mock": True}
+        elif not self.is_configured():
+            res = {"ok": False, "message": "Save the phone number id and access token first."}
+        else:
+            creds = self._credentials()
+            url = (f"{self.BASE_URL}/{self.META_API_VERSION}/{creds['phone_number_id']}"
+                   "?fields=display_phone_number,verified_name")
+            try:
+                req = urllib.request.Request(url, headers={"Authorization": f"Bearer {creds['access_token']}"})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                res = {"ok": True, "message": "Connected to " + str(data.get("verified_name") or data.get("display_phone_number") or "WhatsApp")}
+            except urllib.error.HTTPError as e:
+                detail = ""
+                try:
+                    detail = (json.loads(e.read().decode("utf-8")).get("error", {}) or {}).get("message", "")[:200]
+                except Exception:
+                    pass
+                res = {"ok": False, "message": f"Meta rejected the credentials (HTTP {e.code}): {detail}".strip()}
+            except Exception as e:
+                res = {"ok": False, "message": f"Could not reach Meta ({type(e).__name__})."}
+        if self.is_configured() or mock_enabled():
+            cs.save_whatsapp_test(self.account_id, res["ok"], res["message"])
+        return res
+
+    def _record_outbound(self, contact: Dict[str, Any], text: str, res: Dict[str, Any]) -> Optional[int]:
+        conv = cs.get_or_create_conversation(self.account_id, contact["id"])
+        if not conv:
+            return None
+        if res.get("success"):
+            status = "mock" if res.get("mock") else "sent"
+        else:
+            status = "failed"
+        return cs.create_message(self.account_id, conv["id"], contact["id"], "outbound", text,
+                                 wa_message_id=res.get("message_id", ""), status=status,
+                                 error_message=res.get("error", ""))
+
+    # ------------------------------------------------------------- broadcasts
+
+    def execute_broadcast(self, broadcast_id: int) -> Dict[str, Any]:
+        broadcast = cs.get_broadcast(self.account_id, broadcast_id)
         if not broadcast:
             return {"success": False, "error": "Broadcast campaign not found"}
+        if not mock_enabled() and not self.is_configured():
+            return {"success": False, "error": "WhatsApp is not configured for this account."}
 
         target_tag = broadcast.get("target_tag", "all")
-        template_body = broadcast.get("template_body", "")
-
-        contacts = db.list_contacts(client_id=client_id)
+        contacts = cs.list_contacts(self.account_id)
         if target_tag != "all":
             contacts = [c for c in contacts if target_tag.lower() in [t.lower() for t in c.get("tags", [])]]
 
-        total = len(contacts)
-        sent = 0
-        delivered = 0
-        read = 0
-
+        sent = delivered = read = 0
         for contact in contacts:
-            # Personalize template
-            msg_text = template_body.replace("{{name}}", contact.get("name", "there"))
-            msg_text = msg_text.replace("{{phone}}", contact.get("phone", ""))
-
-            res = self.send_text_message(contact["phone"], msg_text)
+            text = broadcast["template_body"].replace("{{name}}", contact.get("name", "there"))
+            text = text.replace("{{phone}}", contact.get("phone", ""))
+            res = self.send_text_message(contact["phone"], text)
+            self._record_outbound(contact, text, res)
             if res.get("success"):
-                sent += 1
-                delivered += 1
-                if res.get("mock"):
-                    read += 1
+                sent += 1   # delivered/read stay 0: nothing in mock mode, and real receipts come from Meta callbacks
+        cs.update_broadcast_stats(self.account_id, broadcast_id, total=len(contacts), sent=sent,
+                                  delivered=delivered, read=read, status="completed")
+        return {"success": True, "total_recipients": len(contacts), "sent_count": sent,
+                "delivered_count": delivered, "read_count": read, "mock": mock_enabled()}
 
-                # Record in conversation thread
-                conv = db.get_or_create_conversation(contact["id"], client_id=client_id)
-                db.create_message(
-                    conversation_id=conv["id"],
-                    contact_id=contact["id"],
-                    direction="outbound",
-                    body=msg_text,
-                    wa_message_id=res.get("message_id", ""),
-                    status="read" if res.get("mock") else "sent",
-                    client_id=client_id
-                )
+    # ------------------------------------------------------- inbound webhooks
 
-        db.update_broadcast_stats(broadcast_id, total=total, sent=sent, delivered=delivered, read=read, status="completed")
-        return {
-            "success": True,
-            "total_recipients": total,
-            "sent_count": sent,
-            "delivered_count": delivered,
-            "read_count": read
-        }
-
-    def process_incoming_webhook(self, payload: Dict[str, Any], client_id: Optional[int] = None) -> Dict[str, Any]:
-        """
-        Ingests and processes incoming WhatsApp Meta Webhook payloads.
-        Handles message receipt, status transitions, contact discovery, and auto-responder rules.
-        """
-        processed_messages = []
-        processed_statuses = []
-
-        entries = payload.get("entry", [])
-        for entry in entries:
-            changes = entry.get("changes", [])
-            for change in changes:
+    @staticmethod
+    def process_incoming_webhook(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Route each change to the account that owns its phone_number_id and process it there.
+        Changes for unknown numbers are skipped. The account is never taken from the payload body
+        beyond that lookup key, and never from a request parameter."""
+        messages_n = statuses_n = skipped = 0
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
                 val = change.get("value", {})
-                
-                # 1. Process Message Status Updates (sent, delivered, read)
-                statuses = val.get("statuses", [])
-                for st in statuses:
-                    wa_id = st.get("id")
-                    status_name = st.get("status")
-                    if wa_id and status_name:
-                        db.update_message_status(wa_id, status_name)
-                        processed_statuses.append({"id": wa_id, "status": status_name})
+                pn_id = (val.get("metadata") or {}).get("phone_number_id", "")
+                account_id = cs.find_account_by_phone_number_id(pn_id)
+                if not account_id:
+                    skipped += 1
+                    continue
+                cs.touch_whatsapp_webhook(account_id)
+                client = WhatsAppClient(account_id)
+                m, s = client._process_change(val)
+                messages_n += m
+                statuses_n += s
+        return {"success": True, "processed_messages": messages_n, "processed_statuses": statuses_n,
+                "skipped_unknown_number": skipped}
 
-                # 2. Process Inbound Messages
-                messages = val.get("messages", [])
-                contacts_meta = {c.get("wa_id"): c.get("profile", {}).get("name") for c in val.get("contacts", [])}
+    def _process_change(self, val: Dict[str, Any]):
+        processed_messages = processed_statuses = 0
+        for st in val.get("statuses", []):
+            wa_id, status_name = st.get("id"), st.get("status")
+            if wa_id and status_name and cs.update_message_status(self.account_id, wa_id, status_name):
+                processed_statuses += 1
 
-                for msg in messages:
-                    sender_phone = msg.get("from", "")
-                    sender_name = contacts_meta.get(sender_phone) or f"Lead {sender_phone[-4:]}"
-                    msg_id = msg.get("id", "")
-                    msg_type = msg.get("type", "text")
-                    
-                    if msg_type == "text":
-                        body = msg.get("text", {}).get("body", "")
-                    else:
-                        body = f"[{msg_type.capitalize()} message received]"
+        names = {c.get("wa_id"): (c.get("profile") or {}).get("name") for c in val.get("contacts", [])}
+        for msg in val.get("messages", []):
+            sender = msg.get("from", "")
+            if not sender:
+                continue
+            msg_type = msg.get("type", "text")
+            body = (msg.get("text") or {}).get("body", "") if msg_type == "text" else f"[{msg_type.capitalize()} message received]"
 
-                    # Check or create contact
-                    contact = db.get_contact_by_phone(sender_phone, client_id=client_id)
-                    is_new_contact = False
-                    if not contact:
-                        c_id = db.create_contact(
-                            name=sender_name,
-                            phone="+" + sender_phone.lstrip("+"),
-                            tags=["Lead"],
-                            notes="Automatically discovered via inbound WhatsApp message",
-                            client_id=client_id
-                        )
-                        contact = db.get_contact(c_id)
-                        is_new_contact = True
+            contact = cs.get_contact_by_phone(self.account_id, sender)
+            is_new = False
+            if not contact:
+                try:
+                    cid = cs.create_contact(self.account_id, names.get(sender) or f"Lead {sender[-4:]}",
+                                            "+" + sender.lstrip("+"), tags=["Lead"],
+                                            notes="Automatically discovered via inbound WhatsApp message")
+                except ValueError:
+                    continue
+                contact, is_new = cs.get_contact(self.account_id, cid), True
+            conv = cs.get_or_create_conversation(self.account_id, contact["id"])
+            cs.create_message(self.account_id, conv["id"], contact["id"], "inbound", body, message_type=msg_type,
+                              wa_message_id=msg.get("id", ""), status="delivered")
+            processed_messages += 1
+            self._evaluate_automations(contact, body, is_new)
+        return processed_messages, processed_statuses
 
-                    # Get or create conversation thread
-                    conv = db.get_or_create_conversation(contact["id"], client_id=client_id)
+    # ------------------------------------------------------------ automations
 
-                    # Insert inbound message
-                    db_msg_id = db.create_message(
-                        conversation_id=conv["id"],
-                        contact_id=contact["id"],
-                        direction="inbound",
-                        body=body,
-                        message_type=msg_type,
-                        wa_message_id=msg_id,
-                        status="delivered",
-                        client_id=client_id
-                    )
-
-                    processed_messages.append({
-                        "message_id": db_msg_id,
-                        "contact": contact["name"],
-                        "body": body
-                    })
-
-                    # Run No-Code Automation Rules
-                    self._evaluate_automations(contact, conv, body, is_new_contact, client_id=client_id)
-
-        return {
-            "success": True,
-            "processed_messages": len(processed_messages),
-            "processed_statuses": len(processed_statuses)
-        }
-
-    def _evaluate_automations(self, contact: Dict[str, Any], conv: Dict[str, Any],
-                              message_body: str, is_new_contact: bool, client_id: Optional[int] = None):
-        """Evaluates active automation rules and triggers automated replies."""
-        automations = db.list_automations(client_id=client_id)
+    def _evaluate_automations(self, contact: Dict[str, Any], message_body: str, is_new_contact: bool) -> None:
         lower_body = message_body.lower()
-
-        for auto in automations:
+        for auto in cs.list_automations(self.account_id):
             if not auto.get("is_active"):
                 continue
-
             trigger = auto.get("trigger_type")
             triggered = False
-
-            # Welcome Trigger
             if trigger == "welcome" and is_new_contact:
                 triggered = True
-
-            # Keyword Trigger
             elif trigger == "keyword":
-                keywords = [k.strip().lower() for k in (auto.get("trigger_keyword") or "").split(",") if k.strip()]
-                for kw in keywords:
-                    if kw in lower_body:
-                        triggered = True
-                        break
+                kws = [k.strip().lower() for k in (auto.get("trigger_keyword") or "").split(",") if k.strip()]
+                triggered = any(k in lower_body for k in kws)
+            if not triggered:
+                continue
+            text = auto.get("message_template", "").replace("{{name}}", contact.get("name", "there"))
+            text = text.replace("{{phone}}", contact.get("phone", ""))
+            res = self.send_text_message(contact["phone"], text)
+            self._record_outbound(contact, text, res)
+            cs.increment_automation_execution(self.account_id, auto["id"])
+            db.log_event(f"Triggered WhatsApp automation '{auto['name']}'", "INFO", account_id=self.account_id)
 
-            if triggered:
-                reply_template = auto.get("message_template", "")
-                reply_text = reply_template.replace("{{name}}", contact.get("name", "there"))
-                reply_text = reply_text.replace("{{phone}}", contact.get("phone", ""))
-
-                # Send outbound reply
-                res = self.send_text_message(contact["phone"], reply_text)
-                db.create_message(
-                    conversation_id=conv["id"],
-                    contact_id=contact["id"],
-                    direction="outbound",
-                    body=reply_text,
-                    wa_message_id=res.get("message_id", ""),
-                    status="delivered" if res.get("mock") else "sent",
-                    client_id=client_id
-                )
-                db.increment_automation_execution(auto["id"])
-                db.log_event(f"Triggered WhatsApp Automation '{auto['name']}' for {contact['name']}", "INFO")
-
-    def trigger_blog_publish_alert(self, post_title: str, post_url: str, client_id: Optional[int] = None) -> int:
-        """
-        Cross-engine synergy: Automatically broadcasts newly published blog articles
-        to opted-in contacts when an automation rule with trigger_type='blog_publish' is active.
-        """
-        automations = db.list_automations(client_id=client_id)
-        pub_rules = [a for a in automations if a.get("is_active") and a.get("trigger_type") == "blog_publish"]
-        if not pub_rules:
+    def trigger_blog_publish_alert(self, post_title: str, post_url: str) -> int:
+        """Send a 'new article' message through active blog_publish rules to contacts tagged
+        vip, customer or all. Contacts without those tags are never messaged."""
+        rules = [a for a in cs.list_automations(self.account_id)
+                 if a.get("is_active") and a.get("trigger_type") == "blog_publish"]
+        if not rules:
             return 0
-
+        targets = [c for c in cs.list_contacts(self.account_id)
+                   if any(t.lower() in ("vip", "customer", "all") for t in c.get("tags", []))]
         dispatched = 0
-        contacts = db.list_contacts(client_id=client_id)
-        # Target VIP or Customer leads
-        target_contacts = [
-            c for c in contacts 
-            if any(t.lower() in ["vip", "customer", "all"] for t in c.get("tags", []))
-        ] or contacts[:5]  # Fallback to top 5 contacts
-
-        for rule in pub_rules:
-            template = rule.get("message_template") or "📰 New Article Published: '{{title}}'\\n\\nRead it live: {{url}}"
-            for c in target_contacts:
+        for rule in rules:
+            template = rule.get("message_template") or "New article: '{{title}}'\n\nRead it live: {{url}}"
+            for c in targets:
                 msg = template.replace("{{title}}", post_title).replace("{{url}}", post_url)
                 msg = msg.replace("{{name}}", c.get("name", "there"))
                 res = self.send_text_message(c["phone"], msg)
+                self._record_outbound(c, msg, res)
                 if res.get("success"):
-                    conv = db.get_or_create_conversation(c["id"], client_id=client_id)
-                    db.create_message(
-                        conversation_id=conv["id"],
-                        contact_id=c["id"],
-                        direction="outbound",
-                        body=msg,
-                        wa_message_id=res.get("message_id", ""),
-                        status="delivered" if res.get("mock") else "sent",
-                        client_id=client_id
-                    )
                     dispatched += 1
-
-            db.increment_automation_execution(rule["id"])
-            db.log_event(f"Broadcasted published blog '{post_title}' to {dispatched} WhatsApp contacts via automation rule '{rule['name']}'.", "INFO")
-
+            cs.increment_automation_execution(self.account_id, rule["id"])
+            db.log_event(f"Blog publish alert sent to {dispatched} contacts via rule '{rule['name']}'.", "INFO",
+                         account_id=self.account_id)
         return dispatched

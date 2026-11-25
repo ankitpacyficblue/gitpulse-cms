@@ -46,7 +46,11 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
     log_event(f"Starting publication cycle for '{project['name']}' ({project['github_repo']}).", "INFO", project_id=project_id)
 
     # 1. Target Repo Context Ingestion (RAG)
-    github_token = project.get("github_token") or get_setting("github_token", DEFAULT_GITHUB_TOKEN)
+    # Each project publishes with its own token; the platform-wide token is deliberately not used,
+    # so one account cannot publish to a repo through another tenant's or the operator's credentials.
+    import crm_store
+    account_id = project.get("account_id") or ""
+    github_token = project.get("github_token") or crm_store.get_account_github_token(account_id)
     readme_raw = fetch_repo_readme(project["github_repo"], github_token)
     repo_summary = summarize_readme_context(readme_raw)
     internal_links = get_internal_linking_suggestions(project_id)
@@ -61,8 +65,10 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
         enriched_project["topic"] = f"{project['topic']}\n\nTarget Repo Codebase Context:\n{repo_summary}"
 
     # 3. AI Content Generation
-    ai_provider = get_setting("ai_provider", DEFAULT_AI_PROVIDER)
-    ai_key = get_setting(f"{ai_provider}_api_key", "")
+    # The account's own provider/key wins; otherwise the platform setting is the fallback.
+    acct_provider, acct_key = crm_store.get_account_ai(account_id)
+    ai_provider = acct_provider or get_setting("ai_provider", DEFAULT_AI_PROVIDER)
+    ai_key = acct_key if (acct_key and acct_provider == ai_provider) else get_setting(f"{ai_provider}_api_key", "")
     if not ai_key:
         if ai_provider == "gemini":
             ai_key = DEFAULT_GEMINI_API_KEY
@@ -172,9 +178,9 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
         # Cross-Engine WhatsApp Automation: Notify subscribers & VIPs
         try:
             from engine.whatsapp_client import WhatsAppClient
-            wa = WhatsAppClient()
+            wa = WhatsAppClient(project["account_id"])
             post_url = pub_result.get("pr_url") or f"https://github.com/{project['github_repo']}/blob/{project['github_branch']}/{target_path}"
-            wa.trigger_blog_publish_alert(article["title"], post_url, client_id=project.get("client_id"))
+            wa.trigger_blog_publish_alert(article["title"], post_url)
         except Exception:
             pass
         return {

@@ -1,262 +1,274 @@
-"""
-GitPulse CMS - WhatsApp Automation & CRM (WACRM) Test Suite
-Tests official Meta Cloud API client, webhook handshake, auto-responders,
-conversations, contacts CDP, deals Kanban, and blog publishing alerts.
-"""
-
-import unittest
+"""Per-account WhatsApp: encrypted config, webhook signature + routing, sends, automations, broadcasts."""
+import hashlib
+import hmac
 import json
-import time
-from datetime import datetime
-
-import database as db
+import os
+import unittest
+import tests._env  # noqa: F401
+from tests.apihelpers import Caller, new_user, new_account, join, setup_db
+import crm_store as cs
+from database import get_connection
 from engine.whatsapp_client import WhatsAppClient
 from server.routes_whatsapp import handle_whatsapp_webhook_get, handle_whatsapp_webhook_post
-from server.routes_api import handle_api_request
 
-class TestWhatsAppCRM(unittest.TestCase):
+
+def sign(raw: bytes, secret: str) -> str:
+    return "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+
+
+def payload(phone_number_id, sender="15550001111", text="hello", name="Pat"):
+    return {"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
+        "metadata": {"phone_number_id": phone_number_id},
+        "contacts": [{"wa_id": sender, "profile": {"name": name}}],
+        "messages": [{"from": sender, "id": f"wamid.{os.urandom(4).hex()}", "type": "text", "text": {"body": text}}]}}]}]}
+
+
+class Base(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        setup_db()
 
     def setUp(self):
-        db.init_db()
-        db.seed_whatsapp_demo_data()
-        db.save_whatsapp_config(
-            phone_number_id="109876543210123",
-            access_token="mock_meta_wa_token",
-            verify_token="gitpulse_webhook_verify",
-            business_name="GitPulse Official WhatsApp"
-        )
-        self.wa_client = WhatsAppClient()
-        self.mock_user = {"id": 1, "username": "admin", "role": "admin"}
+        os.environ.pop("WHATSAPP_MOCK", None)
+        os.environ.pop("WHATSAPP_APP_SECRET", None)
+        self.a, self.b = new_account(), new_account()
+        self.owner_a, self.owner_b = new_user("oa"), new_user("ob")
+        join(self.a, self.owner_a, "owner")
+        join(self.b, self.owner_b, "owner")
+        self.api_a, self.api_b = Caller(self.owner_a, self.a), Caller(self.owner_b, self.b)
+        tag = os.urandom(3).hex()
+        self.pn_a, self.pn_b = f"PNA-{tag}", f"PNB-{tag}"
+        self.secret_a, self.secret_b = f"appsecret-a-{tag}", f"appsecret-b-{tag}"
+        self.verify_a = cs.save_whatsapp_account(self.a, phone_number_id=self.pn_a, access_token="TOKEN-A-9999",
+                                                 app_secret=self.secret_a, business_name="A Co")
+        self.verify_b = cs.save_whatsapp_account(self.b, phone_number_id=self.pn_b, access_token="TOKEN-B-8888",
+                                                 app_secret=self.secret_b, business_name="B Co")
 
-    def test_whatsapp_config_storage(self):
-        cfg = db.get_whatsapp_config()
-        self.assertIsNotNone(cfg)
-        self.assertEqual(cfg["verify_token"], "gitpulse_webhook_verify")
+    def post(self, body, secret, sig=None):
+        raw = json.dumps(body).encode()
+        return handle_whatsapp_webhook_post(raw, sig if sig is not None else sign(raw, secret))
 
-        new_id = db.save_whatsapp_config(
-            phone_number_id="999888777666",
-            access_token="mock_custom_token",
-            waba_id="111222333",
-            verify_token="custom_verify_secret",
-            business_name="Custom Business"
-        )
-        self.assertGreater(new_id, 0)
-        updated_cfg = db.get_whatsapp_config()
-        self.assertEqual(updated_cfg["phone_number_id"], "999888777666")
-        self.assertEqual(updated_cfg["verify_token"], "custom_verify_secret")
 
-    def test_contacts_crud_and_lookup(self):
-        c_id = db.create_contact(
-            name="David Miller",
-            phone="+15551234999",
-            email="david@example.com",
-            tags=["VIP", "Customer"],
-            notes="Interested in enterprise SLA"
-        )
-        self.assertGreater(c_id, 0)
-
-        contact = db.get_contact(c_id)
-        self.assertEqual(contact["name"], "David Miller")
-        self.assertIn("VIP", contact["tags"])
-
-        by_phone = db.get_contact_by_phone("+15551234999")
-        self.assertIsNotNone(by_phone)
-        self.assertEqual(by_phone["id"], c_id)
-
-        # Update
-        ok = db.update_contact(c_id, name="David M. Miller", tags=["VIP", "Enterprise"])
-        self.assertTrue(ok)
-        updated = db.get_contact(c_id)
-        self.assertEqual(updated["name"], "David M. Miller")
-        self.assertIn("Enterprise", updated["tags"])
-
-        # Delete
-        del_ok = db.delete_contact(c_id)
-        self.assertTrue(del_ok)
-        self.assertIsNone(db.get_contact(c_id))
-
-    def test_conversation_and_messages_lifecycle(self):
-        c_id = db.create_contact(name="Grace Hopper", phone="+15559876543")
-        conv = db.get_or_create_conversation(c_id)
-        self.assertIsNotNone(conv)
-        self.assertEqual(conv["contact_id"], c_id)
-
-        # Inbound message
-        m1 = db.create_message(
-            conversation_id=conv["id"],
-            contact_id=c_id,
-            direction="inbound",
-            body="Can you tell me more about your CMS?",
-            wa_message_id="wamid.test_inbound_1"
-        )
-        self.assertGreater(m1, 0)
-
-        # Outbound reply
-        m2 = db.create_message(
-            conversation_id=conv["id"],
-            contact_id=c_id,
-            direction="outbound",
-            body="GitPulse is an autonomous blog publishing CMS for GitHub!",
-            wa_message_id="wamid.test_outbound_1",
-            status="sent"
-        )
-        self.assertGreater(m2, 0)
-
-        # Update status
-        db.update_message_status("wamid.test_outbound_1", "read")
-        messages = db.list_messages(conv["id"])
-        self.assertEqual(len(messages), 2)
-        self.assertEqual(messages[1]["status"], "read")
-
-        # Mark read
-        db.mark_conversation_read(conv["id"])
-        c_refreshed = db.get_conversation(conv["id"])
-        self.assertEqual(c_refreshed["unread_count"], 0)
-
-    def test_sales_pipeline_kanban(self):
-        deal_id = db.create_deal(
-            title="Next.js Blog Implementation",
-            value=8500.0,
-            stage="lead",
-            notes="Discussing scope"
-        )
-        self.assertGreater(deal_id, 0)
-
-        deals = db.list_deals()
-        self.assertTrue(any(d["id"] == deal_id for d in deals))
-
-        # Advance through Kanban stages
-        for stage in ["qualified", "proposal", "negotiation", "won"]:
-            ok = db.update_deal_stage(deal_id, stage)
-            self.assertTrue(ok)
-
-        won_deals = [d for d in db.list_deals() if d["id"] == deal_id]
-        self.assertEqual(won_deals[0]["stage"], "won")
-
-        # Delete deal
-        del_ok = db.delete_deal(deal_id)
-        self.assertTrue(del_ok)
-
-    def test_broadcast_campaign_dispatch(self):
-        c_id = db.create_contact(
-            name="Broadcast Tester",
-            phone="+15557778888",
-            tags=["VIP"]
-        )
-
-        b_id = db.create_broadcast(
-            name="Test Campaign",
-            template_body="Hi {{name}}! Check out our new update.",
-            target_tag="VIP"
-        )
-        self.assertGreater(b_id, 0)
-
-        res = self.wa_client.execute_broadcast(b_id)
-        self.assertTrue(res["success"])
-        self.assertGreaterEqual(res["sent_count"], 1)
-
-        b = db.get_broadcast(b_id)
-        self.assertEqual(b["status"], "completed")
-
-    def test_whatsapp_webhook_handshake_verification(self):
-        cfg = db.get_whatsapp_config()
-        token = cfg["verify_token"]
-
-        # Valid challenge
-        code, ctype, resp = handle_whatsapp_webhook_get({
-            "hub.mode": "subscribe",
-            "hub.verify_token": token,
-            "hub.challenge": "challenge_123456"
-        })
+class TestConfigApi(Base):
+    def test_config_never_returns_token(self):
+        code, cfg = self.api_a("GET", "/api/whatsapp/config")
         self.assertEqual(code, 200)
-        self.assertEqual(resp, "challenge_123456")
+        self.assertTrue(cfg["has_token"])
+        self.assertEqual(cfg["token_masked"], "…9999")
+        self.assertNotIn("TOKEN-A", json.dumps(cfg))
+        self.assertNotIn("access_token", cfg)
 
-        # Invalid token rejection
-        bad_code, _, _ = handle_whatsapp_webhook_get({
-            "hub.mode": "subscribe",
-            "hub.verify_token": "wrong_token",
-            "hub.challenge": "challenge_123456"
-        })
-        self.assertEqual(bad_code, 403)
-
-    def test_whatsapp_webhook_inbound_and_auto_responder(self):
-        inbound_phone = "15554443333"
-        payload = {
-            "object": "whatsapp_business_account",
-            "entry": [{
-                "id": "waba_id_test",
-                "changes": [{
-                    "value": {
-                        "messaging_product": "whatsapp",
-                        "metadata": {"display_phone_number": "15550001111", "phone_number_id": "109876543210123"},
-                        "contacts": [{"profile": {"name": "New Inbound Lead"}, "wa_id": inbound_phone}],
-                        "messages": [{
-                            "from": inbound_phone,
-                            "id": "wamid.inbound_webhook_test_1",
-                            "timestamp": str(int(time.time())),
-                            "text": {"body": "Hello, what is your pricing and cost?"},
-                            "type": "text"
-                        }]
-                    },
-                    "field": "messages"
-                }]
-            }]
-        }
-
-        code, resp = handle_whatsapp_webhook_post(payload)
+    def test_save_keeps_token_when_empty_and_returns_verify_once(self):
+        acct = new_account()
+        u = new_user("cfg")
+        join(acct, u, "admin")
+        api = Caller(u, acct)
+        code, out = api("POST", "/api/whatsapp/config", {"phone_number_id": f"PN-{os.urandom(3).hex()}", "access_token": "NEWTOKEN-1234"})
         self.assertEqual(code, 200)
-        self.assertTrue(resp["success"])
-        self.assertGreaterEqual(resp["processed_messages"], 1)
+        self.assertTrue(out["verify_token"])
+        self.assertNotIn("NEWTOKEN", json.dumps(out))
+        code, out2 = api("POST", "/api/whatsapp/config", {"business_name": "Renamed", "access_token": ""})
+        self.assertNotIn("verify_token", out2)
+        self.assertEqual(cs.get_whatsapp_credentials(acct)["access_token"], "NEWTOKEN-1234")
 
-        # Contact should be automatically discovered
-        contact = db.get_contact_by_phone("+" + inbound_phone)
-        self.assertIsNotNone(contact)
-        self.assertEqual(contact["name"], "New Inbound Lead")
+    def test_other_account_cannot_claim_a_connected_number(self):
+        code, out = self.api_b("POST", "/api/whatsapp/config", {"phone_number_id": self.pn_a})
+        self.assertEqual((code, out["error"]), (409, "phone_number_in_use"))
+        self.assertEqual(cs.find_account_by_phone_number_id(self.pn_a), self.a)
 
-        # Check that auto-responder triggered
-        conv = db.get_or_create_conversation(contact["id"])
-        messages = db.list_messages(conv["id"])
-        # At least 1 inbound + 1 outbound auto-response
-        self.assertGreaterEqual(len(messages), 2)
-        outbound = [m for m in messages if m["direction"] == "outbound"]
-        self.assertTrue(len(outbound) >= 1)
-        self.assertTrue(any("pricing" in m["body"].lower() or "welcome" in m["body"].lower() for m in outbound))
+    def test_agents_cannot_read_or_change_credentials(self):
+        agent = new_user("ag")
+        join(self.a, agent, "agent")
+        api = Caller(agent, self.a)
+        self.assertEqual(api("POST", "/api/whatsapp/config", {"access_token": "x"})[0], 403)
+        self.assertEqual(api("POST", "/api/whatsapp/config/verify-token")[0], 403)
 
-    def test_blog_publish_cross_engine_whatsapp_alert(self):
-        alerts_sent = self.wa_client.trigger_blog_publish_alert(
-            post_title="Accelerating Microservices with Kubernetes",
-            post_url="https://github.com/my-org/my-blog/pull/42"
-        )
-        self.assertGreaterEqual(alerts_sent, 1)
-
-    def test_rest_api_endpoints_whatsapp(self):
-        # 1. GET & POST config
-        code, cfg = handle_api_request("GET", "/api/whatsapp/config", {}, None, self.mock_user)
+    def test_rotate_verify_token(self):
+        code, out = self.api_a("POST", "/api/whatsapp/config/verify-token")
         self.assertEqual(code, 200)
+        self.assertEqual(handle_whatsapp_webhook_get({"hub.mode": "subscribe", "hub.verify_token": self.verify_a, "hub.challenge": "c"})[0], 403)
+        self.assertEqual(handle_whatsapp_webhook_get({"hub.mode": "subscribe", "hub.verify_token": out["verify_token"], "hub.challenge": "c"})[0], 200)
 
-        # 2. GET contacts
-        code, cnt_data = handle_api_request("GET", "/api/whatsapp/contacts", {}, None, self.mock_user)
+    def test_stored_values_are_ciphertext(self):
+        with get_connection() as conn:
+            row = dict(conn.execute("SELECT * FROM whatsapp_accounts WHERE account_id = ?", (self.a,)).fetchone())
+        blob = json.dumps(row)
+        self.assertNotIn("TOKEN-A-9999", blob)
+        self.assertNotIn(self.secret_a, blob)
+        self.assertNotIn(self.verify_a, blob)
+
+
+class TestWebhookHandshake(Base):
+    def test_handshake_with_account_verify_token(self):
+        code, ctype, body = handle_whatsapp_webhook_get({"hub.mode": "subscribe", "hub.verify_token": self.verify_a, "hub.challenge": "12345"})
+        self.assertEqual((code, body), (200, "12345"))
+
+    def test_old_default_token_and_garbage_rejected(self):
+        for tok in ("gitpulse_webhook_verify", "", "nope"):
+            self.assertEqual(handle_whatsapp_webhook_get({"hub.mode": "subscribe", "hub.verify_token": tok, "hub.challenge": "c"})[0], 403)
+        self.assertEqual(handle_whatsapp_webhook_get({"hub.mode": "other", "hub.verify_token": self.verify_a, "hub.challenge": "c"})[0], 403)
+
+
+class TestWebhookPost(Base):
+    def test_signed_event_lands_only_in_owning_account(self):
+        code, res = self.post(payload(self.pn_a, sender="15551230001", text="hi from A's customer"), self.secret_a)
         self.assertEqual(code, 200)
-        self.assertIn("contacts", cnt_data)
+        self.assertEqual(res["processed_messages"], 1)
+        self.assertEqual(len(cs.list_contacts(self.a)), 1)
+        self.assertEqual(cs.list_contacts(self.b), [])
+        conv = cs.list_conversations(self.a)[0]
+        self.assertEqual(cs.list_messages(self.a, conv["id"])[0]["body"], "hi from A's customer")
 
-        # 3. GET conversations
-        code, conv_data = handle_api_request("GET", "/api/whatsapp/conversations", {}, None, self.mock_user)
+    def test_same_customer_number_in_two_accounts_stays_separate(self):
+        self.post(payload(self.pn_a, sender="15559998888"), self.secret_a)
+        self.post(payload(self.pn_b, sender="15559998888"), self.secret_b)
+        self.assertEqual(len(cs.list_contacts(self.a)), 1)
+        self.assertEqual(len(cs.list_contacts(self.b)), 1)
+        self.assertNotEqual(cs.list_contacts(self.a)[0]["id"], cs.list_contacts(self.b)[0]["id"])
+
+    def test_wrong_signature_missing_signature_and_wrong_account_secret_rejected(self):
+        body = payload(self.pn_a)
+        self.assertEqual(self.post(body, self.secret_a, sig="sha256=" + "0" * 64)[0], 403)
+        self.assertEqual(self.post(body, self.secret_a, sig="")[0], 403)
+        self.assertEqual(self.post(body, self.secret_b)[0], 403)       # B's secret cannot inject into A
+        self.assertEqual(cs.list_contacts(self.a), [])
+
+    def test_no_secret_configured_fails_closed(self):
+        acct = new_account()
+        cs.save_whatsapp_account(acct, phone_number_id="PN-nosecret-" + os.urandom(3).hex(), access_token="t")
+        pn = cs.get_whatsapp_public(acct)["phone_number_id"]
+        raw = json.dumps(payload(pn)).encode()
+        self.assertEqual(handle_whatsapp_webhook_post(raw, sign(raw, ""))[0], 403)
+        self.assertEqual(handle_whatsapp_webhook_post(raw, "")[0], 403)
+
+    def test_unknown_phone_number_id_is_dropped(self):
+        os.environ["WHATSAPP_APP_SECRET"] = "platform-secret"
+        raw = json.dumps(payload("PN-unknown")).encode()
+        code, res = handle_whatsapp_webhook_post(raw, sign(raw, "platform-secret"))
         self.assertEqual(code, 200)
-        self.assertIn("conversations", conv_data)
+        self.assertEqual((res["processed_messages"], res["skipped_unknown_number"]), (0, 1))
 
-        # 4. GET deals
-        code, deal_data = handle_api_request("GET", "/api/whatsapp/deals", {}, None, self.mock_user)
+    def test_payload_cannot_choose_account(self):
+        body = payload(self.pn_a)
+        body["client_id"] = self.b
+        body["account_id"] = self.b
+        self.post(body, self.secret_a)
+        self.assertEqual(cs.list_contacts(self.b), [])
+        self.assertEqual(len(cs.list_contacts(self.a)), 1)
+
+    def test_status_updates_scoped(self):
+        self.post(payload(self.pn_a, sender="15553334444"), self.secret_a)
+        conv = cs.list_conversations(self.a)[0]
+        wa_id = cs.list_messages(self.a, conv["id"])[0]["wa_message_id"]
+        status_b = {"entry": [{"changes": [{"value": {"metadata": {"phone_number_id": self.pn_b},
+                                                     "statuses": [{"id": wa_id, "status": "read"}]}}]}]}
+        self.post(status_b, self.secret_b)
+        self.assertEqual(cs.list_messages(self.a, conv["id"])[0]["status"], "delivered")   # unchanged by B
+        status_a = {"entry": [{"changes": [{"value": {"metadata": {"phone_number_id": self.pn_a},
+                                                     "statuses": [{"id": wa_id, "status": "read"}]}}]}]}
+        self.post(status_a, self.secret_a)
+        self.assertEqual(cs.list_messages(self.a, conv["id"])[0]["status"], "read")
+
+    def test_invalid_json_and_empty_body(self):
+        self.assertEqual(handle_whatsapp_webhook_post(b"not json", "x")[0], 400)
+        self.assertEqual(handle_whatsapp_webhook_post(b"", "x")[0], 400)
+
+
+class TestSendingAndAutomations(Base):
+    def test_unconfigured_account_cannot_send_and_no_mock_fallback(self):
+        acct = new_account()
+        res = WhatsAppClient(acct).send_text_message("+15550001111", "hi")
+        self.assertFalse(res["success"])
+        self.assertNotIn("mock", res)
+
+    def test_mock_mode_only_with_env_flag(self):
+        os.environ["WHATSAPP_MOCK"] = "1"
+        res = WhatsAppClient(new_account()).send_text_message("+15550001111", "hi")
+        self.assertTrue(res["success"] and res["mock"])
+
+    def test_client_requires_account(self):
+        with self.assertRaises(ValueError):
+            WhatsAppClient("")
+
+    def test_welcome_and_keyword_automations_only_fire_in_their_account(self):
+        os.environ["WHATSAPP_MOCK"] = "1"
+        cs.create_automation(self.a, "Welcome", "welcome", "Welcome {{name}}!")
+        cs.create_automation(self.a, "Price", "keyword", "Prices at example.com", trigger_keyword="price, cost")
+        cs.create_automation(self.b, "B welcome", "welcome", "B says hi")
+        self.post(payload(self.pn_a, sender="15554445555", text="what is the price?", name="Dana"), self.secret_a)
+        conv = cs.list_conversations(self.a)[0]
+        msgs = cs.list_messages(self.a, conv["id"])
+        bodies = [m["body"] for m in msgs if m["direction"] == "outbound"]
+        self.assertIn("Welcome Dana!", bodies)
+        self.assertIn("Prices at example.com", bodies)
+        self.assertNotIn("B says hi", bodies)
+        self.assertEqual([x["executions_count"] for x in cs.list_automations(self.b)], [0])
+
+    def test_broadcast_reaches_only_own_contacts(self):
+        os.environ["WHATSAPP_MOCK"] = "1"
+        cs.create_contact(self.a, "A1", "+15550100001", tags=["VIP"])
+        cs.create_contact(self.a, "A2", "+15550100002", tags=["Lead"])
+        cs.create_contact(self.b, "B1", "+15550100003", tags=["VIP"])
+        bid = cs.create_broadcast(self.a, "Promo", "Hi {{name}}", target_tag="VIP")
+        code, out = self.api_a("POST", f"/api/whatsapp/broadcasts/{bid}/run")
         self.assertEqual(code, 200)
-        self.assertIn("deals", deal_data)
+        self.assertEqual((out["stats"]["total_recipients"], out["stats"]["sent_count"]), (1, 1))
+        self.assertEqual((out["stats"]["delivered_count"], out["stats"]["read_count"]), (0, 0))
+        self.assertTrue(out["stats"]["mock"])
+        conv = cs.list_conversations(self.a)[0]
+        self.assertEqual([m["status"] for m in cs.list_messages(self.a, conv["id"])], ["mock"])
+        self.assertTrue(self.api_a("GET", "/api/whatsapp/config")[1]["mock_mode"])
+        self.assertEqual(cs.list_conversations(self.b), [])
 
-        # 5. Simulate inbound message
-        sim_code, sim_res = handle_api_request("POST", "/api/whatsapp/simulate-incoming", {}, {
-            "name": "API Test Lead",
-            "phone": "+19998887777",
-            "message": "Hi GitPulse! I want pricing."
-        }, self.mock_user)
-        self.assertEqual(sim_code, 200)
-        self.assertTrue(sim_res["success"])
+    def test_broadcast_without_config_fails_cleanly(self):
+        acct = new_account()
+        u = new_user("bc")
+        join(acct, u, "admin")
+        bid = cs.create_broadcast(acct, "P", "x")
+        code, out = Caller(u, acct)("POST", f"/api/whatsapp/broadcasts/{bid}/run")
+        self.assertEqual(code, 400)
+
+    def test_blog_alert_only_to_opted_in_tags(self):
+        os.environ["WHATSAPP_MOCK"] = "1"
+        cs.create_contact(self.a, "Vip", "+15550200001", tags=["VIP"])
+        cs.create_contact(self.a, "Cold", "+15550200002", tags=["Lead"])
+        cs.create_automation(self.a, "Alert", "blog_publish", "New: {{title}} {{url}}")
+        self.assertEqual(WhatsAppClient(self.a).trigger_blog_publish_alert("T", "https://x/y"), 1)
+
+    def test_send_message_endpoint_records_failure_when_unconfigured(self):
+        acct = new_account()
+        u = new_user("snd")
+        join(acct, u, "agent")
+        cid = cs.create_contact(acct, "C", "+15550300001")
+        conv = cs.get_or_create_conversation(acct, cid)
+        code, out = Caller(u, acct)("POST", f"/api/whatsapp/conversations/{conv['id']}/messages", {"body": "hello"})
+        self.assertEqual(code, 502)
+        self.assertEqual(cs.list_messages(acct, conv["id"])[0]["status"], "failed")
+
+    def test_simulate_incoming_off_unless_mock_and_scoped(self):
+        self.assertEqual(self.api_a("POST", "/api/whatsapp/simulate-incoming", {"phone": "+15550400001"})[0], 404)
+        os.environ["WHATSAPP_MOCK"] = "1"
+        code, out = self.api_a("POST", "/api/whatsapp/simulate-incoming", {"phone": "+15550400001", "message": "hi"})
+        self.assertEqual((code, out["processed_messages"]), (200, 1))
+        self.assertEqual(len(cs.list_contacts(self.a)), 1)
+        self.assertEqual(cs.list_contacts(self.b), [])
+        viewer = new_user("vw")
+        join(self.a, viewer, "viewer")
+        self.assertEqual(Caller(viewer, self.a)("POST", "/api/whatsapp/simulate-incoming", {"phone": "+1"})[0], 403)
+
+
+class TestNoSecretsInLogs(Base):
+    def test_logs_contain_no_tokens_or_message_text(self):
+        from database import list_logs
+        self.post(payload(self.pn_a, text="very private message body"), self.secret_a)
+        self.post(payload(self.pn_a), self.secret_b)       # rejected
+        self.api_a("POST", "/api/whatsapp/config", {"access_token": "TOKEN-LEAK-CHECK-7777"})
+        everything = json.dumps(list_logs(self.a, 500)) + json.dumps(list_logs(self.b, 500))
+        with get_connection() as conn:
+            everything += json.dumps([dict(r) for r in conn.execute("SELECT message, metadata FROM system_logs").fetchall()])
+        for needle in ("TOKEN-LEAK-CHECK", "TOKEN-A-9999", "very private message body", self.secret_a, self.verify_a):
+            self.assertNotIn(needle, everything)
+
 
 if __name__ == "__main__":
     unittest.main()
