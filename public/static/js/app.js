@@ -2078,12 +2078,24 @@ function broadcastSplit(tag, templateName) {
     const why = [optedOut ? `${optedOut} opted out` : '', notOptedIn ? `${notOptedIn} not opted in` : ''].filter(Boolean).join(', ');
     return { send, skipped: optedOut + notOptedIn, text: `Will send to ${send}, skip ${optedOut + notOptedIn}${why ? ` (${why})` : ''}.` };
 }
-function updateBroadcastAudience() {
+// The server counts with the same rules a send uses; the local count stands in if it cannot answer.
+async function broadcastPreview(tag, choice) {
+    const d = choice && await apiCall('POST', '/api/whatsapp/broadcasts/preview',
+        { template_name: choice.name, template_language: choice.language, target_tag: tag || 'all' }, { quiet: true });
+    if (!d || typeof d.will_send !== 'number') return broadcastSplit(tag, choice && choice.name);
+    const labels = { opted_out: 'opted out', not_opted_in: 'not opted in' };
+    const why = Object.entries(d.skipped || {}).map(([code, n]) => `${n} ${labels[code] || code.replace(/_/g, ' ')}`).join(', ');
+    return { send: d.will_send, skipped: d.skipped_count, text: `Will send to ${d.will_send}, skip ${d.skipped_count}${why ? ` (${why})` : ''}.` };
+}
+let broadcastPreviewSeq = 0;
+async function updateBroadcastAudience() {
     const el = document.getElementById('new-broadcast-count');
     const sel = document.getElementById('new-broadcast-tag');
     if (!el || !sel) return;
-    const t = pickedTemplate('bc');
-    el.innerText = broadcastSplit(sel.value, t && t.name).text;
+    const seq = ++broadcastPreviewSeq;
+    el.innerText = 'Counting recipients…';
+    const split = await broadcastPreview(sel.value, pickedTemplate('bc'));
+    if (seq === broadcastPreviewSeq) el.innerText = split.text;
 }
 function closeAddBroadcastModal() {
     document.getElementById('modal-add-broadcast').classList.add('hidden');
@@ -2097,7 +2109,7 @@ async function submitAddBroadcast(e) {
     const auto_send = document.getElementById('new-broadcast-send-now').checked;
     if (el('bc-media-wrap').dataset.format && !attached.bc) { showToast('Attach the file this template needs.', 'error'); return; }
     if (auto_send) {
-        const split = broadcastSplit(target_tag, choice.template_name);
+        const split = await broadcastPreview(target_tag, pickedTemplate('bc'));
         if (split.send === 0) { showToast(`Nothing would be sent. ${split.text}`, 'error'); return; }
         if (!confirm(`Send this now? ${split.text}`)) return;
     }
