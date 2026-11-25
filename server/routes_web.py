@@ -176,6 +176,17 @@ def render_login_html() -> str:
             }
         }
 
+        (function () {
+            try {
+                const r = sessionStorage.getItem('gitpulse_login_reason');
+                if (r) {
+                    sessionStorage.removeItem('gitpulse_login_reason');
+                    const b = document.getElementById('login-error-banner'), t = document.getElementById('login-error-text');
+                    if (b && t) { t.innerText = r; b.classList.remove('hidden'); }
+                }
+            } catch (e) {}
+        })();
+
         async function handleLoginSubmit(e) {
             e.preventDefault();
             const btn = document.getElementById('login-btn');
@@ -1102,9 +1113,13 @@ def render_dashboard_html() -> str:
         </div>
 
         <div id="tab-wa-config" class="tab-content hidden">
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <!-- Meta Cloud API Credentials Form -->
-                <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-5">
+            <nav aria-label="WhatsApp setup steps" class="max-w-3xl mb-5">
+                <ol id="wa-stepper" class="grid grid-cols-4 gap-2 text-[11px]"></ol>
+            </nav>
+            <div class="grid grid-cols-1 gap-6 max-w-3xl">
+                <!-- Step 1: Meta Cloud API Credentials Form -->
+                <div class="wa-step bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-5" data-step="1">
+                    <h3 class="text-sm font-semibold text-indigo-300">Step 1 of 4: Credentials</h3>
                     <div class="flex justify-between items-center">
                         <h2 class="text-base font-semibold text-white flex items-center gap-2">
                             <span>📱 Meta WhatsApp Cloud API Credentials</span>
@@ -1146,16 +1161,18 @@ def render_dashboard_html() -> str:
 
                         <div class="pt-2">
                             <button type="submit" class="btn-primary text-xs py-2 px-4 shadow-indigo-500/25">
-                                Save WhatsApp Credentials
+                                Save and continue
                             </button>
+                            <button type="button" onclick="waGoStep(2)" id="wa-skip-1" class="hidden btn-secondary text-xs py-2 px-4 ml-2">Already saved: next</button>
                         </div>
                     </form>
                 </div>
 
                 <!-- Webhook Callback URL & Verify Token + Live Simulator -->
-                <div class="space-y-6">
-                    <!-- Webhook Callback Box -->
-                    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+                <div class="contents">
+                    <!-- Step 2: Webhook Callback Box -->
+                    <div class="wa-step hidden bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4" data-step="2">
+                        <h3 class="text-sm font-semibold text-indigo-300">Step 2 of 4: Connect the webhook in Meta</h3>
                         <h2 class="text-base font-semibold text-white flex items-center gap-2">
                             <span>⚡ Meta Webhook Verification Handshake</span>
                         </h2>
@@ -1178,6 +1195,43 @@ def render_dashboard_html() -> str:
                                     <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('wa-cfg-verify-token').value); showToast('Verify token copied!', 'success')" class="btn-secondary text-xs">Copy</button>
                                 </div>
                             </div>
+                        </div>
+                        <ol class="text-xs text-slate-300 list-decimal pl-5 space-y-1">
+                            <li>In Meta, open your app, then WhatsApp, then Configuration, then Edit webhook.</li>
+                            <li>Paste the Callback URL and the Verify token above, then Verify and save.</li>
+                            <li>Subscribe to the <code>messages</code> field.</li>
+                            <li>Send a WhatsApp message to your business number. This page turns green when Meta reaches us.</li>
+                        </ol>
+                        <p id="wa-verify-once" class="hidden text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded p-2">This verify token is shown only now. Copy it before you leave this page.</p>
+                        <p id="wa-hook-state" class="text-xs text-slate-300" role="status"></p>
+                        <div class="flex gap-2 flex-wrap">
+                            <button type="button" onclick="waGoStep(1)" class="btn-secondary text-xs">Back</button>
+                            <button type="button" onclick="waGoStep(3)" class="btn-primary text-xs">Next: test</button>
+                        </div>
+                    </div>
+
+                    <!-- Step 3: test -->
+                    <div class="wa-step hidden bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4" data-step="3">
+                        <h3 class="text-sm font-semibold text-indigo-300">Step 3 of 4: Test the connection</h3>
+                        <p class="text-xs text-slate-400">This asks Meta to confirm your Phone Number ID and token. It does not send any message.</p>
+                        <div class="flex gap-2 flex-wrap items-center">
+                            <button type="button" id="wa-test-btn" onclick="waRunTest()" class="btn-primary text-xs">Run test</button>
+                            <span id="wa-test-result" class="text-xs" role="status"></span>
+                        </div>
+                        <p id="wa-hook-state-3" class="text-xs text-slate-300" role="status"></p>
+                        <div class="flex gap-2 flex-wrap">
+                            <button type="button" onclick="waGoStep(2)" class="btn-secondary text-xs">Back</button>
+                            <button type="button" onclick="waGoStep(4)" class="btn-primary text-xs">Next: finish</button>
+                        </div>
+                    </div>
+
+                    <!-- Step 4: done -->
+                    <div class="wa-step hidden bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4" data-step="4">
+                        <h3 class="text-sm font-semibold text-indigo-300">Step 4 of 4: Done</h3>
+                        <div id="wa-done-box" class="rounded-lg border p-4 text-sm" role="status"></div>
+                        <div class="flex gap-2 flex-wrap">
+                            <button type="button" onclick="waGoStep(3)" class="btn-secondary text-xs">Back</button>
+                            <button type="button" onclick="refreshWaStatus()" class="btn-secondary text-xs">Check again</button>
                         </div>
                     </div>
 

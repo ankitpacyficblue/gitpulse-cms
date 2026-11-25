@@ -119,7 +119,7 @@ function switchTab(tabName) {
         'wa-broadcasts': { title: 'Broadcast Campaigns', sub: 'Mass WhatsApp messaging campaigns segmented by audience tags' },
         'wa-automations': { title: 'No-Code Automations Engine', sub: 'Automated welcome bots, keyword responders, and blog publication alerts' },
         'users': { title: 'Users & Roles', sub: 'Invite people to this client account and control what each role can do' },
-        'wa-config': { title: 'WhatsApp API & Webhook Setup', sub: 'Official Meta Cloud API credentials, webhook verification, and simulator' },
+        'wa-config': { title: 'WhatsApp API & Webhook Setup', sub: 'Four steps: credentials, webhook, test, done' },
         'supabase': { title: 'Supabase Cloud Database', sub: 'PostgreSQL multi-tenant persistence and cloud backup status' },
         'logs': { title: 'System & Generation Logs', sub: 'Real-time audit log of AI generation, GitHub commits, and webhooks' },
         'settings': { title: 'Platform Settings & Security', sub: 'Global API tokens, AI provider keys, TOTP 2FA, and password management' }
@@ -264,83 +264,50 @@ function getAuthHeaders(customHeaders = {}) {
     return headers;
 }
 
-async function apiGet(endpoint) {
-    try {
-        const res = await fetch(scopeUrl(endpoint), {
-            headers: getAuthHeaders(),
-            credentials: 'same-origin'
-        });
-        if (res.status === 401) {
-            try { localStorage.removeItem('gitpulse_token'); } catch (e) {}
-            window.location.href = '/login';
-            return null;
-        }
-        return checkApiGuards(await res.json());
-    } catch (err) {
-        showToast(`Network error: ${err.message}`, 'error');
-        return null;
-    }
+// One place for every API call: safe JSON, a toast for every failure, and 401 goes back to login with the reason.
+const _toastSeen = {};
+function toastOnce(msg) {
+    const now = Date.now();
+    if (_toastSeen[msg] && now - _toastSeen[msg] < 8000) return;
+    _toastSeen[msg] = now;
+    showToast(msg, 'error');
 }
 
-async function apiPost(endpoint, data = {}) {
+async function apiCall(method, endpoint, data, opts = {}) {
+    const hasBody = data !== undefined && method !== 'GET';
+    let res;
     try {
-        const res = await fetch(endpoint, {
-            method: 'POST',
-            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        res = await fetch(method === 'GET' ? scopeUrl(endpoint) : endpoint, {
+            method,
+            headers: hasBody ? getAuthHeaders({ 'Content-Type': 'application/json' }) : getAuthHeaders(),
             credentials: 'same-origin',
-            body: JSON.stringify(scopeBody(endpoint, data))
+            ...(hasBody ? { body: JSON.stringify(method === 'DELETE' ? data : scopeBody(endpoint, data)) } : {})
         });
-        if (res.status === 401 && endpoint !== '/api/auth/login') {
-            try { localStorage.removeItem('gitpulse_token'); } catch (e) {}
-            window.location.href = '/login';
-            return null;
-        }
-        return checkApiGuards(await res.json());
     } catch (err) {
-        showToast(`Request failed: ${err.message}`, 'error');
+        toastOnce(navigator.onLine === false ? 'You are offline. Check your connection and try again.' : `Could not reach the server (${err.message}).`);
         return null;
     }
+    let body = null;
+    try { body = await res.json(); } catch (e) { body = null; }
+    if (res.status === 401 && endpoint !== '/api/auth/login') {
+        const reason = (body && (body.message || errorText(body, ''))) || 'Your session ended. Please sign in again.';
+        try { localStorage.removeItem('gitpulse_token'); sessionStorage.setItem('gitpulse_login_reason', reason); } catch (e) {}
+        window.location.href = '/login';
+        return null;
+    }
+    if (!res.ok) {
+        if (!body || typeof body !== 'object') body = { error: 'server_error', message: `The server had a problem (error ${res.status}). Try again in a moment.` };
+        else if (!body.error) body.error = 'request_failed';
+        const quiet = body.error === 'password_change_required' || (body.error === 'forbidden' && body.required === 'membership');
+        if (!quiet && !opts.quiet) toastOnce(errorText(body, `Request failed (error ${res.status}).`));
+    }
+    return checkApiGuards(body);
 }
 
-async function apiPut(endpoint, data = {}) {
-    try {
-        const res = await fetch(endpoint, {
-            method: 'PUT',
-            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-            credentials: 'same-origin',
-            body: JSON.stringify(scopeBody(endpoint, data))
-        });
-        if (res.status === 401) {
-            try { localStorage.removeItem('gitpulse_token'); } catch (e) {}
-            window.location.href = '/login';
-            return null;
-        }
-        return checkApiGuards(await res.json());
-    } catch (err) {
-        showToast(`Request failed: ${err.message}`, 'error');
-        return null;
-    }
-}
-
-async function apiDelete(endpoint, data) {
-    try {
-        const res = await fetch(endpoint, {
-            method: 'DELETE',
-            headers: data ? getAuthHeaders({ 'Content-Type': 'application/json' }) : getAuthHeaders(),
-            credentials: 'same-origin',
-            ...(data ? { body: JSON.stringify(data) } : {})
-        });
-        if (res.status === 401) {
-            try { localStorage.removeItem('gitpulse_token'); } catch (e) {}
-            window.location.href = '/login';
-            return null;
-        }
-        return await res.json();
-    } catch (err) {
-        showToast(`Delete failed: ${err.message}`, 'error');
-        return null;
-    }
-}
+const apiGet = (endpoint) => apiCall('GET', endpoint);
+const apiPost = (endpoint, data = {}) => apiCall('POST', endpoint, data);
+const apiPut = (endpoint, data = {}) => apiCall('PUT', endpoint, data);
+const apiDelete = (endpoint, data) => apiCall('DELETE', endpoint, data);
 
 // --- Money: always format with the deal's own currency ---
 function formatMoney(amount, currency) {
@@ -1251,6 +1218,11 @@ function errorText(res, fallback) {
     if (res.error === 'not_a_member') return 'That person is not in this account.';
     if (res.error === 'last_owner') return 'An account must keep at least one owner.';
     if (res.error === 'account_required') return 'Choose a client account first.';
+    if (res.message && (res.error === 'server_error' || res.error === 'request_failed' || !res.error)) return res.message;
+    if (res.error === 'invalid_phone') return 'Phone number must be 8 to 15 digits.';
+    if (res.error === 'invalid_value') return 'Deal value must be 0 or more.';
+    if (res.error === 'invalid_currency') return 'Currency must be a 3-letter code such as INR.';
+    if (res.message) return res.message;
     return res.error || fallback;
 }
 
@@ -1859,6 +1831,7 @@ async function loadWhatsAppConfig() {
     const st = document.getElementById('wa-cfg-status');
     if (st) st.innerText = !cfg.configured ? 'Not set up yet.' : (cfg.has_app_secret ? 'Connected. Webhook signatures are checked.' : 'Needs the app secret: Meta messages are rejected without it.');
     if (document.getElementById('wa-cfg-biz-name')) document.getElementById('wa-cfg-biz-name').value = cfg.business_name || '';
+    if (can('wa.config')) initWaWizard();
 }
 
 async function saveWhatsAppConfig(e) {
@@ -1873,10 +1846,18 @@ async function saveWhatsAppConfig(e) {
     
     const res = await apiPost('/api/whatsapp/config', payload);
     if (res && res.success) {
-        showToast(res.verify_token ? `Saved. Webhook verify token (shown once): ${res.verify_token}` : 'WhatsApp Business Cloud API configuration saved.', 'success');
-        loadWhatsAppConfig();
-    } else {
-        showToast('Failed to save WhatsApp config.', 'error');
+        showToast('WhatsApp credentials saved.', 'success');
+        await loadWhatsAppConfig();
+        if (res.verify_token) {
+            const vt = document.getElementById('wa-cfg-verify-token');
+            if (vt) vt.value = res.verify_token;
+            const once = document.getElementById('wa-verify-once');
+            if (once) once.classList.remove('hidden');
+        }
+        await refreshWaStatus();
+        waGoStep(2);
+    } else if (!res) {
+        showToast('Could not save the WhatsApp settings.', 'error');
     }
 }
 
@@ -2407,3 +2388,104 @@ async function saveAccountSettings(e) {
     } else showToast(errorText(res && res.error ? res : cur, 'Could not save settings.'), 'error');
 }
 
+
+
+// --- WhatsApp setup wizard (4 steps) ---
+let waStep = 1, waStatus = null, waPoll = null, waWizardAccount = null;
+const WA_STEP_NAMES = ['Credentials', 'Webhook', 'Test', 'Done'];
+
+function waDone(n) {
+    const st = waStatus; if (!st) return false;
+    const c = st.credentials || {};
+    if (n === 1) return !!(c.phone_number_id && c.access_token && c.app_secret);
+    if (n === 2) return !!st.last_webhook_at;
+    if (n === 3) return !!(st.last_test && st.last_test.ok);
+    return !!st.ready;
+}
+
+function renderWaStepper() {
+    const ol = document.getElementById('wa-stepper'); if (!ol) return;
+    ol.innerHTML = WA_STEP_NAMES.map((name, i) => {
+        const n = i + 1, active = n === waStep, done = waDone(n);
+        const cls = active ? 'border-indigo-400 text-white bg-indigo-500/10' : (done ? 'border-emerald-500/40 text-emerald-300' : 'border-slate-700 text-slate-400');
+        return `<li><button type="button" onclick="waGoStep(${n})" ${active ? 'aria-current="step"' : ''} class="w-full text-left border rounded-lg px-2 py-2 min-h-[44px] ${cls}"><span class="font-semibold">${done && !active ? '&#10003;' : n}</span> <span class="block truncate">${name}</span></button></li>`;
+    }).join('');
+}
+
+function renderWaStatus() {
+    renderWaStepper();
+    const st = waStatus;
+    const hook = st && st.last_webhook_at
+        ? `Meta has reached us (last message ${new Date(st.last_webhook_at).toLocaleString()}).`
+        : 'Waiting for Meta. Send a WhatsApp message to your business number once the webhook is saved.';
+    ['wa-hook-state', 'wa-hook-state-3'].forEach(id => { const e = document.getElementById(id); if (e) e.innerText = st ? hook : ''; });
+    const tr = document.getElementById('wa-test-result');
+    if (tr && st && st.last_test) {
+        tr.innerText = (st.last_test.ok ? 'Passed: ' : 'Failed: ') + (st.last_test.message || '');
+        tr.className = 'text-xs ' + (st.last_test.ok ? 'text-emerald-300' : 'text-red-300');
+    }
+    const box = document.getElementById('wa-done-box');
+    if (box && st) {
+        if (st.ready) {
+            box.className = 'rounded-lg border p-4 text-sm bg-emerald-500/10 border-emerald-500/40 text-emerald-200';
+            box.innerText = 'Connected. Meta is delivering messages to this account' + (st.mock_mode ? ' (mock mode: nothing is sent to real customers).' : '.');
+        } else {
+            const miss = [];
+            const c = st.credentials || {};
+            if (!(c.phone_number_id && c.access_token)) miss.push('save the Phone Number ID and access token (step 1)');
+            if (!c.app_secret) miss.push('save the Meta app secret (step 1)');
+            if (!st.last_webhook_at) miss.push('connect the webhook in Meta and send one message to your number (step 2)');
+            box.className = 'rounded-lg border p-4 text-sm bg-amber-500/10 border-amber-500/40 text-amber-200';
+            box.innerText = 'Not connected yet. Still to do: ' + (miss.join('; ') || 'wait a moment and check again') + '.';
+        }
+    }
+    if (st && st.ready) stopWaPoll();
+}
+
+async function refreshWaStatus() {
+    const s = await apiCall('GET', '/api/whatsapp/connection-status', undefined, { quiet: true });
+    if (s && !s.error) { waStatus = s; renderWaStatus(); }
+    return s;
+}
+
+function stopWaPoll() { if (waPoll) { clearInterval(waPoll); waPoll = null; } }
+function startWaPoll() {
+    if (waPoll) return;
+    waPoll = setInterval(() => {
+        const tab = document.getElementById('tab-wa-config');
+        if (!tab || tab.classList.contains('hidden')) return;
+        refreshWaStatus();
+    }, 5000);
+}
+
+function waGoStep(n) {
+    waStep = n;
+    document.querySelectorAll('#tab-wa-config .wa-step').forEach(el => el.classList.toggle('hidden', el.dataset.step !== String(n)));
+    if (n >= 2) startWaPoll(); else stopWaPoll();
+    renderWaStatus();
+}
+
+async function initWaWizard() {
+    const acct = getActiveAccountId();
+    const first = waWizardAccount !== acct;
+    waWizardAccount = acct;
+    const s = await refreshWaStatus();
+    if (!first) return;
+    waStatus = (s && !s.error) ? s : null;
+    const skip = document.getElementById('wa-skip-1');
+    if (skip) skip.classList.toggle('hidden', !waDone(1));
+    waGoStep(waDone(4) ? 4 : (waDone(1) ? 2 : 1));
+}
+
+async function waRunTest() {
+    const btn = document.getElementById('wa-test-btn');
+    const out = document.getElementById('wa-test-result');
+    if (btn) btn.disabled = true;
+    if (out) { out.className = 'text-xs text-slate-300'; out.innerText = 'Testing...'; }
+    const res = await apiPost('/api/whatsapp/config/test', {});
+    if (btn) btn.disabled = false;
+    if (res && !res.error) {
+        if (out) { out.className = 'text-xs ' + (res.ok ? 'text-emerald-300' : 'text-red-300'); out.innerText = (res.ok ? 'Passed: ' : 'Failed: ') + (res.message || ''); }
+    } else if (out) { out.className = 'text-xs text-red-300'; out.innerText = 'Test could not run.'; }
+    await refreshWaStatus();
+}
