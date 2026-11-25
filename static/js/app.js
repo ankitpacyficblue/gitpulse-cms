@@ -122,6 +122,7 @@ function switchTab(tabName) {
         'wa-knowledge': { title: 'AI Assistant', sub: 'What the AI may say to customers of this business' },
         'wa-templates': { title: 'Message Templates', sub: 'Meta-approved messages for contacting customers after 24 hours' },
         'wa-entry': { title: 'Entry Links', sub: 'Website and ad links that open a WhatsApp chat and record where it came from' },
+        'blog-plan': { title: 'Blog Schedule', sub: 'Plan, approve and publish posts on their date' },
         'wa-config': { title: 'WhatsApp API & Webhook Setup', sub: 'Four steps: credentials, webhook, test, done' },
         'supabase': { title: 'Supabase Cloud Database', sub: 'PostgreSQL multi-tenant persistence and cloud backup status' },
         'logs': { title: 'System & Generation Logs', sub: 'Real-time audit log of AI generation, GitHub commits, and webhooks' },
@@ -145,6 +146,7 @@ function switchTab(tabName) {
     if (tabName === 'users') loadUsersAndRoles();
     if (tabName === 'wa-knowledge') loadKnowledge();
     if (tabName === 'wa-templates') loadTemplates();
+    if (tabName === 'blog-plan') loadPlan();
     if (tabName === 'wa-entry') loadEntryLinks();
     updateAlertsVisibility(tabName);
     if (tabName === 'repos') loadAlerts();
@@ -2050,9 +2052,9 @@ async function submitAddAutomation(e) {
 
 // Fallback map used until /api/auth/me returns a `permissions` list.
 const ROLE_PERMISSIONS = {
-    owner:  ['ai.manage', 'crm.read', 'crm.write', 'crm.delete', 'wa.config', 'automations.manage', 'broadcasts.run', 'content.read', 'content.publish', 'users.manage', 'audit.read', 'account.manage'],
-    admin:  ['ai.manage', 'crm.read', 'crm.write', 'crm.delete', 'wa.config', 'automations.manage', 'broadcasts.run', 'content.read', 'content.publish', 'users.manage', 'audit.read'],
-    agent:  ['crm.read', 'crm.write', 'content.read'],
+    owner:  ['content.write', 'ai.manage', 'crm.read', 'crm.write', 'crm.delete', 'wa.config', 'automations.manage', 'broadcasts.run', 'content.read', 'content.publish', 'users.manage', 'audit.read', 'account.manage'],
+    admin:  ['content.write', 'ai.manage', 'crm.read', 'crm.write', 'crm.delete', 'wa.config', 'automations.manage', 'broadcasts.run', 'content.read', 'content.publish', 'users.manage', 'audit.read'],
+    agent:  ['content.write', 'crm.read', 'crm.write', 'content.read'],
     viewer: ['crm.read', 'content.read']
 };
 const ROLE_HELP = {
@@ -2086,7 +2088,7 @@ function applyRolePermissions() {
     if (nav) nav.classList.toggle('hidden', !can('users.manage'));
     if (!getActiveAccountId()) {
         // No account chosen: CRM screens have nothing to show and every call would be rejected.
-        document.querySelectorAll('.sidebar-nav-item[onclick*="switchTab(\'wa-"], #nav-users').forEach(n => n.classList.add('hidden'));
+        document.querySelectorAll('.sidebar-nav-item[onclick*="switchTab(\'wa-"], #nav-users, #nav-blog-plan').forEach(n => n.classList.add('hidden'));
         document.querySelectorAll('header [onclick^="openAddContactModal"], header [onclick^="openAddDealModal"], header [onclick^="openAddBroadcastModal"]').forEach(n => n.classList.add('hidden'));
     }
     const cfgNav = document.querySelector("[onclick*=\"switchTab('wa-config')\"]");
@@ -2713,6 +2715,8 @@ async function resolveAlert(id) {
 }
 
 function reloadPhase1() {
+    planItems = []; closePlanForm(); document.getElementById('plan-list').innerHTML = '';
+    if (!document.getElementById('tab-blog-plan').classList.contains('hidden')) loadPlan();
     approvedTemplates = [];
     fillKnowledge({});
     document.getElementById('kb-test-result').innerText = '';
@@ -2847,4 +2851,155 @@ async function deleteEntryLink(id) {
     if (!confirm('Delete this link? Links already shared still open WhatsApp, but their enquiries are no longer labelled.')) return;
     const res = await apiDelete(`/api/entry-links/${id}`);
     if (res && res.success) loadEntryLinks();
+}
+
+// Blog schedule (BS-6). The server enforces every status change; buttons only reflect it.
+const PLAN_STATUS = { draft: ['Draft', 'text-slate-300'], needs_approval: ['Needs approval', 'text-amber-300'], approved: ['Approved', 'text-emerald-300'], published: ['Published', 'text-cyan-300'], failed: ['Failed', 'text-red-300'] };
+let planItems = [], planProjects = [], planView = 'list', planEditing = null, planMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+async function loadPlan() {
+    const acct = getActiveAccountId();
+    const list = document.getElementById('plan-list');
+    if (!acct) { list.innerHTML = emptyStateHtml('Choose an account', 'The schedule belongs to one account.'); return; }
+    const [data, projects] = await Promise.all([apiGet('/api/blog/plan'), apiGet('/api/projects')]);
+    if (acct !== getActiveAccountId()) return;
+    planProjects = (projects && projects.projects) || [];
+    const items = data && (data.items || data.plan || data.posts);
+    if (!items) { list.innerHTML = emptyStateHtml('Could not load the schedule', 'Try again in a moment.'); return; }
+    planItems = items;
+    const filter = document.getElementById('plan-filter-assignee');
+    const prev = filter.value;
+    const people = new Map(planItems.filter(i => i.assignee_id).map(i => [String(i.assignee_id), i.assignee_name || `User ${i.assignee_id}`]));
+    filter.innerHTML = '';
+    filter.add(new Option('Anyone', ''));
+    people.forEach((name, id) => filter.add(new Option(name, id)));
+    if ([...filter.options].some(o => o.value === prev)) filter.value = prev;
+    renderPlan();
+}
+function setPlanView(view) {
+    planView = view;
+    ['list', 'month'].forEach(v => document.getElementById(`plan-view-${v}`).setAttribute('aria-pressed', String(v === view)));
+    renderPlan();
+}
+function shiftPlanMonth(n) { planMonth = new Date(planMonth.getFullYear(), planMonth.getMonth() + n, 1); renderPlan(); }
+function planButton(i, compact) {
+    const [label, colour] = PLAN_STATUS[i.status] || [i.status, 'text-slate-300'];
+    if (compact) return `<button type="button" class="block w-full text-left text-[11px] truncate ${colour}" title="${escapeHtml(i.title)} (${escapeHtml(label)})" onclick="editPlan(${Number(i.id)})">${escapeHtml(i.title)}</button>`;
+    return `<article class="${cardClass}">
+        <div class="flex flex-wrap justify-between items-start gap-2">
+            <div class="min-w-0 flex-1">
+                <h3 class="text-sm font-semibold text-white break-words">${escapeHtml(i.title)}</h3>
+                <div class="text-[11px] text-slate-400">${escapeHtml([fmtWhen(i.publish_at), i.keyword, i.assignee_name].filter(Boolean).join(' · '))}</div>
+                <div class="text-xs font-semibold ${colour}">${escapeHtml(label)}${i.error ? ': ' + escapeHtml(i.error) : ''}</div>
+                ${/^https?:\/\//.test(i.post_url || '') ? `<a class="text-xs text-indigo-300 underline break-all" href="${escapeHtml(i.post_url)}" target="_blank" rel="noopener">View published post</a>` : ''}
+            </div>
+            <button type="button" class="btn-secondary text-xs" onclick="editPlan(${Number(i.id)})">Open</button>
+        </div></article>`;
+}
+function renderPlan() {
+    const status = document.getElementById('plan-filter-status').value;
+    const who = document.getElementById('plan-filter-assignee').value;
+    const items = planItems.filter(i => (!status || i.status === status) && (!who || String(i.assignee_id) === who))
+        .sort((a, b) => String(a.publish_at).localeCompare(String(b.publish_at)));
+    const list = document.getElementById('plan-list');
+    document.getElementById('plan-month-nav').classList.toggle('hidden', planView !== 'month');
+    if (planView === 'list') {
+        list.className = 'space-y-2';
+        list.innerHTML = items.length ? items.map(i => planButton(i)).join('') : emptyStateHtml('No planned posts', 'Plan a post, write or draft it, then get it approved.');
+        return;
+    }
+    document.getElementById('plan-month-title').innerText = planMonth.toLocaleDateString([], { month: 'long', year: 'numeric' });
+    const days = new Date(planMonth.getFullYear(), planMonth.getMonth() + 1, 0).getDate();
+    const lead = (planMonth.getDay() + 6) % 7;
+    let cells = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => `<div class="text-[10px] text-slate-500 text-center">${d}</div>`).join('') + '<div></div>'.repeat(lead);
+    for (let d = 1; d <= days; d++) {
+        const day = new Date(planMonth.getFullYear(), planMonth.getMonth(), d).toDateString();
+        cells += `<div class="border border-slate-800 rounded p-1 min-h-[3.5rem] min-w-0"><div class="text-[10px] text-slate-400">${d}</div>${items.filter(i => new Date(i.publish_at).toDateString() === day).map(i => planButton(i, true)).join('')}</div>`;
+    }
+    list.className = 'grid grid-cols-7 gap-1';
+    list.innerHTML = cells;
+}
+function localInput(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+function previewPlan() { document.getElementById('plan-preview').innerText = document.getElementById('plan-body').value || 'Nothing written yet.'; }
+async function editPlan(id) {
+    let item = id ? planItems.find(x => x.id === id) : null;
+    if (id && !item) return;
+    planEditing = item;
+    const form = document.getElementById('plan-form');
+    form.reset();
+    const projects = document.getElementById('plan-project');
+    projects.innerHTML = '';
+    projects.add(new Option(planProjects.length ? 'Choose a project' : 'No blog project yet. Connect one first.', ''));
+    planProjects.forEach(p => projects.add(new Option(p.name || p.repo_name || `Project ${p.id}`, String(p.id))));
+    const people = document.getElementById('plan-assignee');
+    people.innerHTML = '';
+    people.add(new Option('Nobody', ''));
+    if (currentUser) people.add(new Option('Me', String(currentUser.id)));
+    if (can('users.manage')) {
+        const d = await apiGet(`/api/accounts/${encodeURIComponent(getActiveAccountId())}/users`);
+        ((d && d.users) || []).filter(u => u.user_id !== currentUser.id).forEach(u => people.add(new Option(u.username, String(u.user_id))));
+    }
+    if (item) {
+        if (item.assignee_id && ![...people.options].some(o => o.value === String(item.assignee_id))) people.add(new Option(item.assignee_name || 'Teammate', String(item.assignee_id)));
+        const set = (k, v) => { document.getElementById(k).value = v == null ? '' : v; };
+        set('plan-title', item.title); set('plan-topic', item.topic); set('plan-keyword', item.keyword);
+        set('plan-when', localInput(item.publish_at)); set('plan-project', item.project_id); set('plan-assignee', item.assignee_id); set('plan-body', item.body);
+    }
+    const st = item ? item.status : null;
+    const published = st === 'published';
+    const write = can('content.write') && !published;
+    document.getElementById('plan-form-h').innerText = item ? 'Planned post' : 'Plan a post';
+    document.getElementById('plan-form-note').innerText = st === 'approved' ? 'Approved. Saving a change sends it back for approval.' : published ? 'Published. It can no longer be edited.' : '';
+    document.getElementById('plan-fields').disabled = !write;
+    const show = (k, on) => document.getElementById(k).classList.toggle('hidden', !on);
+    show('plan-save', write);
+    show('plan-draft', write && !!item);
+    show('plan-submit', write && !!item && (st === 'draft' || st === 'failed'));
+    show('plan-approve', !!item && st === 'needs_approval' && can('content.publish'));
+    show('plan-delete', write && !!item);
+    previewPlan();
+    form.classList.remove('hidden');
+    form.scrollIntoView({ block: 'nearest' });
+    (write ? document.getElementById('plan-title') : form.querySelector('button:not(.hidden)')).focus();
+}
+function closePlanForm() { planEditing = null; document.getElementById('plan-form').classList.add('hidden'); }
+function planBody() {
+    const val = k => document.getElementById(k).value.trim();
+    return { title: val('plan-title'), topic: val('plan-topic'), keyword: val('plan-keyword'), publish_at: new Date(val('plan-when')).toISOString(),
+             project_id: Number(val('plan-project')) || val('plan-project'), assignee_id: val('plan-assignee') ? Number(val('plan-assignee')) : null, body: document.getElementById('plan-body').value };
+}
+function planDirty() {
+    if (!planEditing) return false;
+    const b = planBody();
+    return ['title', 'topic', 'keyword', 'body'].some(k => (planEditing[k] || '') !== b[k]) || localInput(planEditing.publish_at) !== document.getElementById('plan-when').value
+        || String(planEditing.project_id || '') !== String(b.project_id || '') || String(planEditing.assignee_id || '') !== String(b.assignee_id || '');
+}
+async function savePlan(e) {
+    e.preventDefault();
+    const res = planEditing ? await apiCall('PATCH', `/api/blog/plan/${planEditing.id}`, planBody()) : await apiPost('/api/blog/plan', planBody());
+    if (res && !res.error) { showToast('Saved.', 'success'); closePlanForm(); loadPlan(); }
+}
+async function planAction(action) {
+    const item = planEditing;
+    if (!item) return;
+    // Never submit or approve text other than what is on screen.
+    if (planDirty()) { showToast('Save your changes first.', 'error'); return; }
+    if (action === 'draft' && item.body && !confirm('Replace the article text with a new AI draft?')) return;
+    const btn = document.getElementById(`plan-${action}`);
+    btn.disabled = true;
+    const res = await apiPost(`/api/blog/plan/${item.id}/${action}`, {});
+    btn.disabled = false;
+    if (!res || res.error) return;
+    showToast({ draft: 'Draft ready. Read it before submitting.', submit: 'Sent for approval.', approve: 'Approved. It will publish on its date.' }[action], 'success');
+    await loadPlan();
+    if (planEditing && planEditing.id === item.id) editPlan(item.id);
+}
+async function deletePlan() {
+    if (!planEditing || !confirm('Delete this planned post?')) return;
+    const res = await apiDelete(`/api/blog/plan/${planEditing.id}`);
+    if (res && !res.error) { closePlanForm(); loadPlan(); }
 }

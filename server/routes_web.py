@@ -373,6 +373,9 @@ def render_dashboard_html() -> str:
                         </span>
                         <span id="sidebar-badge-repos" class="sidebar-badge bg-slate-800 text-slate-300">-</span>
                     </a>
+                    <a class="sidebar-nav-item" id="nav-blog-plan" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('blog-plan')">
+                        <span class="flex items-center gap-2"><span aria-hidden="true">🗓️</span><span>Blog Schedule</span></span>
+                    </a>
                     <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('staging')">
                         <span class="flex items-center gap-2">
                             <span>✍️</span>
@@ -1127,6 +1130,51 @@ def render_dashboard_html() -> str:
             </form>
             <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4"><h2 class="text-sm font-semibold text-white mb-2">Enquiries by source</h2><div id="entry-counts" class="flex flex-wrap gap-2"></div></div>
             <div id="entry-list" class="space-y-3"></div>
+        </div>
+
+        <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
+        <div id="tab-blog-plan" class="tab-content hidden">
+            <div class="flex flex-wrap items-end gap-2 mb-4">
+                <div role="group" aria-label="View" class="flex gap-1">
+                    <button type="button" id="plan-view-list" class="btn-secondary text-xs" aria-pressed="true" onclick="setPlanView('list')">List</button>
+                    <button type="button" id="plan-view-month" class="btn-secondary text-xs" aria-pressed="false" onclick="setPlanView('month')">Month</button>
+                </div>
+                <label class="sr-only" for="plan-filter-status">Status</label>
+                <select id="plan-filter-status" class="input-select text-xs w-auto" onchange="renderPlan()"><option value="">All statuses</option><option value="draft">Draft</option><option value="needs_approval">Needs approval</option><option value="approved">Approved</option><option value="published">Published</option><option value="failed">Failed</option></select>
+                <label class="sr-only" for="plan-filter-assignee">Assignee</label>
+                <select id="plan-filter-assignee" class="input-select text-xs w-auto" onchange="renderPlan()"><option value="">Anyone</option></select>
+                <button type="button" data-requires="content.write" class="btn-primary text-xs ml-auto" onclick="editPlan(null)">+ Plan a post</button>
+            </div>
+            <div id="plan-month-nav" class="hidden flex items-center justify-between mb-2">
+                <button type="button" class="btn-secondary text-xs" onclick="shiftPlanMonth(-1)">&larr; Previous</button>
+                <h2 id="plan-month-title" class="text-sm font-semibold text-white" aria-live="polite"></h2>
+                <button type="button" class="btn-secondary text-xs" onclick="shiftPlanMonth(1)">Next &rarr;</button>
+            </div>
+            <form id="plan-form" onsubmit="savePlan(event)" class="hidden bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4 space-y-3">
+                <h2 id="plan-form-h" class="text-sm font-semibold text-white">Plan a post</h2>
+                <p id="plan-form-note" class="text-xs text-amber-200"></p>
+                <fieldset id="plan-fields" class="space-y-3">
+                    <div><label for="plan-title" class="block text-xs text-slate-400 mb-1">Title</label><input id="plan-title" class="input-text text-sm w-full" required maxlength="200"></div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div><label for="plan-topic" class="block text-xs text-slate-400 mb-1">Topic</label><input id="plan-topic" class="input-text text-sm w-full" maxlength="300"></div>
+                        <div><label for="plan-keyword" class="block text-xs text-slate-400 mb-1">Target keyword</label><input id="plan-keyword" class="input-text text-sm w-full" maxlength="100"></div>
+                        <div><label for="plan-when" class="block text-xs text-slate-400 mb-1">Publish date and time (your local time)</label><input id="plan-when" class="input-text text-sm w-full" type="datetime-local" required></div>
+                        <div><label for="plan-project" class="block text-xs text-slate-400 mb-1">Blog project</label><select id="plan-project" class="input-select text-sm w-full" required></select></div>
+                        <div><label for="plan-assignee" class="block text-xs text-slate-400 mb-1">Assignee</label><select id="plan-assignee" class="input-select text-sm w-full" ></select></div>
+                    </div>
+                    <div><label for="plan-body" class="block text-xs text-slate-400 mb-1">Article (Markdown)</label><textarea id="plan-body" class="input-text text-sm w-full font-mono" rows="10" oninput="previewPlan()"></textarea></div>
+                </fieldset>
+                <details><summary class="text-xs text-indigo-300 cursor-pointer">Preview</summary><div id="plan-preview" class="text-sm text-slate-200 mt-2 whitespace-pre-wrap break-words"></div></details>
+                <div class="flex flex-wrap gap-2">
+                    <button type="submit" id="plan-save" class="btn-primary text-xs">Save</button>
+                    <button type="button" id="plan-draft" class="btn-secondary text-xs" onclick="planAction('draft')">Draft with AI</button>
+                    <button type="button" id="plan-submit" class="btn-secondary text-xs" onclick="planAction('submit')">Submit for approval</button>
+                    <button type="button" id="plan-approve" class="btn-secondary text-xs text-emerald-300" onclick="planAction('approve')">Approve</button>
+                    <button type="button" id="plan-delete" class="btn-secondary text-xs text-red-300" onclick="deletePlan()">Delete</button>
+                    <button type="button" class="btn-secondary text-xs" onclick="closePlanForm()">Close</button>
+                </div>
+            </form>
+            <div id="plan-list" class="space-y-2"></div>
         </div>
 
         <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
