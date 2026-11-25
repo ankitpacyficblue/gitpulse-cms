@@ -161,6 +161,11 @@ def init_schema(conn) -> None:
     conv_cols = {r[1] for r in cur.execute("PRAGMA table_info(conversations)").fetchall()}
     if "assigned_user_id" not in conv_cols:
         cur.execute("ALTER TABLE conversations ADD COLUMN assigned_user_id INTEGER")
+    # One conversation per contact. Created only when no duplicates exist yet (a failed index build would
+    # abort the Postgres transaction); the code also guards the race in get_or_create_conversation.
+    dup = cur.execute("SELECT 1 FROM conversations GROUP BY account_id, contact_id HAVING COUNT(*) > 1").fetchone()
+    if not dup:
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_one_per_contact ON conversations (account_id, contact_id)")
     for stmt in (
         "CREATE INDEX IF NOT EXISTS idx_contacts_acct ON contacts (account_id, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_conv_acct ON conversations (account_id, last_message_at)",
@@ -606,8 +611,16 @@ def _conv(row) -> Dict[str, Any]:
     return d
 
 
-def list_conversations(account_id: str, status: str = "", assigned_user_id: Optional[int] = None) -> List[Dict[str, Any]]:
+def list_conversations(account_id: str, status: str = "", assigned_user_id: Optional[int] = None,
+                       include_empty: bool = True, contact_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """include_empty=False hides conversations that have no message yet (the API default). A contact_id
+    filter returns that contact's conversation even when empty."""
     q, p = _CONV_SELECT + " WHERE conv.account_id = ?", [account_id]
+    if contact_id is not None:
+        q += " AND conv.contact_id = ?"
+        p.append(contact_id)
+    elif not include_empty:
+        q += " AND EXISTS (SELECT 1 FROM messages mm WHERE mm.conversation_id = conv.id AND mm.account_id = conv.account_id)"
     if assigned_user_id is not None:
         q += " AND conv.assigned_user_id = ?"
         p.append(assigned_user_id)
@@ -650,12 +663,19 @@ def get_or_create_conversation(account_id: str, contact_id: int) -> Optional[Dic
                            (account_id, contact_id)).fetchone()
         if not row:
             now = _now()
-            cur = conn.execute("""INSERT INTO conversations (account_id, contact_id, status, assigned_to, unread_count,
-                                  last_message_at, last_message_preview, created_at, updated_at)
-                                  VALUES (?,?,'open','Team',0,?,'New conversation',?,?)""",
-                               (account_id, contact_id, now, now, now))
-            conn.commit()
-            return get_conversation(account_id, cur.lastrowid)
+            try:
+                cur = conn.execute("""INSERT INTO conversations (account_id, contact_id, status, assigned_to, unread_count,
+                                      last_message_at, last_message_preview, created_at, updated_at)
+                                      VALUES (?,?,'open','Team',0,?,'New conversation',?,?)""",
+                                   (account_id, contact_id, now, now, now))
+                conn.commit()
+                return get_conversation(account_id, cur.lastrowid)
+            except Exception as e:
+                if not dbcompat.is_unique_violation(e):
+                    raise
+                conn.rollback()      # another request created it first: use that one
+            row = conn.execute("SELECT id FROM conversations WHERE account_id = ? AND contact_id = ?",
+                               (account_id, contact_id)).fetchone()
     return get_conversation(account_id, row["id"])
 
 

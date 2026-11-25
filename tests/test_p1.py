@@ -237,3 +237,65 @@ class PlatformAdminTests(P1Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OneConversationTests(P1Base):
+    def test_one_inbound_makes_one_contact_and_one_conversation(self):
+        import threading
+        acct = new_account()
+        u = new_user("conv")
+        join(acct, u, "owner")
+        Caller(u, acct)("POST", "/api/whatsapp/config", {"phone_number_id": "pn-conv-1", "access_token": "t", "app_secret": "s"})
+        from engine.whatsapp_client import WhatsAppClient
+
+        def inbound(mid):
+            WhatsAppClient.process_incoming_webhook({"entry": [{"changes": [{"value": {
+                "metadata": {"phone_number_id": "pn-conv-1"}, "contacts": [{"wa_id": "919800000555", "profile": {"name": "N"}}],
+                "messages": [{"from": "919800000555", "id": mid, "type": "text", "text": {"body": "hi"}}]}}]}]})
+        inbound("wamid.c1")
+        inbound("wamid.c2")
+        self.assertEqual(len(cs.list_contacts(acct)), 1)
+        self.assertEqual(len(cs.list_conversations(acct)), 1)
+
+    def test_get_or_create_is_race_safe(self):
+        import threading
+        acct = new_account()
+        cid = cs.create_contact(acct, "R", "+919800000666")
+        out = []
+        ts = [threading.Thread(target=lambda: out.append(cs.get_or_create_conversation(acct, cid)["id"])) for _ in range(6)]
+        [t.start() for t in ts]; [t.join() for t in ts]
+        self.assertEqual(len(set(out)), 1)
+        self.assertEqual(len(cs.list_conversations(acct)), 1)
+
+    def test_preview_csp_allows_toolbar_only_on_preview(self):
+        import importlib, server.security as sec
+        with mock.patch.dict(os.environ, {"VERCEL_ENV": "preview"}):
+            importlib.reload(sec)
+            self.assertIn("vercel.live", dict(sec.SECURITY_HEADERS)["Content-Security-Policy"])
+        with mock.patch.dict(os.environ, {"VERCEL_ENV": "production"}):
+            importlib.reload(sec)
+            self.assertNotIn("vercel.live", dict(sec.SECURITY_HEADERS)["Content-Security-Policy"])
+        importlib.reload(sec)
+
+
+class EmptyConversationFilterTests(P1Base):
+    def test_default_hides_empty_and_flags_show_them(self):
+        acct = new_account()
+        u = new_user("emp")
+        join(acct, u, "owner")
+        o = Caller(u, acct)
+        cid = o("POST", "/api/whatsapp/contacts", {"name": "Empty", "phone": "+919811100001"})[1]["id"]
+        self.assertEqual(o("GET", "/api/whatsapp/conversations")[1]["conversations"], [])
+        self.assertEqual(len(o("GET", "/api/whatsapp/conversations", query={"include_empty": "1"})[1]["conversations"]), 1)
+        mine = o("GET", "/api/whatsapp/conversations", query={"contact_id": str(cid)})[1]["conversations"]
+        self.assertEqual(len(mine), 1)
+        cv = mine[0]["id"]
+        cs.create_message(acct, cv, cid, "outbound", "hello")
+        self.assertEqual(len(o("GET", "/api/whatsapp/conversations")[1]["conversations"]), 1)
+
+    def test_contact_id_of_another_account_returns_nothing(self):
+        a, b = new_account(), new_account()
+        ua, ub = new_user("ea"), new_user("eb")
+        join(a, ua, "owner"); join(b, ub, "owner")
+        cid = Caller(ua, a)("POST", "/api/whatsapp/contacts", {"name": "X", "phone": "+919811100002"})[1]["id"]
+        self.assertEqual(Caller(ub, b)("GET", "/api/whatsapp/conversations", query={"contact_id": str(cid)})[1]["conversations"], [])

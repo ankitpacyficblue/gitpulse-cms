@@ -721,7 +721,9 @@ def contacts_delete(ctx, m, q, body):
 @route("GET", r"/api/whatsapp/conversations", "acct:crm.read")
 def conv_list(ctx, m, q, body):
     mine = ctx.user["id"] if q.get("assigned") == "me" else None
-    return 200, {"conversations": cs.list_conversations(ctx.account_id, status=q.get("status", ""), assigned_user_id=mine)}
+    return 200, {"conversations": cs.list_conversations(
+        ctx.account_id, status=q.get("status", ""), assigned_user_id=mine,
+        include_empty=q.get("include_empty") in ("1", "true", "yes"), contact_id=_int(q.get("contact_id")))}
 
 
 @route("PUT", r"/api/whatsapp/conversations/(?P<id>\d+)/assign", "acct:crm.write")
