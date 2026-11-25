@@ -15,6 +15,7 @@ Access control is table driven and default-deny:
   in a query string or body is never used.
 """
 
+import dbcompat
 import json
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -615,7 +616,7 @@ def wa_config_save(ctx, m, q, body):
             business_name=body.get("business_name"), phone_number=body.get("phone_number"),
             access_token=body.get("access_token") or "", app_secret=body.get("app_secret") or "")
     except Exception as e:
-        if "UNIQUE" in str(e):
+        if dbcompat.is_unique_violation(e):
             return 409, {"error": "phone_number_in_use", "message": "That WhatsApp phone number id is already connected to another account."}
         raise
     db.log_event("WhatsApp configuration updated.", "INFO", account_id=ctx.account_id)
@@ -662,7 +663,7 @@ def contacts_update(ctx, m, q, body):
     try:
         ok = cs.update_contact(ctx.account_id, int(m.group("id")), **fields)
     except Exception as e:
-        if "UNIQUE" in str(e):
+        if dbcompat.is_unique_violation(e):
             return 409, {"error": "duplicate_phone"}
         raise
     return (200, {"success": True}) if ok else (404, {"error": "Contact not found."})

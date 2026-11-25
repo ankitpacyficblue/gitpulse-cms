@@ -9,6 +9,7 @@ DELETE. There is no "all accounts" read path. Ids from a request are never
 trusted on their own: a row is only reachable together with its account_id.
 """
 
+import dbcompat
 import hashlib
 import hmac
 import json
@@ -500,7 +501,7 @@ def create_contact(account_id: str, name: str, phone: str, email: str = "", tags
                                (account_id, name.strip(), phone.strip(), _norm_phone(phone), email.strip(),
                                 json.dumps(tags_list), notes.strip(), now, now))
         except Exception as e:
-            if "UNIQUE" in str(e):
+            if dbcompat.is_unique_violation(e):
                 raise ValueError("duplicate_phone")
             raise
         conn.commit()

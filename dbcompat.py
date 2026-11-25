@@ -26,6 +26,12 @@ AUTOID_TABLES = {
 }
 
 
+def is_unique_violation(exc: Exception) -> bool:
+    """True for a unique-constraint error from SQLite ("UNIQUE constraint failed") or Postgres (23505)."""
+    t = str(exc)
+    return "UNIQUE" in t or "23505" in t or "duplicate key" in t.lower()
+
+
 def database_url() -> str:
     return os.environ.get("DATABASE_URL", "").strip()
 
@@ -256,6 +262,15 @@ def connect_postgres() -> PGConnection:
         database=(u.path or "/postgres").lstrip("/") or "postgres",
         ssl_context=ssl_context(url), timeout=20,
     )
+    schema = os.environ.get("DATABASE_SCHEMA", "").strip()
+    if schema:
+        # Isolated schema (e.g. a throwaway test run). Name is validated, never interpolated raw.
+        if not re.fullmatch(r"[a-z_][a-z0-9_]{0,40}", schema):
+            raise ValueError("invalid DATABASE_SCHEMA")
+        cur = raw.cursor()
+        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+        cur.execute(f"SET search_path TO {schema}")
+        raw.commit()
     return PGConnection(raw)
 
 

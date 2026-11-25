@@ -110,6 +110,13 @@ class WrapperTests(unittest.TestCase):
                 os.environ["DATABASE_URL"] = old
 
 
+class UniqueTests(unittest.TestCase):
+    def test_detects_sqlite_and_postgres(self):
+        self.assertTrue(dbcompat.is_unique_violation(Exception("UNIQUE constraint failed: contacts.phone_norm")))
+        self.assertTrue(dbcompat.is_unique_violation(Exception("{'C': '23505', 'M': 'duplicate key value violates unique constraint'}")))
+        self.assertFalse(dbcompat.is_unique_violation(Exception("syntax error")))
+
+
 class SslTests(unittest.TestCase):
     def setUp(self):
         import os
