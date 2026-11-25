@@ -357,46 +357,106 @@ class EntryTests(Base):
         self.assertEqual(self.api_b("DELETE", f"/api/entry-links/{link['id']}")[0], 404)
 
 
-class BlogTests(Base):
-    def project(self, **extra):
-        pid = db.create_project(dict({"name": "Site", "github_repo": "x/y", "topic": "farm plots", "publish_time": "00:00",
-                                      "target_framework": "generic"}, **extra), self.a)
-        return pid
+class BlogPlanTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.writer = self.agent_api
+        self.pid = db.create_project({"name": "Site", "github_repo": "x/y", "topic": "farm plots",
+                                      "target_framework": "generic"}, self.a)
 
-    def tick_project(self, pid):
-        jobs.tick(limit=1000)
-        return [p for p in db.list_posts_for_account(self.a, limit=50) if p["project_id"] == pid]
+    def new(self, minutes=-1, api=None, **extra):
+        when = (datetime.utcnow() + timedelta(minutes=minutes)).isoformat() + "Z"
+        code, out = (api or self.writer)("POST", "/api/blog/plan", dict(
+            {"title": "Visiting the plots", "body": "Visits are on weekends.", "publish_at": when, "project_id": self.pid}, **extra))
+        self.assertEqual(code, 201, out)
+        return out["item"]["id"]
 
-    def test_no_ai_key_means_no_post_and_an_alert_once_a_day(self):
-        pid = self.project()
-        db.set_setting("ai_provider", "gemini")
-        with mock.patch("engine.pipeline.DEFAULT_GEMINI_API_KEY", ""), mock.patch("engine.pipeline.fetch_repo_readme", return_value=""):
-            self.assertEqual(self.tick_project(pid), [])
-            self.assertEqual(self.tick_project(pid), [])
-        self.assertEqual(len(self.alerts("blog_failed")), 1)
-        self.assertEqual(self.alerts("blog_failed")[0]["count"], 1)
+    def step(self, item, action, api=None):
+        return (api or self.api)("POST", f"/api/blog/plan/{item}/{action}")
 
-    def test_review_by_default_and_banned_claim_is_held(self):
-        self.api("PUT", "/api/ai/knowledge", KNOWLEDGE)
-        pid = self.project()
-        self.assertEqual(db.get_project(pid)["auto_publish"], 0)
-        article = {"title": "Plots", "slug": "plots", "excerpt": "e", "tags": [], "meta_seo": {}, "image_prompt": "",
-                   "content_markdown": "These plots are RERA approved."}
-        with mock.patch("engine.pipeline.AIGenerator.generate_article", return_value=article), \
-                mock.patch("engine.pipeline.fetch_repo_readme", return_value=""):
-            posts = self.tick_project(pid)
-        self.assertEqual([p["status"] for p in posts], ["in_review"])
-        self.assertIn("banned claim", self.alerts("blog_failed")[0]["message"])
+    def item(self, item):
+        return next(i for i in self.api("GET", "/api/blog/plan")[1]["items"] if i["id"] == item)
 
-    def test_auto_publish_without_github_token_fails_instead_of_pretending(self):
-        pid = self.project(auto_publish=True)
-        article = {"title": "Plots", "slug": "plots", "excerpt": "e", "tags": [], "meta_seo": {}, "image_prompt": "",
-                   "content_markdown": "Plots near Mysuru."}
-        with mock.patch("engine.pipeline.AIGenerator.generate_article", return_value=article), \
-                mock.patch("engine.pipeline.fetch_repo_readme", return_value=""):
-            posts = self.tick_project(pid)
-        self.assertEqual([p["status"] for p in posts], ["failed"])
+    def publisher(self, success=True):
+        res = {"success": success, "pr_url": "https://github.com/x/y/pull/1", "error": "boom"}
+        return mock.patch("engine.github_client.GitHubClient.publish_post", return_value=res)
+
+    def test_roles_and_illegal_jumps(self):
+        self.assertEqual(self.viewer_api("POST", "/api/blog/plan", {"title": "x"})[0], 403)
+        item = self.new()
+        self.assertEqual(self.step(item, "approve")[0], 409)                      # draft cannot jump to approved
+        self.assertEqual(self.step(item, "submit", self.writer)[0], 200)
+        self.assertEqual(self.step(item, "approve", self.writer)[0], 403)         # writers cannot approve
+        self.assertEqual(self.step(item, "approve")[0], 200)
+        self.assertEqual(self.step(item, "submit")[0], 409)
+
+    def test_scoping(self):
+        item = self.new()
+        self.assertEqual(self.api_b("PATCH", f"/api/blog/plan/{item}", {"title": "mine"})[0], 404)
+        self.assertEqual(self.api_b("GET", "/api/blog/plan")[1]["items"], [])
+        self.assertEqual(self.api("POST", "/api/blog/plan", {"title": "t", "assignee_id": 10 ** 9})[0], 404)
+        self.assertEqual(self.api_b("POST", "/api/blog/plan", {"title": "t", "project_id": self.pid})[0], 404)
+
+    def test_editing_approved_post_needs_approval_again(self):
+        item = self.new(minutes=60)
+        self.step(item, "submit"), self.step(item, "approve")
+        self.writer("PATCH", f"/api/blog/plan/{item}", {"assignee_id": self.agent["id"]})
+        self.assertEqual(self.item(item)["status"], "approved")
+        self.writer("PATCH", f"/api/blog/plan/{item}", {"body": "New text"})
+        self.assertEqual(self.item(item)["status"], "needs_approval")
+
+    def test_only_due_approved_posts_publish_once(self):
+        cs.save_account_settings(self.a, github_token="gh-test-token")
+        due, later, unapproved = self.new(), self.new(minutes=600), self.new()
+        for item in (due, later):
+            self.step(item, "submit"), self.step(item, "approve")
+        self.step(unapproved, "submit")
+        with self.publisher() as pub:
+            jobs.tick(limit=1000)
+            jobs.tick(limit=1000)
+        self.assertEqual(pub.call_count, 1)
+        self.assertIn("Visits are on weekends.", pub.call_args.kwargs["file_content"])
+        self.assertEqual([self.item(i)["status"] for i in (due, later, unapproved)], ["published", "approved", "needs_approval"])
+        self.assertTrue(self.item(due)["post_url"])
+        self.assertEqual(self.writer("PATCH", f"/api/blog/plan/{due}", {"title": "z"})[0], 409)
+
+    def test_failure_and_missing_token_raise_alert_and_do_not_repeat(self):
+        item = self.new()
+        self.step(item, "submit"), self.step(item, "approve")
+        with self.publisher() as pub:
+            jobs.tick(limit=1000)
+            jobs.tick(limit=1000)
+        self.assertEqual(pub.call_count, 0)
+        self.assertEqual(self.item(item)["status"], "failed")
         self.assertIn("GitHub token", self.alerts("blog_failed")[0]["message"])
+
+    def test_banned_claim_cannot_be_approved(self):
+        self.api("PUT", "/api/ai/knowledge", {"banned_claims": ["guaranteed returns"]})
+        item = self.new(body="Guaranteed returns for all.")
+        self.step(item, "submit")
+        self.assertEqual(self.step(item, "approve")[1]["error"], "blocked")
+
+    def test_empty_item_is_drafted_then_waits_for_approval(self):
+        item = self.new(body="")
+        article = {"content_markdown": "## Visits\nCome on a weekend."}
+        with mock.patch("engine.ai_generator.AIGenerator.generate_article", return_value=article), self.publisher() as pub:
+            jobs.tick(limit=1000)
+        self.assertEqual(self.item(item)["status"], "needs_approval")
+        self.assertEqual(pub.call_count, 0)
+
+    def test_ai_failure_leaves_the_draft_empty_with_alert(self):
+        item = self.new(body="")
+        db.set_setting("ai_provider", "gemini")
+        with mock.patch("config.DEFAULT_GEMINI_API_KEY", ""):
+            self.assertEqual(self.step(item, "draft")[0], 502)
+            jobs.tick(limit=1000)
+        self.assertEqual((self.item(item)["status"], self.item(item)["body"]), ("draft", ""))
+        self.assertEqual(len(self.alerts("blog_failed")), 1)
+
+    def test_nothing_planned_means_nothing_published(self):
+        with self.publisher() as pub:
+            jobs.tick(limit=1000)
+        self.assertEqual((pub.call_count, db.list_posts_for_account(self.a, limit=5)), (0, []))
 
 
 if __name__ == "__main__":

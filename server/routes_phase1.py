@@ -9,7 +9,7 @@ import urllib.parse
 
 import crm_store as cs
 import database as db
-from engine import alerts, assistant, jobs, messaging
+from engine import alerts, assistant, blog_plan, jobs, messaging
 from engine.whatsapp_client import WhatsAppClient
 from server.routes_api import route
 
@@ -179,3 +179,56 @@ def entry_links_delete(ctx, m, q, body):
                           (int(m.group("id")), ctx.account_id)).rowcount > 0
         conn.commit()
     return (200, {"success": True}) if ok else (404, {"error": "Entry link not found."})
+
+
+# ------------------------------------------------------------------ blog plan
+
+def _plan(fn, status: int = 200):
+    try:
+        return status, {"success": True, "item": fn()}
+    except blog_plan.PlanError as e:
+        return e.status, {"success": False, "error": e.code, "message": e.message}
+
+
+@route("GET", r"/api/blog/plan", "acct:content.read")
+def plan_list(ctx, m, q, body):
+    assignee = q.get("assignee_id", "")
+    return 200, {"items": blog_plan.list_items(ctx.account_id, status=q.get("status", ""),
+                                               assignee_id=int(assignee) if assignee.isdigit() else None)}
+
+
+@route("POST", r"/api/blog/plan", "acct:content.write")
+def plan_create(ctx, m, q, body):
+    return _plan(lambda: blog_plan.create(ctx.account_id, body), 201)
+
+
+@route("PATCH", r"/api/blog/plan/(?P<id>\d+)", "acct:content.write")
+def plan_update(ctx, m, q, body):
+    return _plan(lambda: blog_plan.update(ctx.account_id, int(m.group("id")), body))
+
+
+@route("DELETE", r"/api/blog/plan/(?P<id>\d+)", "acct:content.write")
+def plan_delete(ctx, m, q, body):
+    try:
+        blog_plan.delete(ctx.account_id, int(m.group("id")))
+    except blog_plan.PlanError as e:
+        return e.status, {"success": False, "error": e.code, "message": e.message}
+    return 200, {"success": True}
+
+
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/draft", "acct:content.write")
+def plan_draft(ctx, m, q, body):
+    return _plan(lambda: blog_plan.draft(ctx.account_id, int(m.group("id"))))
+
+
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/submit", "acct:content.write")
+def plan_submit(ctx, m, q, body):
+    return _plan(lambda: blog_plan.submit(ctx.account_id, int(m.group("id"))))
+
+
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/approve", "acct:content.publish")
+def plan_approve(ctx, m, q, body):
+    res = _plan(lambda: blog_plan.approve(ctx.account_id, int(m.group("id"))))
+    if res[0] == 200:
+        db.log_event(f"Planned post #{m.group('id')} approved by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
+    return res

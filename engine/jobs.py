@@ -114,8 +114,8 @@ def run_job(job_id: int) -> str:
 
 def maybe_tick() -> None:
     """Drain the message queue on a normal request, because a daily cron alone is too slow for retries.
-    At most once a minute across all instances (compare-and-set on the last tick time). Never runs the
-    blog job (too slow for someone waiting) and never raises. On for Vercel, or OPPORTUNISTIC_TICK=1."""
+    At most once a minute across all instances (compare-and-set on the last tick time). Never writes
+    AI blog drafts (too slow for someone waiting) and never raises. On for Vercel, or OPPORTUNISTIC_TICK=1."""
     global _checked_at
     if not (os.environ.get("VERCEL") or os.environ.get("OPPORTUNISTIC_TICK") == "1"):
         return
@@ -140,7 +140,7 @@ def maybe_tick() -> None:
 
 
 def tick(budget: float = TICK_BUDGET_SECONDS, limit: int = 100, blogs: bool = True) -> Dict[str, int]:
-    from engine import messaging, assistant, blog_jobs  # noqa: F401  (registers the handlers)
+    from engine import messaging, assistant, blog_plan  # noqa: F401  (registers the handlers)
     started = time.time()
     db.set_setting("worker_last_tick", str(started))
     with db.get_connection() as conn:
@@ -148,9 +148,11 @@ def tick(budget: float = TICK_BUDGET_SECONDS, limit: int = 100, blogs: bool = Tr
                                                 (started - STALE_SECONDS,)).fetchall()]
     for job in stale:
         _fail(job, "Interrupted; not repeated in case it already went out.", job["attempts"] + 1)
+    # Publishing approved posts is quick enough for any tick; writing a draft with AI is not.
+    blog_plan.schedule_due()
     if blogs:
-        blog_jobs.schedule_due()
-    only = "" if blogs else " AND kind != 'blog_run'"
+        blog_plan.schedule_drafts()
+    only = "" if blogs else " AND kind != 'plan_draft'"
     with db.get_connection() as conn:
         due = [r["id"] for r in conn.execute(f"SELECT id FROM jobs WHERE status = 'pending' AND run_at <= ?{only} "
                                              "ORDER BY run_at, id LIMIT ?", (time.time(), limit)).fetchall()]

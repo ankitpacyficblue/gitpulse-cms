@@ -198,6 +198,14 @@ def init_schema(conn) -> None:
         label TEXT NOT NULL, code TEXT NOT NULL, prefill TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
         UNIQUE (account_id, code)
     )""")
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS blog_plan (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        project_id INTEGER, title TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '', keyword TEXT NOT NULL DEFAULT '',
+        publish_at TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'draft', body TEXT NOT NULL DEFAULT '',
+        assignee_id INTEGER, post_url TEXT NOT NULL DEFAULT '', post_id INTEGER, error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""")
     for table, columns in (
         ("contacts", (("consent_status", "TEXT NOT NULL DEFAULT 'unknown'"), ("consent_source", "TEXT NOT NULL DEFAULT ''"),
                       ("consent_at", "TEXT NOT NULL DEFAULT ''"), ("consent_wording", "TEXT NOT NULL DEFAULT ''"),
@@ -217,6 +225,7 @@ def init_schema(conn) -> None:
             if col not in have:
                 cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
     for stmt in (
+        "CREATE INDEX IF NOT EXISTS idx_blog_plan_acct ON blog_plan (account_id, publish_at)",
         "CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs (status, run_at)",
         "CREATE INDEX IF NOT EXISTS idx_alerts_acct ON alerts (account_id, resolved_at)",
         "CREATE INDEX IF NOT EXISTS idx_contacts_acct ON contacts (account_id, updated_at)",

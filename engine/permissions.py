@@ -10,7 +10,7 @@ from typing import Dict, FrozenSet, Optional
 ROLES = ("owner", "admin", "agent", "viewer")
 
 _VIEWER = frozenset({"crm.read", "content.read"})
-_AGENT = _VIEWER | {"crm.write"}
+_AGENT = _VIEWER | {"crm.write", "content.write"}
 _ADMIN = _AGENT | {
     "crm.delete", "wa.config", "automations.manage", "broadcasts.run",
     "content.publish", "users.manage", "audit.read", "ai.manage",
