@@ -1273,7 +1273,7 @@ async function loadWhatsAppInbox(selectConvId = null) {
     if (currentConversationsList.length === 0) {
         threadListEl.innerHTML = `
             <div class="p-6 text-center text-slate-500 text-xs">
-                No conversations yet.<br>They appear here when a customer messages this account's WhatsApp number.
+                No conversations yet; start one from Contacts.<br>Chats also appear here when a customer messages this account's WhatsApp number.
             </div>
         `;
         document.getElementById('wa-chat-empty-state').classList.remove('hidden');
@@ -1530,14 +1530,15 @@ async function loadWhatsAppContacts() {
 }
 
 async function startChatWithContact(contactId) {
-    const data = await apiGet('/api/whatsapp/conversations');
+    const data = await apiGet('/api/whatsapp/conversations?contact_id=' + encodeURIComponent(contactId));
     if (!data || !data.conversations) return;
-    const match = data.conversations.find(conv => conv.contact_id === contactId);
+    const match = data.conversations.find(conv => conv.contact_id === contactId) || data.conversations[0];
     switchTab('wa-inbox');
+    await loadWhatsAppInbox();
     if (match) {
+        // An empty conversation is hidden from the default list: add it so it can be opened.
+        if (!currentConversationsList.some(c => c.id === match.id)) currentConversationsList.unshift(match);
         selectConversation(match.id, true);
-    } else {
-        loadWhatsAppInbox();
     }
 }
 
