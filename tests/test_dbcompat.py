@@ -137,6 +137,21 @@ class PoolTests(unittest.TestCase):
             dbcompat._cache = threading.local()
 
 
+class PortTests(unittest.TestCase):
+    def test_supabase_pooler_session_port_switches_to_transaction_port(self):
+        import os
+        os.environ.pop("DATABASE_POOL_MODE", None)
+        self.assertEqual(dbcompat.effective_port("postgresql://u:p@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres"), 6543)
+        self.assertEqual(dbcompat.effective_port("postgresql://u:p@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres"), 6543)
+        self.assertEqual(dbcompat.effective_port("postgresql://u:p@db.example.com:5432/x"), 5432)
+        self.assertEqual(dbcompat.effective_port("postgresql://u:p@db.example.com/x"), 5432)
+        os.environ["DATABASE_POOL_MODE"] = "session"
+        try:
+            self.assertEqual(dbcompat.effective_port("postgresql://u:p@aws-0-x.pooler.supabase.com:5432/postgres"), 5432)
+        finally:
+            os.environ.pop("DATABASE_POOL_MODE", None)
+
+
 class RetryTests(unittest.TestCase):
     def test_first_statement_on_dead_connection_is_retried_once(self):
         class Dead(FakeRaw):

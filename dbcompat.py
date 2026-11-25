@@ -357,13 +357,25 @@ def _open_postgres():
         return _open_postgres_once()
 
 
+def effective_port(url: str) -> int:
+    """Supabase's shared pooler offers session mode on 5432 (about 15 clients) and transaction mode on 6543
+    (hundreds). A serverless app must use 6543, so a pooler URL on 5432 is switched unless
+    DATABASE_POOL_MODE=session says otherwise."""
+    u = urlparse(url)
+    port = u.port or 5432
+    if (u.hostname or "").endswith(".pooler.supabase.com") and port == 5432 \
+            and os.environ.get("DATABASE_POOL_MODE", "").lower() != "session":
+        return 6543
+    return port
+
+
 def _open_postgres_once():
     import pg8000.dbapi  # imported lazily: only needed when DATABASE_URL is set
     url = database_url()
     u = urlparse(url)
     raw = pg8000.dbapi.connect(
         user=unquote(u.username or ""), password=unquote(u.password or ""),
-        host=u.hostname, port=u.port or 5432,
+        host=u.hostname, port=effective_port(url),
         database=(u.path or "/postgres").lstrip("/") or "postgres",
         ssl_context=ssl_context(url), timeout=20,
     )

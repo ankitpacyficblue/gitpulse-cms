@@ -165,6 +165,17 @@ class AvailabilityTests(P1Base):
             self.assertEqual(handle_whatsapp_webhook_post(b'{"a":1}', "sha256=bad", {"entry": [{"changes": [{"value": {"metadata": {"phone_number_id": "x"}}}]}]})[0], 503)
 
 
+class AutomationInputTests(P1Base):
+    def test_bad_input_is_400_never_500(self):
+        o = self.c["owner"]
+        for body in ({}, {"name": ""}, {"name": None, "trigger_type": "welcome", "message_template": "x"},
+                     {"name": "n", "trigger_type": "welcome"}, {"name": "n", "trigger_type": "zzz", "message_template": "x"},
+                     {"name": "n", "trigger_type": "keyword", "trigger_keyword": None, "message_template": "x"}):
+            self.assertEqual(o("POST", "/api/whatsapp/automations", body)[0], 400, body)
+        code, _ = o("POST", "/api/whatsapp/automations", {"name": "ok", "trigger_type": "welcome", "message_template": "hi", "trigger_keyword": None, "action_type": None})
+        self.assertEqual(code, 201)
+
+
 class AutomationReplyTests(P1Base):
     def test_automation_reply_is_stored_as_outbound_message(self):
         acct = new_account()

@@ -857,15 +857,15 @@ def auto_list(ctx, m, q, body):
 
 @route("POST", r"/api/whatsapp/automations", "acct:automations.manage")
 def auto_create(ctx, m, q, body):
-    name, trig, tpl = (str(body.get(k, "")).strip() for k in ("name", "trigger_type", "message_template"))
+    name, trig, tpl = (("" if body.get(k) is None else str(body.get(k))).strip() for k in ("name", "trigger_type", "message_template"))
     if not name or not trig or not tpl:
         return 400, {"error": "Name, trigger type, and message template are required."}
     if trig not in TRIGGER_TYPES:
         return 400, {"error": "invalid_trigger", "allowed": sorted(TRIGGER_TYPES)}
-    if trig == "keyword" and not str(body.get("trigger_keyword", "")).strip():
+    if trig == "keyword" and not str(body.get("trigger_keyword") or "").strip():
         return 400, {"error": "keyword_required", "message": "A keyword rule needs trigger_keyword."}
-    aid = cs.create_automation(ctx.account_id, name, trig, tpl, trigger_keyword=body.get("trigger_keyword", ""),
-                               action_type=body.get("action_type", "send_message"),
+    aid = cs.create_automation(ctx.account_id, name, trig, tpl, trigger_keyword=str(body.get("trigger_keyword") or ""),
+                               action_type=str(body.get("action_type") or "send_message"),
                                is_active=bool(body.get("is_active", True)))
     return 201, {"success": True, "id": aid, "message": "Automation rule created."}
 
