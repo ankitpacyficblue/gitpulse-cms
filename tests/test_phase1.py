@@ -719,6 +719,17 @@ class MediaTests(Base):
         header = {"Authorization": "Bearer " + out["token"]}
         return out, lambda method, path, body=None: handle_api_request(method, path, {}, body or {}, headers=header)
 
+    def test_writer_meta_description_and_project(self):
+        pid = db.create_project({"name": "Villa", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
+        _, writer = self.writer()
+        code, out = writer("POST", "/api/writer/posts", {"title": "T", "body": "B", "meta_description": "  A short\n\\summary  "})
+        self.assertEqual((code, out["item"]["meta_description"], out["item"]["project"]),
+                         (201, "A short summary", {"id": pid, "name": "Villa"}), out)
+        item = writer("GET", f"/api/writer/posts/{out['item']['id']}")[1]["item"]
+        self.assertEqual((item["meta_description"], item["project"]["id"]), ("A short summary", pid))
+        bad = writer("POST", "/api/writer/posts", {"title": "T", "body": "B", "meta_description": "<b>x</b>"})
+        self.assertEqual(bad[1]["error"], "html_not_allowed")
+
     def test_writer_token_submits_for_review_and_can_do_nothing_else(self):
         pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
         self.assertEqual(self.agent_api("POST", "/api/writer-tokens", {"name": "x"})[0], 403)
