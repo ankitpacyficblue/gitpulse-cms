@@ -11,9 +11,10 @@ import tests._env  # noqa: F401
 from tests.apihelpers import Caller, new_user, new_account, join, setup_db
 import crm_store as cs
 import database as db
-from engine import assistant, jobs, llm, messaging
+from engine import assistant, jobs, llm, media, messaging
 from engine.whatsapp_client import WhatsAppClient
 from server.routes_api import handle_api_request
+from server.routes_public import handle_public_request
 
 KNOWLEDGE = {"ai_enabled": True, "business_facts": "We sell farm plots near Mysuru. Visits are on weekends.",
              "faqs": [{"question": "Where are the plots?", "answer": "Near Mysuru, 25 km from the city."}],
@@ -514,6 +515,124 @@ class BlogPlanTests(Base):
         with self.publisher() as pub:
             jobs.tick(limit=1000)
         self.assertEqual((pub.call_count, db.list_posts_for_account(self.a, limit=5)), (0, []))
+
+
+class MediaTests(Base):
+    PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 8
+    PDF = b"%PDF-1.7 " + b"0" * 7
+
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict(os.environ, {"MEDIA_SUPABASE_URL": "https://store.test", "MEDIA_SUPABASE_KEY": "k",
+                                           "MEDIA_BUCKET": "b"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.stored, self.next_upload = {}, None
+        for name, fake in (
+            ("storage_sign_upload", lambda path: self._arrive(path)),
+            ("storage_sign", lambda paths, seconds: {p: "https://store.test/s/" + p for p in paths}),
+            ("storage_head", lambda path: (len(self.stored[path]), self.stored[path][:16]) if path in self.stored else None),
+            ("storage_remove", lambda paths: [self.stored.pop(p, None) for p in paths]),
+            ("storage_put", lambda path, content, mime: self.stored.__setitem__(path, content)),
+        ):
+            p = mock.patch.object(media, name, fake)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _arrive(self, path):
+        if self.next_upload is not None:
+            self.stored[path] = self.next_upload
+        return "https://store.test/up/" + path
+
+    def upload(self, content=PNG, mime="image/png", name="plot.png", size=None):
+        self.next_upload = content
+        code, out = self.agent_api("POST", "/api/media/upload-url", {"name": name, "mime": mime, "size": size or 16})
+        if code != 201:
+            return code, out
+        return self.agent_api("POST", "/api/media", {"media_id": out["media_id"]})
+
+    def test_checks_isolation_and_delete(self):
+        self.assertEqual(self.upload(mime="image/gif")[1]["error"], "type_not_allowed")
+        self.assertEqual(self.upload(size=6 * 1024 * 1024)[1]["error"], "too_large")
+        code, out = self.upload(content=self.PDF)                       # claims PNG, is a PDF
+        self.assertEqual((code, out["error"], self.stored), (400, "file_rejected", {}))
+        self.assertEqual(self.upload(content=None)[1]["error"], "not_uploaded")
+        code, out = self.upload()
+        self.assertEqual(code, 201, out)
+        item = out["item"]["id"]
+        self.assertEqual([i["id"] for i in self.viewer_api("GET", "/api/media")[1]["items"]], [item])
+        self.assertEqual(self.viewer_api("POST", "/api/media/upload-url", {})[0], 403)
+        self.assertEqual(self.api_b("GET", "/api/media")[1]["items"], [])
+        self.assertEqual(self.api_b("DELETE", f"/api/media/{item}")[0], 404)
+        self.assertEqual(self.agent_api("DELETE", f"/api/media/{item}")[0], 403)
+        self.assertEqual(self.api("DELETE", f"/api/media/{item}")[0], 200)
+        self.assertEqual(self.stored, {})
+
+    def test_off_without_settings(self):
+        with mock.patch.dict(os.environ, {"MEDIA_BUCKET": ""}):
+            self.assertEqual(self.api("GET", "/api/media")[1], {"configured": False, "items": []})
+            self.assertEqual(self.api("POST", "/api/media/upload-url", {})[0], 503)
+
+    def test_chat_send_window_and_in_use(self):
+        pdf = self.upload(content=self.PDF, mime="application/pdf", name="brochure.pdf")[1]["item"]["id"]
+        webp = self.upload(content=b"RIFF0000WEBP0000", mime="image/webp", name="a.webp")[1]["item"]["id"]
+        self.inbound("Send the brochure")
+        url = f"/api/whatsapp/conversations/{self.conv()['id']}/messages"
+        self.assertEqual(self.api("POST", url, {"media_id": webp})[1]["error"], "unsupported_on_whatsapp")
+        code, out = self.api("POST", url, {"media_id": pdf})
+        self.assertEqual(code, 200, out)
+        sent = [m for m in self.api("GET", url)[1]["messages"] if m.get("media")]
+        self.assertEqual((sent[0]["message_type"], sent[0]["media"]["name"]), ("document", "brochure.pdf"))
+        self.assertEqual(self.api("DELETE", f"/api/media/{pdf}")[1]["error"], "in_use")
+        self.assertEqual(self.api("DELETE", f"/api/media/{pdf}", query={"force": "1"})[0], 200)
+        self.close_window()
+        self.assertEqual(self.api("POST", url, {"media_id": webp, "body": "x"})[0], 409)
+
+    def test_link_is_public_only_after_the_post_is_published(self):
+        out = self.upload()[1]["item"]
+        token = out["blog_url"].rsplit("/", 1)[1]
+        self.assertEqual(handle_public_request(f"/api/public/media/{token}", {})[0], 404)
+        pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
+        cs.save_account_settings(self.a, github_token="t")
+        when = (datetime.utcnow() - timedelta(1)).isoformat() + "Z"
+        item = self.api("POST", "/api/blog/plan", {"title": "T", "body": f"![plot]({out['blog_url']})",
+                                                   "publish_at": when, "project_id": pid})[1]["item"]["id"]
+        self.api("POST", f"/api/blog/plan/{item}/submit")
+        self.api("POST", f"/api/blog/plan/{item}/approve")
+        self.assertEqual(handle_public_request(f"/api/public/media/{token}", {})[0], 404)
+        with mock.patch("engine.github_client.GitHubClient.publish_post", return_value={"success": True, "pr_url": "u"}):
+            jobs.tick(limit=1000)
+        code, _, link = handle_public_request(f"/api/public/media/{token}", {})
+        self.assertEqual(code, 302)
+        self.assertTrue(link.startswith("https://store.test/s/"))
+        self.assertEqual(self.api("GET", "/api/media")[1]["items"][0]["used_by"], ["blog"])
+
+    def test_template_header_and_incoming_file(self):
+        image = self.upload()[1]["item"]["id"]
+        self.inbound("hello")
+        self.sync_templates()
+        with db.get_connection() as c:
+            c.execute("UPDATE wa_templates SET header_format = 'IMAGE' WHERE account_id = ?", (self.a,))
+            c.commit()
+        tpl = {"name": "mock_approved", "language": "en", "params": ["A"]}
+        url = f"/api/whatsapp/conversations/{self.conv()['id']}/template"
+        self.assertEqual(self.api("POST", url, tpl)[1]["error"], "missing_media")
+        self.assertEqual(self.api("POST", url, dict(tpl, media_id=image))[0], 200)
+        sent = []
+        with mock.patch.dict(os.environ, {"WHATSAPP_MOCK": ""}), \
+                mock.patch.object(WhatsAppClient, "is_configured", lambda self: True), \
+                mock.patch.object(WhatsAppClient, "_post_message",
+                                  lambda self, payload: sent.append(payload) or {"success": True, "message_id": "w"}):
+            self.assertEqual(self.api("POST", url, dict(tpl, media_id=image))[0], 200)
+        header = sent[0]["template"]["components"][0]
+        self.assertEqual((header["type"], header["parameters"][0]["type"]), ("header", "image"))
+
+        with mock.patch.object(media, "download_from_meta", lambda account, wa_id: self.PDF):
+            message = cs.list_messages(self.a, self.conv()["id"])[0]
+            jobs.run_job(jobs.enqueue(self.a, "media_fetch", {"message_id": message["id"], "wa_media_id": "1"}))
+        got = self.api("GET", f"/api/whatsapp/conversations/{self.conv()['id']}/messages")[1]["messages"]
+        self.assertEqual(next(m for m in got if m["id"] == message["id"])["media"]["mime"], "application/pdf")
+        self.assertEqual(len(self.api("GET", "/api/media")[1]["items"]), 1)      # received files stay out of the library
 
 
 if __name__ == "__main__":

@@ -147,7 +147,7 @@ class GitPulseHTTPHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/public/"):
             client_ip = self._get_client_ip()
             code, ctype, resp_body = handle_public_request(path, query, client_ip)
-            self._set_headers(code, ctype)
+            self._set_headers(code, ctype, location=resp_body if code == 302 else None)
             self.wfile.write(resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body)
             return
 

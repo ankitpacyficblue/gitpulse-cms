@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import crm_store as cs
 import database as db
-from engine import alerts, assistant, jobs, llm
+from engine import alerts, assistant, jobs, llm, media
 from engine.messaging import IST
 
 EDITABLE = ("title", "topic", "keyword", "publish_at", "project_id", "assignee_id", "body")
@@ -329,6 +329,7 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": False, "error": res.get("error", "publishing error")}
     db.update_post_status(post_id=post_id, status="published", commit_sha=res.get("commit_sha"), pr_url=res.get("pr_url"),
                           pr_number=res.get("pr_number"))
+    media.publish_linked(account_id, body)
     url = res.get("pr_url") or f"https://github.com/{project['github_repo']}/blob/{project['github_branch']}/{path}"
     try:
         from engine.whatsapp_client import WhatsAppClient

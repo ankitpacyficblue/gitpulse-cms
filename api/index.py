@@ -195,7 +195,7 @@ class handler(BaseHTTPRequestHandler):
         if path.startswith("/api/public/"):
             client_ip = self._get_client_ip()
             code, ctype, resp_body = handle_public_request(path, query, client_ip)
-            self._set_headers(code, ctype)
+            self._set_headers(code, ctype, location=resp_body if code == 302 else None)
             self.wfile.write(resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body)
             return
 
@@ -368,7 +368,9 @@ def _app(environ, start_response):
         if path.startswith("/api/public/"):
             code, ctype, resp_body = handle_public_request(path, query, client_ip)
             headers.append(("Content-Type", ctype))
-            status_str = f"{code} OK" if code == 200 else f"{code} Error"
+            if code == 302:
+                headers.append(("Location", resp_body))
+            status_str = f"{code} OK" if code == 200 else "302 Found" if code == 302 else f"{code} Error"
             start_response(status_str, headers)
             return [resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body]
 

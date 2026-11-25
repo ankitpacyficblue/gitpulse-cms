@@ -60,7 +60,28 @@ class WhatsAppClient:
                    "type": "text", "text": {"preview_url": True, "body": body}}
         return self._post_message(payload)
 
-    def send_template_message(self, to_phone: str, name: str, language: str, params: List[str]) -> Dict[str, Any]:
+    @staticmethod
+    def _file(media: Dict[str, str], caption: str = "") -> Dict[str, str]:
+        out = {"link": media["link"]}
+        if media["kind"] == "document":
+            out["filename"] = media["filename"]
+        if caption:
+            out["caption"] = caption
+        return out
+
+    def send_media_message(self, to_phone: str, media: Dict[str, str], caption: str = "") -> Dict[str, Any]:
+        """`media`: {kind: image|video|document, link, filename}."""
+        clean_phone = re.sub(r"[^\d+]", "", to_phone)
+        if mock_enabled():
+            return {"success": True, "message_id": f"wamid.mock_{uuid.uuid4().hex[:16]}", "status": "sent",
+                    "mock": True, "recipient": clean_phone}
+        if not self.is_configured():
+            return {"success": False, "status": "failed", "error": "WhatsApp is not configured for this account."}
+        return self._post_message({"messaging_product": "whatsapp", "recipient_type": "individual", "to": clean_phone,
+                                   "type": media["kind"], media["kind"]: self._file(media, caption)})
+
+    def send_template_message(self, to_phone: str, name: str, language: str, params: List[str],
+                              media: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         clean_phone = re.sub(r"[^\d+]", "", to_phone)
         if mock_enabled():
             return {"success": True, "message_id": f"wamid.mock_{uuid.uuid4().hex[:16]}", "status": "sent",
@@ -68,8 +89,13 @@ class WhatsAppClient:
         if not self.is_configured():
             return {"success": False, "status": "failed", "error": "WhatsApp is not configured for this account."}
         template: Dict[str, Any] = {"name": name, "language": {"code": language}}
+        components = []
+        if media:
+            components.append({"type": "header", "parameters": [{"type": media["kind"], media["kind"]: self._file(media)}]})
         if params:
-            template["components"] = [{"type": "body", "parameters": [{"type": "text", "text": str(p)} for p in params]}]
+            components.append({"type": "body", "parameters": [{"type": "text", "text": str(p)} for p in params]})
+        if components:
+            template["components"] = components
         return self._post_message({"messaging_product": "whatsapp", "to": clean_phone, "type": "template",
                                    "template": template})
 
@@ -125,10 +151,12 @@ class WhatsAppClient:
             for t in items:
                 body = next((c.get("text", "") for c in t.get("components", []) if str(c.get("type", "")).upper() == "BODY"), "")
                 variables = len(set(re.findall(r"\{\{(\d+)\}\}", body)))
-                conn.execute("INSERT INTO wa_templates (account_id, name, language, category, status, body, variables, synced_at) "
-                             "VALUES (?,?,?,?,?,?,?,?)", (self.account_id, t.get("name", ""), t.get("language", ""),
+                header = next((str(c.get("format", "")).upper() for c in t.get("components", [])
+                               if str(c.get("type", "")).upper() == "HEADER"), "")
+                conn.execute("INSERT INTO wa_templates (account_id, name, language, category, status, body, variables, synced_at, "
+                             "header_format) VALUES (?,?,?,?,?,?,?,?,?)", (self.account_id, t.get("name", ""), t.get("language", ""),
                              str(t.get("category", "MARKETING")).upper(), str(t.get("status", "PENDING")).upper(), body,
-                             variables, now))
+                             variables, now, header))
             conn.commit()
         return {"ok": True, "count": len(items), "mock": mock_enabled()}
 
@@ -203,7 +231,8 @@ class WhatsAppClient:
             try:
                 messaging.queue_send(self.account_id, contact, sent_by="broadcast", broadcast_id=broadcast_id,
                                      template_name=broadcast["template_name"],
-                                     template_language=broadcast["template_language"], params=self._fill(params, values))
+                                     template_language=broadcast["template_language"], params=self._fill(params, values),
+                                     media_id=broadcast.get("media_id"))
                 queued += 1
             except messaging.Blocked as b:
                 skipped[b.code] = skipped.get(b.code, 0) + 1
@@ -288,7 +317,7 @@ class WhatsAppClient:
             conn.commit()
 
     def _process_message(self, msg: Dict[str, Any], names: Dict[str, str]) -> bool:
-        from engine import assistant, jobs, messaging
+        from engine import assistant, jobs, media, messaging
         sender, wa_id = msg.get("from", ""), msg.get("id", "")
         msg_type = msg.get("type", "text")
         if not sender or msg_type == "reaction" or self._seen(wa_id):
@@ -313,8 +342,13 @@ class WhatsAppClient:
             db.log_event(f"Contact #{contact['id']} came back through '{touch['source']}' "
                          f"{touch['entry_code']}.", "INFO", account_id=self.account_id)
         conv = cs.get_or_create_conversation(self.account_id, contact["id"])
-        cs.create_message(self.account_id, conv["id"], contact["id"], "inbound", body, message_type=msg_type,
-                          wa_message_id=wa_id, status="delivered")
+        message_id = cs.create_message(self.account_id, conv["id"], contact["id"], "inbound", body, message_type=msg_type,
+                                       wa_message_id=wa_id, status="delivered")
+        attachment = msg.get(msg_type) if msg_type in ("image", "document", "video") else None
+        if message_id and attachment and attachment.get("id") and media.configured() and not mock_enabled():
+            jobs.enqueue(self.account_id, "media_fetch", {"message_id": message_id, "wa_media_id": attachment["id"],
+                                                          "filename": str(attachment.get("filename") or "")},
+                         dedupe_key=f"media:{self.account_id}:{message_id}")
 
         if msg_type == "text" and messaging.is_stop_message(self.account_id, body):
             if contact["consent_status"] != "opted_out":

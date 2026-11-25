@@ -212,6 +212,13 @@ def init_schema(conn) -> None:
         name TEXT NOT NULL, type TEXT NOT NULL, options TEXT NOT NULL DEFAULT '[]', archived INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
     )""")
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS media_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL DEFAULT 0, path TEXT NOT NULL,
+        token TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'pending', source TEXT NOT NULL DEFAULT 'library',
+        is_public INTEGER NOT NULL DEFAULT 0, created_by INTEGER, created_at TEXT NOT NULL
+    )""")
     for table, columns in (
         ("entry_links", (("source", "TEXT NOT NULL DEFAULT 'website'"), ("campaign", "TEXT NOT NULL DEFAULT ''"))),
         ("contacts", (("consent_status", "TEXT NOT NULL DEFAULT 'unknown'"), ("consent_source", "TEXT NOT NULL DEFAULT ''"),
@@ -223,9 +230,11 @@ def init_schema(conn) -> None:
                            ("handoff_reason", "TEXT NOT NULL DEFAULT ''"), ("ai_mode", "TEXT NOT NULL DEFAULT 'on'"),
                            ("ai_paused_at", "REAL NOT NULL DEFAULT 0"))),
         ("messages", (("sent_by", "TEXT NOT NULL DEFAULT ''"), ("sent_at", "TEXT NOT NULL DEFAULT ''"),
-                      ("broadcast_id", "INTEGER"))),
+                      ("broadcast_id", "INTEGER"), ("media_id", "INTEGER"))),
+        ("wa_templates", (("header_format", "TEXT NOT NULL DEFAULT ''"),)),
         ("broadcasts", (("template_name", "TEXT NOT NULL DEFAULT ''"), ("template_language", "TEXT NOT NULL DEFAULT ''"),
-                        ("template_params", "TEXT NOT NULL DEFAULT '[]'"), ("skipped_count", "INTEGER NOT NULL DEFAULT 0"))),
+                        ("template_params", "TEXT NOT NULL DEFAULT '[]'"), ("skipped_count", "INTEGER NOT NULL DEFAULT 0"),
+                        ("media_id", "INTEGER"))),
         ("automations", (("template_name", "TEXT NOT NULL DEFAULT ''"), ("template_language", "TEXT NOT NULL DEFAULT ''"),
                          ("template_params", "TEXT NOT NULL DEFAULT '[]'"))),
     ):
@@ -235,6 +244,7 @@ def init_schema(conn) -> None:
                 cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
     for stmt in (
         "CREATE INDEX IF NOT EXISTS idx_blog_plan_acct ON blog_plan (account_id, publish_at)",
+        "CREATE INDEX IF NOT EXISTS idx_media_acct ON media_files (account_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs (status, run_at)",
         "CREATE INDEX IF NOT EXISTS idx_alerts_acct ON alerts (account_id, resolved_at)",
         "CREATE INDEX IF NOT EXISTS idx_contacts_acct ON contacts (account_id, updated_at)",

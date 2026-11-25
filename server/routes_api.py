@@ -29,6 +29,7 @@ from engine import accounts_service as svc
 from engine import auth
 from engine import secrets_box
 from engine import assistant, contact_fields, jobs, messaging
+from engine import media
 from engine.accounts_service import ServiceError
 from engine.auth import (
     authenticate_user, revoke_session, update_user_password, verify_password,
@@ -808,20 +809,21 @@ def conv_messages(ctx, m, q, body):
     cid = int(m.group("id"))
     if not cs.get_conversation(ctx.account_id, cid):
         return 404, {"error": "Conversation not found."}
-    return 200, {"messages": cs.list_messages(ctx.account_id, cid, limit=_int(q.get("limit"), 100))}
+    return 200, {"messages": media.attach(ctx.account_id, cs.list_messages(ctx.account_id, cid, limit=_int(q.get("limit"), 100)))}
 
 
 @route("POST", r"/api/whatsapp/conversations/(?P<id>\d+)/messages", "acct:crm.write")
 def conv_send(ctx, m, q, body):
     text = str(body.get("body", "")).strip()
-    if not text:
+    media_id = body.get("media_id")
+    if not text and not media_id:
         return 400, {"error": "Message body is required."}
     conv = cs.get_conversation(ctx.account_id, int(m.group("id")))
     if not conv:
         return 404, {"error": "Conversation not found."}
     contact = cs.get_contact(ctx.account_id, conv["contact_id"])
     try:
-        res = messaging.send(ctx.account_id, contact, text, sent_by="staff")
+        res = messaging.send(ctx.account_id, contact, text, sent_by="staff", media_id=media_id)
     except messaging.Blocked as b:
         return 409, {"success": False, "error": b.code, "message": b.message}
     assistant.staff_replied(ctx.account_id, conv["id"])
@@ -934,10 +936,15 @@ def bc_create(ctx, m, q, body):
         return 400, {"error": "template_required", "message": "Campaign name and an approved template are required."}
     try:
         tpl, params = _template_choice(ctx.account_id, body)
+        file = messaging.media_for(ctx.account_id, tpl, body.get("media_id"))
     except messaging.Blocked as b:
         return 400, {"error": b.code, "message": b.message}
     bid = cs.create_broadcast(ctx.account_id, name, tpl["body"], target_tag=str(body.get("target_tag") or "all"),
                               template_name=tpl["name"], template_language=tpl["language"], template_params=params)
+    if file:
+        with db.get_connection() as conn:
+            conn.execute("UPDATE broadcasts SET media_id = ? WHERE id = ? AND account_id = ?", (file["id"], bid, ctx.account_id))
+            conn.commit()
     if body.get("auto_send"):
         return 201, {"success": True, "id": bid, "executed": True,
                      "stats": WhatsAppClient(ctx.account_id).execute_broadcast(bid)}
@@ -971,6 +978,7 @@ def auto_create(ctx, m, q, body):
     if trig == "blog_publish":      # goes to people outside the 24-hour window, so it needs an approved template
         try:
             template, params = _template_choice(ctx.account_id, body)
+            messaging.media_for(ctx.account_id, template, None)      # an automatic alert has no file to attach
         except messaging.Blocked as b:
             return 400, {"error": b.code, "message": b.message}
         tpl = template["body"] or template["name"]

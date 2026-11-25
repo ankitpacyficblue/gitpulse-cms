@@ -10,7 +10,7 @@ import urllib.parse
 import crm_store as cs
 import database as db
 import dbcompat
-from engine import alerts, assistant, blog_plan, contact_fields, jobs, messaging
+from engine import alerts, assistant, blog_plan, contact_fields, jobs, media, messaging
 from engine.whatsapp_client import WhatsAppClient
 from server.routes_api import route
 
@@ -68,7 +68,7 @@ def conversation_ai(ctx, m, q, body):
 @route("GET", r"/api/whatsapp/templates", "acct:crm.read")
 def templates_list(ctx, m, q, body):
     with db.get_connection() as conn:
-        rows = conn.execute("SELECT name, language, category, status, body, variables, synced_at FROM wa_templates "
+        rows = conn.execute("SELECT name, language, category, status, body, variables, header_format, synced_at FROM wa_templates "
                             "WHERE account_id = ? ORDER BY name, language", (ctx.account_id,)).fetchall()
     return 200, {"templates": [dict(r) for r in rows]}
 
@@ -90,7 +90,7 @@ def conversation_template(ctx, m, q, body):
     try:
         res = messaging.send(ctx.account_id, cs.get_contact(ctx.account_id, conv["contact_id"]), sent_by="staff",
                              template_name=str(body["name"]), template_language=str(body.get("language") or ""),
-                             params=[str(p) for p in params])
+                             params=[str(p) for p in params], media_id=body.get("media_id"))
     except messaging.Blocked as b:
         return 409, {"success": False, "error": b.code, "message": b.message}
     assistant.staff_replied(ctx.account_id, conv["id"])
@@ -279,3 +279,34 @@ def plan_approve(ctx, m, q, body):
     if res[0] == 200:
         db.log_event(f"Planned post #{m.group('id')} approved by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
     return res
+
+
+# ------------------------------------------------------------------ media library
+
+def _media(action, code=200):
+    try:
+        return code, action()
+    except media.MediaError as e:
+        return e.status, {"error": e.code, "message": e.message}
+
+
+@route("GET", r"/api/media", "acct:crm.read")
+def media_list(ctx, m, q, body):
+    if not media.configured():
+        return 200, {"configured": False, "items": []}
+    return _media(lambda: {"configured": True, "items": media.list_items(ctx.account_id, q.get("q", ""), ctx.host)})
+
+
+@route("POST", r"/api/media/upload-url", "acct:content.write")
+def media_upload_url(ctx, m, q, body):
+    return _media(lambda: media.create_upload(ctx.account_id, ctx.user["id"], body), 201)
+
+
+@route("POST", r"/api/media", "acct:content.write")
+def media_confirm(ctx, m, q, body):
+    return _media(lambda: {"item": media.confirm(ctx.account_id, body.get("media_id"), ctx.host)}, 201)
+
+
+@route("DELETE", r"/api/media/(?P<id>\d+)", "acct:content.publish")
+def media_delete(ctx, m, q, body):
+    return _media(lambda: media.delete(ctx.account_id, m.group("id"), force=q.get("force") == "1") or {"success": True})

@@ -12,6 +12,13 @@ CSP = (
 )
 
 import os
+from urllib.parse import urlparse
+
+# Media previews come from storage by signed link, and the browser uploads straight to it.
+_media = urlparse(os.environ.get("MEDIA_SUPABASE_URL", ""))
+if _media.scheme == "https" and _media.netloc:
+    CSP = CSP.replace("connect-src 'self'", f"connect-src 'self' https://{_media.netloc}")
+    CSP += f"; media-src 'self' https://{_media.netloc}"
 
 if os.environ.get("VERCEL_ENV") == "preview":
     # The Vercel toolbar (comments/preview bar) only exists on preview deployments; production never gets this.
