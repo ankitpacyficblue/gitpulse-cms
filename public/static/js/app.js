@@ -2078,18 +2078,52 @@ function broadcastSplit(tag, templateName) {
     const why = [optedOut ? `${optedOut} opted out` : '', notOptedIn ? `${notOptedIn} not opted in` : ''].filter(Boolean).join(', ');
     return { send, skipped: optedOut + notOptedIn, text: `Will send to ${send}, skip ${optedOut + notOptedIn}${why ? ` (${why})` : ''}.` };
 }
-function updateBroadcastAudience() {
-    const el = document.getElementById('new-broadcast-count');
+// The server counts with the same rules a send uses; the local count stands in if it cannot answer.
+async function broadcastPreview(tag, choice) {
+    const d = choice && await apiCall('POST', '/api/whatsapp/broadcasts/preview',
+        { template_name: choice.name, template_language: choice.language, target_tag: tag || 'all' }, { quiet: true });
+    if (!d || typeof d.will_send !== 'number') return broadcastSplit(tag, choice && choice.name);
+    const labels = { opted_out: 'opted out', not_opted_in: 'not opted in' };
+    const why = Object.entries(d.skipped || {}).map(([code, n]) => `${n} ${labels[code] || code.replace(/_/g, ' ')}`).join(', ');
+    return { send: d.will_send, skipped: d.skipped_count, text: `Will send to ${d.will_send}, skip ${d.skipped_count}${why ? ` (${why})` : ''}.` };
+}
+let broadcastPreviewSeq = 0;
+let broadcastCounting = false, broadcastSaving = false;
+// Save stays off while a count or a save is running, so one click asks for one confirm.
+function syncBroadcastSave() {
+    el('new-broadcast-save').disabled = broadcastCounting || broadcastSaving;
+}
+async function updateBroadcastAudience() {
+    const line = document.getElementById('new-broadcast-count');
     const sel = document.getElementById('new-broadcast-tag');
-    if (!el || !sel) return;
-    const t = pickedTemplate('bc');
-    el.innerText = broadcastSplit(sel.value, t && t.name).text;
+    if (!line || !sel) return;
+    const seq = ++broadcastPreviewSeq;
+    line.innerText = 'Counting recipients…';
+    broadcastCounting = true;
+    syncBroadcastSave();
+    try {
+        const split = await broadcastPreview(sel.value, pickedTemplate('bc'));
+        if (seq === broadcastPreviewSeq) line.innerText = split.text;
+    } finally {
+        if (seq === broadcastPreviewSeq) { broadcastCounting = false; syncBroadcastSave(); }
+    }
 }
 function closeAddBroadcastModal() {
     document.getElementById('modal-add-broadcast').classList.add('hidden');
 }
 async function submitAddBroadcast(e) {
     e.preventDefault();
+    if (broadcastSaving) return;
+    broadcastSaving = true;
+    syncBroadcastSave();
+    try {
+        await saveBroadcast();
+    } finally {
+        broadcastSaving = false;
+        syncBroadcastSave();
+    }
+}
+async function saveBroadcast() {
     const name = document.getElementById('new-broadcast-name').value;
     const target_tag = document.getElementById('new-broadcast-tag').value;
     const choice = templateChoice('bc');
@@ -2097,7 +2131,7 @@ async function submitAddBroadcast(e) {
     const auto_send = document.getElementById('new-broadcast-send-now').checked;
     if (el('bc-media-wrap').dataset.format && !attached.bc) { showToast('Attach the file this template needs.', 'error'); return; }
     if (auto_send) {
-        const split = broadcastSplit(target_tag, choice.template_name);
+        const split = await broadcastPreview(target_tag, pickedTemplate('bc'));
         if (split.send === 0) { showToast(`Nothing would be sent. ${split.text}`, 'error'); return; }
         if (!confirm(`Send this now? ${split.text}`)) return;
     }

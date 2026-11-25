@@ -2031,7 +2031,7 @@ def render_dashboard_html() -> str:
                 </div>
                 <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
                     <button type="button" onclick="closeAddBroadcastModal()" class="btn-secondary text-xs">Cancel</button>
-                    <button type="submit" class="btn-primary text-xs">Save Campaign</button>
+                    <button type="submit" id="new-broadcast-save" class="btn-primary text-xs disabled:opacity-50">Save Campaign</button>
                 </div>
             </form>
         </div>
