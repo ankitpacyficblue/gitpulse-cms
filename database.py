@@ -4,8 +4,12 @@ Handles persistent storage with WAL mode, robust transaction management, and ORM
 """
 
 import dbcompat
+import hashlib
+import inspect
 import json
 import os
+import random
+import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from config import DATABASE_PATH, FRAMEWORK_PRESETS
@@ -16,215 +20,265 @@ def get_connection():
         return dbcompat.connect_postgres()
     return dbcompat.connect_sqlite(DATABASE_PATH)
 
-def init_db():
-    """Create tables if they do not exist."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        
-        # Clients / Organizations Table (Multi-tenant grouping)
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS clients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            contact_email TEXT DEFAULT '',
-            created_at TEXT NOT NULL
-        )
-        """)
+INIT_ATTEMPTS = 5
 
-        # Projects Table
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS projects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
-            name TEXT NOT NULL,
-            github_repo TEXT NOT NULL,
-            github_branch TEXT NOT NULL DEFAULT 'main',
-            github_token TEXT DEFAULT '',
-            target_framework TEXT NOT NULL DEFAULT 'nextjs',
-            content_dir TEXT NOT NULL DEFAULT 'content/posts',
-            file_extension TEXT NOT NULL DEFAULT '.mdx',
-            frontmatter_template TEXT NOT NULL,
-            topic TEXT NOT NULL,
-            target_audience TEXT NOT NULL DEFAULT 'Developers and Tech Enthusiasts',
-            tone TEXT NOT NULL DEFAULT 'Authoritative, practical, and engaging',
-            keywords TEXT NOT NULL DEFAULT '',
-            author_name TEXT NOT NULL DEFAULT 'Editorial Team',
-            publishing_mode TEXT NOT NULL DEFAULT 'pr', -- 'pr' or 'direct'
-            publish_time TEXT NOT NULL DEFAULT '09:00',
-            is_active INTEGER NOT NULL DEFAULT 1,
-            last_run_at TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """)
+def init_db(bootstrap=None):
+    """Bring the schema up to date, then run `bootstrap(conn)` in the same transaction and return its result.
 
-        # Posts Table
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            slug TEXT NOT NULL,
-            excerpt TEXT NOT NULL,
-            content_markdown TEXT NOT NULL,
-            frontmatter_yaml TEXT NOT NULL,
-            target_path TEXT NOT NULL,
-            tags TEXT NOT NULL DEFAULT '[]',
-            meta_seo TEXT NOT NULL DEFAULT '{}',
-            image_prompt TEXT DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'draft', -- draft, scheduled, published, failed
-            github_commit_sha TEXT,
-            github_pr_url TEXT,
-            github_pr_number INTEGER,
-            error_message TEXT,
-            published_at TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
-        )
-        """)
+    Many serverless instances can cold-start at once. On Postgres a transaction advisory lock lets one of
+    them in at a time, and schema_version makes the DDL run once per schema revision; the rest skip it, so
+    they take no table locks. A deadlock or similar clash (e.g. with an older deployment) is retried."""
+    for attempt in range(1, INIT_ATTEMPTS + 1):
+        try:
+            with get_connection() as conn:
+                if dbcompat.is_postgres():
+                    # Held until commit/rollback, so it also works through a transaction-mode pooler.
+                    conn.execute("SELECT pg_advisory_xact_lock(hashtext('gitpulse_init:' || current_schema()))")
+                    version = _schema_fingerprint()
+                    if not _schema_applied(conn, version):
+                        _apply_schema(conn)
+                        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (?, ?) "
+                                     "ON CONFLICT (version) DO NOTHING", (version, datetime.utcnow().isoformat()))
+                else:
+                    _apply_schema(conn)
+                result = bootstrap(conn) if bootstrap else None
+                conn.commit()
+                return result
+        except Exception as e:
+            if attempt == INIT_ATTEMPTS or not dbcompat.is_retryable_init(e):
+                raise
+            time.sleep(random.uniform(0.1, 0.4) * attempt)
 
-        # System Logs Table
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS system_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id INTEGER,
-            post_id INTEGER,
-            level TEXT NOT NULL DEFAULT 'INFO',
-            message TEXT NOT NULL,
-            metadata TEXT DEFAULT '{}',
-            created_at TEXT NOT NULL
-        )
-        """)
+def _schema_fingerprint() -> str:
+    """Changes whenever the schema code changes, so nobody has to remember to bump a number."""
+    import crm_store
+    src = inspect.getsource(_apply_schema) + inspect.getsource(crm_store.init_schema) \
+        + ",".join(sorted(dbcompat.AUTOID_TABLES | dbcompat.OTHER_TABLES))
+    return hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
 
-        # Settings Table (key-value)
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """)
+def _schema_applied(conn, version: str) -> bool:
+    # Ask the catalog first: selecting from a missing table would abort the whole transaction.
+    if not conn.execute("SELECT to_regclass('schema_version') IS NOT NULL").fetchone()[0]:
+        return False
+    return conn.execute("SELECT 1 FROM schema_version WHERE version = ?", (version,)).fetchone() is not None
 
-        # Users Table
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'admin',
-            created_at TEXT NOT NULL
-        )
-        """)
+def _apply_schema(conn):
+    """Create tables if they do not exist. The caller owns the transaction."""
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS schema_version (
+        version TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL
+    )
+    """)
 
-        # Active User Sessions
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            token TEXT UNIQUE NOT NULL,
-            user_id INTEGER NOT NULL,
-            expires_at REAL NOT NULL,
-            ip_address TEXT,
-            user_agent TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-        """)
+    # Clients / Organizations Table (Multi-tenant grouping)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS clients (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        contact_email TEXT DEFAULT '',
+        created_at TEXT NOT NULL
+    )
+    """)
 
-        # Login Attempts (for Brute Force & Malicious Login Restriction)
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS login_attempts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ip_address TEXT NOT NULL,
-            username TEXT NOT NULL,
-            attempt_time REAL NOT NULL,
-            success INTEGER NOT NULL DEFAULT 0
-        )
-        """)
+    # Projects Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+        name TEXT NOT NULL,
+        github_repo TEXT NOT NULL,
+        github_branch TEXT NOT NULL DEFAULT 'main',
+        github_token TEXT DEFAULT '',
+        target_framework TEXT NOT NULL DEFAULT 'nextjs',
+        content_dir TEXT NOT NULL DEFAULT 'content/posts',
+        file_extension TEXT NOT NULL DEFAULT '.mdx',
+        frontmatter_template TEXT NOT NULL,
+        topic TEXT NOT NULL,
+        target_audience TEXT NOT NULL DEFAULT 'Developers and Tech Enthusiasts',
+        tone TEXT NOT NULL DEFAULT 'Authoritative, practical, and engaging',
+        keywords TEXT NOT NULL DEFAULT '',
+        author_name TEXT NOT NULL DEFAULT 'Editorial Team',
+        publishing_mode TEXT NOT NULL DEFAULT 'pr', -- 'pr' or 'direct'
+        publish_time TEXT NOT NULL DEFAULT '09:00',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        last_run_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """)
 
-        # Index for fast lockout queries
-        cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_user ON login_attempts (ip_address, username, attempt_time)
-        """)
+    # Posts Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS posts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        excerpt TEXT NOT NULL,
+        content_markdown TEXT NOT NULL,
+        frontmatter_yaml TEXT NOT NULL,
+        target_path TEXT NOT NULL,
+        tags TEXT NOT NULL DEFAULT '[]',
+        meta_seo TEXT NOT NULL DEFAULT '{}',
+        image_prompt TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'draft', -- draft, scheduled, published, failed
+        github_commit_sha TEXT,
+        github_pr_url TEXT,
+        github_pr_number INTEGER,
+        error_message TEXT,
+        published_at TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+    )
+    """)
 
-        # Post Views Analytics Table
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS post_views (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            post_id INTEGER NOT NULL,
-            viewed_at TEXT NOT NULL,
-            ip_hash TEXT NOT NULL,
-            FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE
-        )
-        """)
+    # System Logs Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS system_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER,
+        post_id INTEGER,
+        level TEXT NOT NULL DEFAULT 'INFO',
+        message TEXT NOT NULL,
+        metadata TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL
+    )
+    """)
 
-        # Safe Column Migrations for Existing Databases
-        project_cols = [c[1] for c in cursor.execute("PRAGMA table_info(projects)").fetchall()]
-        if "client_id" not in project_cols:
-            cursor.execute("ALTER TABLE projects ADD COLUMN client_id INTEGER REFERENCES clients(id)")
-        if "auto_publish" not in project_cols:
-            cursor.execute("ALTER TABLE projects ADD COLUMN auto_publish INTEGER NOT NULL DEFAULT 1")
-        if "forbidden_words" not in project_cols:
-            cursor.execute("ALTER TABLE projects ADD COLUMN forbidden_words TEXT NOT NULL DEFAULT ''")
-        if "webhook_secret" not in project_cols:
-            cursor.execute("ALTER TABLE projects ADD COLUMN webhook_secret TEXT NOT NULL DEFAULT ''")
-        if "zero_redeploy_enabled" not in project_cols:
-            cursor.execute("ALTER TABLE projects ADD COLUMN zero_redeploy_enabled INTEGER NOT NULL DEFAULT 1")
-        if "blog_page_path" not in project_cols:
-            cursor.execute("ALTER TABLE projects ADD COLUMN blog_page_path TEXT NOT NULL DEFAULT 'public/blog/index.html'")
+    # Settings Table (key-value)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """)
 
-        post_cols = [c[1] for c in cursor.execute("PRAGMA table_info(posts)").fetchall()]
-        if "og_image_svg" not in post_cols:
-            cursor.execute("ALTER TABLE posts ADD COLUMN og_image_svg TEXT DEFAULT ''")
-        if "seo_score" not in post_cols:
-            cursor.execute("ALTER TABLE posts ADD COLUMN seo_score INTEGER DEFAULT 100")
-        if "seo_issues" not in post_cols:
-            cursor.execute("ALTER TABLE posts ADD COLUMN seo_issues TEXT DEFAULT '[]'")
-        if "views" not in post_cols:
-            cursor.execute("ALTER TABLE posts ADD COLUMN views INTEGER DEFAULT 0")
+    # Users Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'admin',
+        created_at TEXT NOT NULL
+    )
+    """)
 
-        # Accounts, memberships, per-account WhatsApp and CRM tables
-        import crm_store
-        crm_store.init_schema(conn)
-        if "account_id" not in project_cols:
-            # Nullable only for pre-account rows; those stay invisible to every account until assigned.
-            cursor.execute("ALTER TABLE projects ADD COLUMN account_id TEXT REFERENCES accounts(id)")
-        log_cols = [c[1] for c in cursor.execute("PRAGMA table_info(system_logs)").fetchall()]
-        if "account_id" not in log_cols:
-            cursor.execute("ALTER TABLE system_logs ADD COLUMN account_id TEXT")
+    # Active User Sessions
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token TEXT UNIQUE NOT NULL,
+        user_id INTEGER NOT NULL,
+        expires_at REAL NOT NULL,
+        ip_address TEXT,
+        user_agent TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    """)
 
-        user_cols = [c[1] for c in cursor.execute("PRAGMA table_info(users)").fetchall()]
-        if "totp_secret" not in user_cols:
-            cursor.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT ''")
-        if "totp_enabled" not in user_cols:
-            cursor.execute("ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0")
+    # Login Attempts (for Brute Force & Malicious Login Restriction)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS login_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip_address TEXT NOT NULL,
+        username TEXT NOT NULL,
+        attempt_time REAL NOT NULL,
+        success INTEGER NOT NULL DEFAULT 0
+    )
+    """)
 
-        # Users: account-era columns
-        if "email" not in user_cols:
-            cursor.execute("ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''")
-        if "is_active" not in user_cols:
-            cursor.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
-        if "is_platform_admin" not in user_cols:
-            cursor.execute("ALTER TABLE users ADD COLUMN is_platform_admin INTEGER NOT NULL DEFAULT 0")
+    # Index for fast lockout queries
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_user ON login_attempts (ip_address, username, attempt_time)
+    """)
 
-        if "sessions_valid_after_ms" not in user_cols:
-            cursor.execute("ALTER TABLE users ADD COLUMN sessions_valid_after_ms BIGINT NOT NULL DEFAULT 0")
-        if "must_change_password" not in user_cols:
-            cursor.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
-        if "temp_password_expires" not in user_cols:
-            cursor.execute("ALTER TABLE users ADD COLUMN temp_password_expires TEXT DEFAULT ''")
+    # Post Views Analytics Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS post_views (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER NOT NULL,
+        viewed_at TEXT NOT NULL,
+        ip_hash TEXT NOT NULL,
+        FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE
+    )
+    """)
 
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_account ON projects (account_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_account ON system_logs (account_id, id)")
+    # Safe Column Migrations for Existing Databases
+    project_cols = [c[1] for c in cursor.execute("PRAGMA table_info(projects)").fetchall()]
+    if "client_id" not in project_cols:
+        cursor.execute("ALTER TABLE projects ADD COLUMN client_id INTEGER REFERENCES clients(id)")
+    if "auto_publish" not in project_cols:
+        cursor.execute("ALTER TABLE projects ADD COLUMN auto_publish INTEGER NOT NULL DEFAULT 1")
+    if "forbidden_words" not in project_cols:
+        cursor.execute("ALTER TABLE projects ADD COLUMN forbidden_words TEXT NOT NULL DEFAULT ''")
+    if "webhook_secret" not in project_cols:
+        cursor.execute("ALTER TABLE projects ADD COLUMN webhook_secret TEXT NOT NULL DEFAULT ''")
+    if "zero_redeploy_enabled" not in project_cols:
+        cursor.execute("ALTER TABLE projects ADD COLUMN zero_redeploy_enabled INTEGER NOT NULL DEFAULT 1")
+    if "blog_page_path" not in project_cols:
+        cursor.execute("ALTER TABLE projects ADD COLUMN blog_page_path TEXT NOT NULL DEFAULT 'public/blog/index.html'")
 
-        if dbcompat.is_postgres():
-            # Supabase exposes the public schema over its REST API. Row level security
-            # with no policies denies anon/authenticated roles; the app connects as the
-            # database owner, which bypasses RLS. Never leave a table without it.
-            for table in sorted(dbcompat.AUTOID_TABLES | dbcompat.OTHER_TABLES):
-                cursor.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+    post_cols = [c[1] for c in cursor.execute("PRAGMA table_info(posts)").fetchall()]
+    if "og_image_svg" not in post_cols:
+        cursor.execute("ALTER TABLE posts ADD COLUMN og_image_svg TEXT DEFAULT ''")
+    if "seo_score" not in post_cols:
+        cursor.execute("ALTER TABLE posts ADD COLUMN seo_score INTEGER DEFAULT 100")
+    if "seo_issues" not in post_cols:
+        cursor.execute("ALTER TABLE posts ADD COLUMN seo_issues TEXT DEFAULT '[]'")
+    if "views" not in post_cols:
+        cursor.execute("ALTER TABLE posts ADD COLUMN views INTEGER DEFAULT 0")
 
-        conn.commit()
+    # Accounts, memberships, per-account WhatsApp and CRM tables
+    import crm_store
+    crm_store.init_schema(conn)
+    if "account_id" not in project_cols:
+        # Nullable only for pre-account rows; those stay invisible to every account until assigned.
+        cursor.execute("ALTER TABLE projects ADD COLUMN account_id TEXT REFERENCES accounts(id)")
+    log_cols = [c[1] for c in cursor.execute("PRAGMA table_info(system_logs)").fetchall()]
+    if "account_id" not in log_cols:
+        cursor.execute("ALTER TABLE system_logs ADD COLUMN account_id TEXT")
+
+    user_cols = [c[1] for c in cursor.execute("PRAGMA table_info(users)").fetchall()]
+    if "totp_secret" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT ''")
+    if "totp_enabled" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0")
+
+    # Users: account-era columns
+    if "email" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''")
+    if "is_active" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+    if "is_platform_admin" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_platform_admin INTEGER NOT NULL DEFAULT 0")
+
+    if "sessions_valid_after_ms" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN sessions_valid_after_ms BIGINT NOT NULL DEFAULT 0")
+    if "must_change_password" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+    if "temp_password_expires" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN temp_password_expires TEXT DEFAULT ''")
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_account ON projects (account_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_account ON system_logs (account_id, id)")
+
+    if dbcompat.is_postgres():
+        # Supabase exposes the public schema over its REST API. Row level security
+        # with no policies denies anon/authenticated roles; the app connects as the
+        # database owner, which bypasses RLS. Never leave a table without it.
+        # Only where it is still off: even a no-op ALTER takes an exclusive lock on a live table.
+        enabled = {r[0] for r in cursor.execute(
+            "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = current_schema() AND c.relrowsecurity").fetchall()}
+        for table in sorted((dbcompat.AUTOID_TABLES | dbcompat.OTHER_TABLES) - enabled):
+            cursor.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
 
 # --- Client / Multi-Tenant Operations ---
 

@@ -20,8 +20,7 @@ sys.path.insert(0, str(ROOT_DIR))
 
 import dbcompat
 from server.security import SECURITY_HEADERS
-from database import init_db
-from engine.auth import validate_session, AuthUnavailable
+from engine.auth import validate_session, AuthUnavailable, init_db_and_admin
 from server.routes_web import render_dashboard_html, render_login_html
 from server.routes_api import handle_api_request
 from server.routes_public import handle_public_request
@@ -37,9 +36,7 @@ def ensure_db() -> bool:
     if _DB_READY:
         return True
     try:
-        init_db()
-        from engine.auth import bootstrap_platform_admin_from_env
-        bootstrap_platform_admin_from_env()
+        init_db_and_admin()
         _DB_READY = True
     except Exception:
         logging.getLogger("gitpulse").exception("init_db/bootstrap failed; will retry on next request")

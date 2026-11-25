@@ -12,7 +12,7 @@ import base64
 import os
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
-from database import get_connection, log_event
+from database import get_connection, init_db, log_event
 
 # Security Parameters
 PBKDF2_ITERATIONS = 260_000 # OWASP recommended minimum
@@ -154,21 +154,26 @@ def temp_password_expired(user: Dict[str, Any]) -> bool:
 def create_user(username: str, password: str, email: str = "", is_platform_admin: bool = False,
                 temporary: bool = False) -> int:
     """Create a login. Roles live on account memberships, not on the user."""
+    with get_connection() as conn:
+        user_id = _insert_user(conn, username, password, email, is_platform_admin, temporary)
+        conn.commit()
+        return user_id
+
+def _insert_user(conn, username: str, password: str, email: str = "", is_platform_admin: bool = False,
+                 temporary: bool = False) -> int:
     username = username.strip().lower()
     if not username or len(password) < 8:
         raise ValueError("A username and a password of at least 8 characters are required.")
     salt_hex, hash_hex = hash_password(password)
     now = datetime.utcnow().isoformat()
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
+    cursor = conn.cursor()
+    cursor.execute("""
             INSERT INTO users (username, password_hash, salt, role, email, is_active, is_platform_admin, created_at,
                                must_change_password, temp_password_expires)
             VALUES (?, ?, ?, 'member', ?, 1, ?, ?, ?, ?)
         """, (username, hash_hex, salt_hex, email.strip().lower(), 1 if is_platform_admin else 0, now,
               1 if temporary else 0, _temp_expiry() if temporary else ""))
-        conn.commit()
-        return cursor.lastrowid
+    return cursor.lastrowid
 
 def set_user_active(user_id: int, active: bool) -> bool:
     with get_connection() as conn:
@@ -201,12 +206,28 @@ def bootstrap_platform_admin_from_env() -> Optional[int]:
     """For hosts with no shell (Vercel): create the first platform admin from environment variables
     BOOTSTRAP_ADMIN_USERNAME / BOOTSTRAP_ADMIN_PASSWORD (min 12 chars). Does nothing if either is
     missing or the user already exists. There is no built-in default login."""
+    with get_connection() as conn:
+        user_id = _bootstrap_admin(conn)
+        conn.commit()
+    _log_bootstrap(user_id)
+    return user_id
+
+def _bootstrap_admin(conn) -> Optional[int]:
     username = (os.environ.get("BOOTSTRAP_ADMIN_USERNAME") or "").strip().lower()
     password = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD") or ""
-    if not username or len(password) < 12 or get_user_by_username(username):
+    if not username or len(password) < 12 \
+            or conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
         return None
-    user_id = create_user(username, password, is_platform_admin=True)
-    log_event(f"Platform admin '{username}' created from environment.", "INFO")
+    return _insert_user(conn, username, password, is_platform_admin=True)
+
+def _log_bootstrap(user_id: Optional[int]) -> None:
+    if user_id:     # after commit: log_event uses its own connection
+        log_event("Platform admin created from environment.", "INFO")
+
+def init_db_and_admin() -> Optional[int]:
+    """Startup for web entry points: schema and first admin under one lock, safe with parallel cold starts."""
+    user_id = init_db(bootstrap=_bootstrap_admin)
+    _log_bootstrap(user_id)
     return user_id
 
 def generate_temporary_password() -> str:

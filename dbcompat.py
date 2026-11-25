@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 # Tables whose primary key is a generated integer `id` (INSERT returns it).
 # Tables with a non-integer primary key (RLS is enabled on these too, see database.init_db).
-OTHER_TABLES = {"accounts", "memberships", "sessions", "settings", "account_settings"}
+OTHER_TABLES = {"accounts", "memberships", "sessions", "settings", "account_settings", "schema_version"}
 AUTOID_TABLES = {
     "clients", "projects", "posts", "system_logs", "users", "login_attempts", "post_views",
     "whatsapp_accounts", "contacts", "conversations", "messages", "deals", "broadcasts", "automations",
@@ -42,6 +42,14 @@ def is_transient(exc: BaseException) -> bool:
     t = str(exc)
     return name in ("InterfaceError", "OperationalError") or "EMAXCONN" in t or "connection" in t.lower() and "closed" in t.lower() \
         or "SSL" in t and "EOF" in t or "08006" in t or "57P01" in t
+
+
+def is_retryable_init(exc: BaseException) -> bool:
+    """Schema setup clashing with another process: deadlock (40P01), serialization (40001), lock not
+    available (55P03), a duplicate object from a concurrent CREATE, or a dropped connection."""
+    t = str(exc)
+    return any(code in t for code in ("40P01", "40001", "55P03", "42P07", "42701")) \
+        or is_unique_violation(exc) or is_transient(exc)
 
 
 def database_url() -> str:
