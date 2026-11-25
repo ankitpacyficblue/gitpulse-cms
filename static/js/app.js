@@ -59,7 +59,7 @@ async function initApp() {
     // Role gating first, so buttons are right even if a later load fails.
     applyRolePermissions();
     const hasAccount = !!getActiveAccountId();
-    const loaders = [loadStatus, loadProjects, loadStagingPosts, loadPosts, loadLogs];
+    const loaders = hasAccount ? [loadStatus, loadProjects, loadStagingPosts, loadPosts, loadLogs] : [];
     if (hasAccount) loaders.push(loadWhatsAppInbox, loadWhatsAppContacts, loadWhatsAppDeals, loadWhatsAppBroadcasts, loadWhatsAppAutomations, loadWhatsAppConfig, loadAlerts);
     if (isPlatformAdmin()) loaders.push(loadSettings, loadSupabaseStatus);
     // Run in parallel; one failing screen must not blank the rest.
@@ -69,6 +69,7 @@ async function initApp() {
 
     // Auto-refresh metrics, staging queue, and logs every 15 seconds
     setInterval(() => {
+        if (!getActiveAccountId()) return;
         loadStatus();
         loadStagingPosts();
         loadLogs();
@@ -89,8 +90,25 @@ const TAB_GUARD = {
     'wa-broadcasts': () => can('crm.read')
 };
 
+// A platform admin with no client account still sees the whole menu; account screens explain what to do.
+const NO_ACCOUNT_OK = ['settings', 'supabase'];
+let currentTab = 'repos';
+function needsFirstAccount() { return isPlatformAdmin() && !getActiveAccountId(); }
+
+function showNoAccountPanel() {
+    const panel = document.getElementById('no-account-panel');
+    if (!panel) return;
+    const show = needsFirstAccount() && !NO_ACCOUNT_OK.includes(currentTab);
+    panel.classList.toggle('hidden', !show);
+    const tab = document.getElementById(`tab-${currentTab}`);
+    if (tab) tab.classList.toggle('hidden', show);
+    const kpi = document.getElementById('kpi-cards');
+    if (kpi) kpi.classList.toggle('hidden', show || currentTab !== 'repos');
+}
+
 function switchTab(tabName) {
-    if (TAB_GUARD[tabName] && currentUser && !TAB_GUARD[tabName]()) tabName = 'repos';
+    if (TAB_GUARD[tabName] && currentUser && !needsFirstAccount() && !TAB_GUARD[tabName]()) tabName = 'repos';
+    currentTab = tabName;
     const kpi = document.getElementById('kpi-cards');
     if (kpi) kpi.classList.toggle('hidden', tabName !== 'repos');
     if (window.innerWidth <= 900) toggleSidebar(false);
@@ -135,6 +153,9 @@ function switchTab(tabName) {
     const headerSubEl = document.getElementById('view-header-sub');
     if (headerTitleEl && titleMap[tabName]) headerTitleEl.innerText = titleMap[tabName].title;
     if (headerSubEl && titleMap[tabName]) headerSubEl.innerText = titleMap[tabName].sub;
+
+    showNoAccountPanel();
+    if (needsFirstAccount() && !NO_ACCOUNT_OK.includes(tabName)) return; // nothing to load yet
 
     if (tabName === 'repos') loadProjects();
     if (tabName === 'staging') loadStagingPosts();
@@ -972,7 +993,9 @@ async function submitAddClient(e) {
         document.getElementById('new-client-name').value = '';
         document.getElementById('new-client-email').value = '';
         if (document.getElementById('new-client-owner')) document.getElementById('new-client-owner').value = '';
+        const wasFirst = needsFirstAccount();
         await loadClients();
+        if (wasFirst) { await onClientFilterChange(); switchTab(currentTab); }
     } else {
         showToast(errorText(res, 'Failed to create account'), 'error');
     }
@@ -2159,7 +2182,7 @@ function applyRolePermissions() {
     document.querySelectorAll('[data-perm-disable]').forEach(el => { el.disabled = !can(el.getAttribute('data-perm-disable')); });
     const nav = document.getElementById('nav-users');
     if (nav) nav.classList.toggle('hidden', !can('users.manage'));
-    if (!getActiveAccountId()) {
+    if (!getActiveAccountId() && !isPlatformAdmin()) {
         // No account chosen: CRM screens have nothing to show and every call would be rejected.
         document.querySelectorAll('.sidebar-nav-item[onclick*="switchTab(\'wa-"], #nav-users, #nav-blog-plan').forEach(n => n.classList.add('hidden'));
         document.querySelectorAll('header [onclick^="openAddContactModal"], header [onclick^="openAddDealModal"], header [onclick^="openAddBroadcastModal"]').forEach(n => n.classList.add('hidden'));
@@ -2184,6 +2207,12 @@ function applyRolePermissions() {
     const anyAction = [...document.querySelectorAll('#top-actions > *')].some(b => !b.classList.contains('hidden'));
     const nb = document.getElementById('new-menu-btn');
     if (nb) nb.style.visibility = anyAction ? '' : 'hidden';
+    if (needsFirstAccount()) {
+        document.querySelectorAll('.sidebar-nav-item, #nav-platform-section').forEach(n => n.classList.remove('hidden'));
+        document.querySelectorAll('header [onclick^="openAdd"]').forEach(b => b.classList.add('hidden'));
+        if (nb) nb.style.visibility = 'hidden';
+    }
+    showNoAccountPanel();
     const roleEl = document.querySelector('.sidebar-footer .text-slate-400');
     if (roleEl && currentUser) roleEl.innerText = isPlatformAdmin() ? 'Platform admin' : (currentUser.role ? currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1) : '');
 }

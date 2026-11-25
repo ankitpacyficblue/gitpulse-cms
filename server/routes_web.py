@@ -545,6 +545,11 @@ def render_dashboard_html() -> str:
             <!-- Dashboard Body -->
             <main class="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto" id="main-content">
                 <p class="text-[11px] text-slate-400 mb-3">Working in: <strong id="account-banner-name" class="text-slate-200">All accounts</strong></p>
+                <section id="no-account-panel" class="hidden bg-slate-900 border border-slate-800 rounded-xl p-8 text-center" aria-labelledby="no-account-h">
+                    <h2 id="no-account-h" class="text-lg font-semibold text-white">Create your first client account</h2>
+                    <p class="text-sm text-slate-400 mt-2 mb-5">This screen shows one client's data, and there are no client accounts yet.</p>
+                    <button type="button" class="btn-primary" onclick="openAddClientModal()">+ New account</button>
+                </section>
                 <!-- 5 Top Metric Stat Cards -->
                 <section id="admin-alert-counts" class="hidden mb-4 bg-slate-900 border border-slate-800 rounded-xl p-4" aria-labelledby="admin-alerts-h">
                     <h2 id="admin-alerts-h" class="text-sm font-semibold text-white mb-2">Open problems by client</h2>
