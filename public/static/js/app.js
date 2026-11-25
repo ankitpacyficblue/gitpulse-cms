@@ -60,7 +60,7 @@ async function initApp() {
     applyRolePermissions();
     const hasAccount = !!getActiveAccountId();
     const loaders = [loadStatus, loadProjects, loadStagingPosts, loadPosts, loadLogs];
-    if (hasAccount) loaders.push(loadWhatsAppInbox, loadWhatsAppContacts, loadWhatsAppDeals, loadWhatsAppBroadcasts, loadWhatsAppAutomations, loadWhatsAppConfig);
+    if (hasAccount) loaders.push(loadWhatsAppInbox, loadWhatsAppContacts, loadWhatsAppDeals, loadWhatsAppBroadcasts, loadWhatsAppAutomations, loadWhatsAppConfig, loadAlerts);
     if (isPlatformAdmin()) loaders.push(loadSettings, loadSupabaseStatus);
     // Run in parallel; one failing screen must not blank the rest.
     await Promise.allSettled(loaders.map(f => { try { return Promise.resolve(f()); } catch (e) { return Promise.reject(e); } }));
@@ -119,6 +119,8 @@ function switchTab(tabName) {
         'wa-broadcasts': { title: 'Broadcast Campaigns', sub: 'Mass WhatsApp messaging campaigns segmented by audience tags' },
         'wa-automations': { title: 'No-Code Automations Engine', sub: 'Automated welcome bots, keyword responders, and blog publication alerts' },
         'users': { title: 'Users & Roles', sub: 'Invite people to this client account and control what each role can do' },
+        'wa-knowledge': { title: 'AI Assistant', sub: 'What the AI may say to customers of this business' },
+        'wa-templates': { title: 'Message Templates', sub: 'Meta-approved messages for contacting customers after 24 hours' },
         'wa-config': { title: 'WhatsApp API & Webhook Setup', sub: 'Four steps: credentials, webhook, test, done' },
         'supabase': { title: 'Supabase Cloud Database', sub: 'PostgreSQL multi-tenant persistence and cloud backup status' },
         'logs': { title: 'System & Generation Logs', sub: 'Real-time audit log of AI generation, GitHub commits, and webhooks' },
@@ -140,6 +142,10 @@ function switchTab(tabName) {
     if (tabName === 'wa-automations') loadWhatsAppAutomations();
     if (tabName === 'wa-config') loadWhatsAppConfig();
     if (tabName === 'users') loadUsersAndRoles();
+    if (tabName === 'wa-knowledge') loadKnowledge();
+    if (tabName === 'wa-templates') loadTemplates();
+    updateAlertsVisibility(tabName);
+    if (tabName === 'repos') loadAlerts();
     if (tabName === 'supabase' && isPlatformAdmin()) loadSupabaseStatus();
     if (tabName === 'logs') loadLogs();
     if (tabName === 'settings' && isPlatformAdmin()) loadSettings();
@@ -851,6 +857,7 @@ async function onClientFilterChange() {
     await refreshMe();
     applyRolePermissions();
     reloadAccountData();
+    reloadPhase1();
     if (!document.getElementById('tab-users').classList.contains('hidden')) loadUsersAndRoles();
 }
 
@@ -1264,7 +1271,8 @@ async function loadWhatsAppInbox(selectConvId = null) {
     const data = await apiGet(url);
     if (!data || !data.conversations) return;
     
-    currentConversationsList = data.conversations;
+    const humanOnly = af && af.value === 'human';
+    currentConversationsList = humanOnly ? data.conversations.filter(c => c.needs_human) : data.conversations;
     const threadListEl = document.getElementById('wa-threads-list');
     if (!threadListEl) return;
     
@@ -1273,7 +1281,7 @@ async function loadWhatsAppInbox(selectConvId = null) {
     if (currentConversationsList.length === 0) {
         threadListEl.innerHTML = `
             <div class="p-6 text-center text-slate-500 text-xs">
-                No conversations yet; start one from Contacts.<br>Chats also appear here when a customer messages this account's WhatsApp number.
+                ${humanOnly ? 'No chats are waiting for a person.' : "No conversations yet; start one from Contacts.<br>Chats also appear here when a customer messages this account's WhatsApp number."}
             </div>
         `;
         document.getElementById('wa-chat-empty-state').classList.remove('hidden');
@@ -1302,6 +1310,7 @@ async function loadWhatsAppInbox(selectConvId = null) {
                     <span class="text-[10px] text-slate-500">${timeStr}</span>
                 </div>
                 ${conv.assigned_user_id ? `<div class="text-[10px] text-indigo-300 truncate">${conv.assigned_user_id === (currentUser && currentUser.id) ? 'Assigned to you' : 'Assigned: ' + escapeHtml(conv.assigned_to || '')}</div>` : ''}
+                ${conv.needs_human ? '<div class="text-[10px] font-semibold text-amber-300">⚠ Needs human</div>' : ''}
                 <div class="flex justify-between items-center">
                     <p class="text-[11px] text-slate-400 truncate">${escapeHtml(conv.last_message_preview || 'No messages')}</p>
                     ${unreadBadge}
@@ -1331,6 +1340,7 @@ async function selectConversation(convId, force = false) {
     const conv = currentConversationsList.find(c => c.id === convId);
     if (conv) {
         renderAssignSelect(conv);
+        renderNeedsHuman(conv);
         document.getElementById('wa-chat-empty-state').classList.add('hidden');
         document.getElementById('wa-chat-active-state').classList.remove('hidden');
         
@@ -1416,6 +1426,7 @@ async function loadConversationMessages(convId, silent = false) {
         bubble.innerHTML = `
             <div>${escapeHtml(msg.body).replace(/\\n/g, '<br>')}</div>
             <div class="text-[9px] text-right mt-1 opacity-70 flex justify-end items-center">
+                ${msg.sent_by === 'ai' ? '<span class="mr-auto font-semibold" title="Written by the AI">AI</span>' : ''}
                 <span>${timeStr}</span>
                 ${tick}
             </div>
@@ -1474,7 +1485,7 @@ async function loadWhatsAppContacts() {
     if (!tbody) return;
     tbody.innerHTML = '';
     if (data.contacts.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5">${emptyStateHtml('No contacts yet', 'Add your first lead with "+ New Lead". Contacts appear here when customers message this account on WhatsApp.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7">${emptyStateHtml('No contacts yet', 'Add your first lead with "+ New Lead". Contacts appear here when customers message this account on WhatsApp.')}</td></tr>`;
         return;
     }
     data.contacts.forEach(c => {
@@ -1510,6 +1521,8 @@ async function loadWhatsAppContacts() {
             <td class="px-5 py-3">
                 <div class="flex flex-wrap gap-1">${tagPills}</div>
             </td>
+            <td class="px-5 py-3 text-xs text-slate-300">${leadSourceHtml(c)}</td>
+            <td class="px-5 py-3">${consentHtml(c)}</td>
             <td class="px-5 py-3 text-xs text-slate-400 max-w-xs truncate">
                 ${escapeHtml(c.notes || '-')}
             </td>
@@ -2027,8 +2040,8 @@ async function submitAddAutomation(e) {
 
 // Fallback map used until /api/auth/me returns a `permissions` list.
 const ROLE_PERMISSIONS = {
-    owner:  ['crm.read', 'crm.write', 'crm.delete', 'wa.config', 'automations.manage', 'broadcasts.run', 'content.read', 'content.publish', 'users.manage', 'audit.read', 'account.manage'],
-    admin:  ['crm.read', 'crm.write', 'crm.delete', 'wa.config', 'automations.manage', 'broadcasts.run', 'content.read', 'content.publish', 'users.manage', 'audit.read'],
+    owner:  ['ai.manage', 'crm.read', 'crm.write', 'crm.delete', 'wa.config', 'automations.manage', 'broadcasts.run', 'content.read', 'content.publish', 'users.manage', 'audit.read', 'account.manage'],
+    admin:  ['ai.manage', 'crm.read', 'crm.write', 'crm.delete', 'wa.config', 'automations.manage', 'broadcasts.run', 'content.read', 'content.publish', 'users.manage', 'audit.read'],
     agent:  ['crm.read', 'crm.write', 'content.read'],
     viewer: ['crm.read', 'content.read']
 };
@@ -2058,6 +2071,7 @@ function applyRolePermissions() {
         if (el.id === 'wa-sim-card') return;
         el.classList.toggle('hidden', !can(el.getAttribute('data-requires')));
     });
+    document.querySelectorAll('[data-perm-disable]').forEach(el => { el.disabled = !can(el.getAttribute('data-perm-disable')); });
     const nav = document.getElementById('nav-users');
     if (nav) nav.classList.toggle('hidden', !can('users.manage'));
     if (!getActiveAccountId()) {
@@ -2494,4 +2508,206 @@ async function waRunTest() {
         if (out) { out.className = 'text-xs ' + (res.ok ? 'text-emerald-300' : 'text-red-300'); out.innerText = (res.ok ? 'Passed: ' : 'Failed: ') + (res.message || ''); }
     } else if (out) { out.className = 'text-xs text-red-300'; out.innerText = 'Test could not run.'; }
     await refreshWaStatus();
+}
+
+// --- Phase 1: AI assistant, handoff, alerts, templates, consent, lead source ---
+const LEAD_SOURCES = { website: 'Website', ad: 'Ad (click to WhatsApp)', direct: 'Direct', manual: 'Added by team' };
+const CONSENT_LABELS = { unknown: 'Not recorded', opted_in: 'Opted in', opted_out: 'Opted out' };
+const fmtWhen = v => v ? new Date(v).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+const cardClass = 'bg-slate-900 border border-slate-800 rounded-xl p-4';
+const lines = id => document.getElementById(id).value.split('\n').map(x => x.trim()).filter(Boolean);
+const joined = v => Array.isArray(v) ? v.join('\n') : (v || '');
+
+function leadSourceHtml(c) {
+    const label = LEAD_SOURCES[c.source] || c.source || '-';
+    return escapeHtml(label) + (c.source_detail ? `<div class="text-[10px] text-slate-500">${escapeHtml(c.source_detail)}</div>` : '');
+}
+
+function consentHtml(c) {
+    const v = CONSENT_LABELS[c.consent_status] ? c.consent_status : 'unknown';
+    const meta = [c.consent_source, fmtWhen(c.consent_at)].filter(Boolean).join(' · ');
+    const when = meta ? `<div class="text-[10px] text-slate-500">${escapeHtml(meta)}</div>` : '';
+    const role = currentUser && currentUser.role;
+    if (!(role === 'owner' || role === 'admin' || isPlatformAdmin())) return `<span class="text-xs ${v === 'opted_out' ? 'text-red-300 font-semibold' : 'text-slate-300'}">${CONSENT_LABELS[v]}</span>${when}`;
+    const options = Object.keys(CONSENT_LABELS).map(k => `<option value="${k}" ${k === v ? 'selected' : ''}>${CONSENT_LABELS[k]}</option>`).join('');
+    return `<select aria-label="Consent for ${escapeHtml(c.name)}" class="input-select text-xs py-1 min-w-[9rem] ${v === 'opted_out' ? 'text-red-300' : ''}" onchange="setConsent(${Number(c.id)}, this.value, '${v}', this)">${options}</select>${when}`;
+}
+
+async function setConsent(id, value, previous, select) {
+    let source = '';
+    if (value === 'opted_in') {
+        source = (prompt('How did this person agree to receive messages? (for example: website form, 25 Nov)') || '').trim();
+        if (!source) { select.value = previous; return; }
+    }
+    const res = await apiPut(`/api/whatsapp/contacts/${id}`, { consent_status: value, consent_source: source || 'set by team' });
+    if (res && res.success) { showToast('Consent saved.', 'success'); loadWhatsAppContacts(); }
+    else select.value = previous;
+}
+
+let conversationAiOn = true;
+function renderNeedsHuman(conv) {
+    const box = document.getElementById('wa-needs-human');
+    if (!box) return;
+    box.classList.toggle('hidden', !conv.id);
+    conversationAiOn = conv.ai_mode !== 'off' && !conv.needs_human;
+    document.getElementById('wa-needs-human-text').innerText = conv.needs_human
+        ? `Needs a person${conv.needs_human_reason ? ': ' + conv.needs_human_reason : ''}`
+        : conversationAiOn ? 'AI is answering this chat.' : 'AI is off for this chat.';
+    document.getElementById('wa-ai-btn').innerText = conversationAiOn ? 'Take over' : 'Resume AI';
+}
+
+async function toggleConversationAi() {
+    const id = activeConversationId;
+    if (!id) return;
+    const mode = conversationAiOn ? 'off' : 'on';
+    const res = await apiPost(`/api/whatsapp/conversations/${id}/ai`, { mode });
+    if (res && !res.error) { showToast(mode === 'on' ? 'AI resumed.' : 'You have taken over. The AI will stay silent.', 'success'); loadWhatsAppInbox(id); }
+}
+
+function addFaqRow(item = {}) {
+    const row = document.createElement('div');
+    row.className = 'kb-faq-row border border-slate-800 rounded-lg p-3 space-y-2';
+    row.innerHTML = `<input class="input-text text-sm w-full" data-f="question" aria-label="Question" placeholder="Question">
+        <textarea class="input-text text-sm w-full" data-f="answer" rows="2" aria-label="Answer" placeholder="Answer"></textarea>
+        <button type="button" class="btn-secondary text-xs" onclick="this.parentElement.remove()">Remove</button>`;
+    row.querySelector('[data-f=question]').value = item.question || '';
+    row.querySelector('[data-f=answer]').value = item.answer || '';
+    document.getElementById('kb-faq').appendChild(row);
+}
+
+function addPriceRow(item = {}) {
+    const row = document.createElement('div');
+    row.className = 'kb-price-row flex flex-wrap items-center gap-2';
+    row.innerHTML = `<input class="input-text text-sm flex-1 min-w-[10rem]" data-f="text" aria-label="Price item" placeholder="Item and price">
+        <label class="flex items-center gap-1 text-xs text-slate-300"><input type="checkbox" data-f="quote" class="w-4 h-4"> AI may quote</label>
+        <button type="button" class="btn-secondary text-xs" onclick="this.parentElement.remove()">Remove</button>`;
+    row.querySelector('[data-f=text]').value = item.text || '';
+    row.querySelector('[data-f=quote]').checked = !!item.ai_may_quote;
+    document.getElementById('kb-prices').appendChild(row);
+}
+
+function fillKnowledge(k) {
+    document.getElementById('kb-ai-enabled').checked = !!k.ai_enabled;
+    document.getElementById('kb-facts').value = joined(k.business_facts);
+    document.getElementById('kb-locations').value = joined(k.locations);
+    document.getElementById('kb-tone').value = k.tone || '';
+    document.getElementById('kb-languages').value = joined(k.languages);
+    document.getElementById('kb-banned').value = joined(k.banned_claims);
+    document.getElementById('kb-handoff').value = k.handoff_message || '';
+    document.getElementById('kb-faq').innerHTML = '';
+    (k.faq || []).forEach(addFaqRow);
+    document.getElementById('kb-prices').innerHTML = '';
+    (k.price_items || []).forEach(addPriceRow);
+}
+
+async function loadKnowledge() {
+    if (!getActiveAccountId()) return;
+    const fields = document.getElementById('kb-fields');
+    const status = document.getElementById('kb-status');
+    fields.disabled = true;
+    document.getElementById('ai-viewonly').classList.toggle('hidden', can('ai.manage'));
+    const acct = getActiveAccountId();
+    const data = await apiGet('/api/ai/knowledge');
+    if (acct !== getActiveAccountId()) return;
+    // Saving over a failed load would wipe the stored knowledge, so the form stays locked.
+    if (!data || data.error) { fillKnowledge({}); status.innerText = 'Could not load the AI settings. Nothing can be saved until they load.'; return; }
+    const k = data.knowledge || data;
+    fillKnowledge(k);
+    fields.disabled = !can('ai.manage');
+    status.innerText = k.ai_enabled ? 'On. Chats the AI cannot answer are marked "Needs human".' : 'Off. Your team answers every message.';
+}
+
+async function saveKnowledge(e) {
+    e.preventDefault();
+    const val = id => document.getElementById(id).value.trim();
+    const body = {
+        ai_enabled: document.getElementById('kb-ai-enabled').checked,
+        business_facts: val('kb-facts'), locations: lines('kb-locations'), tone: val('kb-tone'),
+        languages: lines('kb-languages'), banned_claims: lines('kb-banned'), handoff_message: val('kb-handoff'),
+        faq: [...document.querySelectorAll('.kb-faq-row')].map(r => ({ question: r.querySelector('[data-f=question]').value.trim(), answer: r.querySelector('[data-f=answer]').value.trim() })).filter(x => x.question && x.answer),
+        price_items: [...document.querySelectorAll('.kb-price-row')].map(r => ({ text: r.querySelector('[data-f=text]').value.trim(), ai_may_quote: r.querySelector('[data-f=quote]').checked })).filter(x => x.text)
+    };
+    const res = await apiPut('/api/ai/knowledge', body);
+    if (res && !res.error) { showToast('AI settings saved.', 'success'); loadKnowledge(); }
+}
+
+async function testQuestion(e) {
+    e.preventDefault();
+    const out = document.getElementById('kb-test-result');
+    const btn = document.getElementById('kb-test-btn');
+    btn.disabled = true;
+    out.innerText = 'Asking...';
+    const res = await apiPost('/api/ai/test', { question: document.getElementById('kb-test-q').value.trim() });
+    btn.disabled = false;
+    if (!res || res.error) { out.innerText = 'The test did not run.'; return; }
+    out.innerText = (res.handoff ? 'Would hand off to a person.\n' : 'Would reply:\n') + (res.reply || '');
+}
+
+async function loadTemplates() {
+    if (!getActiveAccountId()) return;
+    const data = await apiGet('/api/whatsapp/templates');
+    const list = document.getElementById('tpl-list');
+    if (!data || !data.templates) { list.innerHTML = emptyStateHtml('Could not load templates', 'Try again in a moment.'); return; }
+    list.innerHTML = data.templates.length ? data.templates.map(t => {
+        const st = String(t.status || '').toLowerCase();
+        const colour = st === 'approved' ? 'text-emerald-300' : st === 'rejected' ? 'text-red-300' : 'text-amber-300';
+        return `<article class="${cardClass}">
+            <h3 class="text-sm font-semibold text-white font-mono break-all">${escapeHtml(t.name)}</h3>
+            <div class="text-[11px] text-slate-400"><span class="font-semibold ${colour}">${escapeHtml(st || 'unknown')}</span> · ${escapeHtml([t.language, t.category].filter(Boolean).join(' · '))}</div>
+            ${t.body ? `<p class="text-xs text-slate-300 mt-2 whitespace-pre-wrap break-words">${escapeHtml(t.body)}</p>` : ''}
+        </article>`;
+    }).join('') : emptyStateHtml('No templates yet', 'Press "Sync from Meta" after creating templates in WhatsApp Manager.');
+}
+
+async function syncTemplates(btn) {
+    btn.disabled = true;
+    const res = await apiPost('/api/whatsapp/templates/sync', {});
+    btn.disabled = false;
+    if (res && !res.error) { showToast('Templates synced.', 'success'); loadTemplates(); }
+}
+
+function updateAlertsVisibility(tab) {
+    const panel = document.getElementById('alerts-panel');
+    if (panel) panel.classList.toggle('hidden', tab !== 'repos' || !getActiveAccountId());
+}
+
+async function loadAlerts() {
+    const onHome = !document.getElementById('tab-repos').classList.contains('hidden');
+    updateAlertsVisibility(onHome ? 'repos' : '');
+    const acct = getActiveAccountId();
+    if (!acct) return;
+    const data = await apiCall('GET', '/api/alerts', undefined, { quiet: true });
+    if (acct !== getActiveAccountId()) return;
+    const list = document.getElementById('alerts-list');
+    const badge = document.getElementById('alerts-count');
+    if (!data || !data.alerts) { badge.classList.add('hidden'); list.innerHTML = '<p class="text-xs text-amber-300">Alerts could not be loaded, so problems may be hidden.</p>'; return; }
+    const open = data.alerts.filter(a => !a.resolved_at);
+    badge.innerText = open.length;
+    badge.classList.toggle('hidden', !open.length);
+    list.innerHTML = open.length ? '<ul class="space-y-2">' + open.map(a => {
+        // Only same-app links: '#...' or '/...'.
+        const link = /^(#|\/(?!\/))/.test(a.link || '') ? `<a class="btn-secondary text-xs" href="${escapeHtml(a.link)}">Open</a>` : '';
+        return `<li class="flex flex-wrap justify-between items-center gap-2 border-t border-slate-800 pt-2">
+            <div class="min-w-0 flex-1"><div class="text-xs ${a.severity === 'warning' ? 'text-amber-300' : 'text-red-300'} break-words">${escapeHtml(a.message)}${a.count > 1 ? ` (${Number(a.count)} times)` : ''}</div>
+            <div class="text-[10px] text-slate-500">${escapeHtml([String(a.type || '').replace(/_/g, ' '), fmtWhen(a.last_seen || a.first_seen)].filter(Boolean).join(' · '))}</div></div>
+            ${link}${can('crm.write') ? `<button type="button" class="btn-secondary text-xs" onclick="resolveAlert(${Number(a.id)})">Resolve</button>` : ''}
+        </li>`;
+    }).join('') + '</ul>' : '<p class="text-xs text-slate-400">No problems.</p>';
+}
+setInterval(() => { if (typeof currentUser !== 'undefined' && currentUser && !document.hidden) loadAlerts(); }, 30000);
+
+async function resolveAlert(id) {
+    const res = await apiPost(`/api/alerts/${id}/resolve`, {});
+    if (res && !res.error) loadAlerts();
+}
+
+function reloadPhase1() {
+    fillKnowledge({});
+    document.getElementById('kb-test-result').innerText = '';
+    document.getElementById('tpl-list').innerHTML = '';
+    document.getElementById('alerts-list').innerHTML = '';
+    renderNeedsHuman({});
+    loadAlerts();
+    if (!document.getElementById('tab-wa-knowledge').classList.contains('hidden')) loadKnowledge();
+    if (!document.getElementById('tab-wa-templates').classList.contains('hidden')) loadTemplates();
 }
