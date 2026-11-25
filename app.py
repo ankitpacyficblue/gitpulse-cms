@@ -4,7 +4,7 @@ Launches the background publishing scheduler daemon and starts the Web Dashboard
 """
 
 import sys
-from database import init_db
+from engine.auth import init_db_and_admin
 from scheduler.cron_worker import start_scheduler
 from server.http_server import run_server
 from config import SERVER_HOST, SERVER_PORT
@@ -15,9 +15,7 @@ def main():
     print("=" * 60)
     
     # 1. Initialize SQLite Database & Schema (no sample data, no default login)
-    init_db()
-    from engine.auth import bootstrap_platform_admin_from_env
-    bootstrap_platform_admin_from_env()
+    init_db_and_admin()
     print("No accounts are created automatically. Create the first owner with:")
     print("   python3 cli.py create-owner --account \"Account name\" --username NAME")
 

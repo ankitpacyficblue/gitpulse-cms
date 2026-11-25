@@ -235,7 +235,7 @@ class SslTests(unittest.TestCase):
 class RlsTests(unittest.TestCase):
     def test_every_table_the_app_creates_is_in_the_rls_list(self):
         import re, database, crm_store, inspect
-        src = inspect.getsource(database.init_db) + inspect.getsource(crm_store.init_schema)
+        src = inspect.getsource(database._apply_schema) + inspect.getsource(crm_store.init_schema)
         created = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", src))
         covered = dbcompat.AUTOID_TABLES | dbcompat.OTHER_TABLES
         self.assertEqual(created - covered, set(), "tables created without an RLS entry")
