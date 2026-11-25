@@ -84,6 +84,16 @@ def _int(v, default=None):
 # Dispatcher
 # ==========================================================================
 
+def _role_for(user: Dict[str, Any], account_id: str) -> Optional[str]:
+    """Role in an account: the membership role, or "owner" for a platform admin (support access to any active
+    account; every write is still audit-logged against the account)."""
+    role = cs.get_membership_role(account_id, user["id"])
+    if role or not user.get("is_platform_admin"):
+        return role
+    acct = cs.get_account(account_id)
+    return "owner" if acct and acct.get("status", "active") == "active" else None
+
+
 def handle_api_request(method: str, path: str, *args, **kwargs) -> Response:
     """Catch-all: a handler bug returns a JSON 500, never a dropped connection."""
     try:
@@ -121,7 +131,7 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
         if access == "session":
             ctx.account_id = hdrs.get("x-account-id") or None   # optional here (used by /api/auth/me)
             if ctx.account_id:
-                ctx.role = cs.get_membership_role(ctx.account_id, current_user["id"])
+                ctx.role = _role_for(current_user, ctx.account_id)
                 if not ctx.role:
                     return _forbidden("membership")
             return fn(ctx, match, query_params, body)
@@ -133,15 +143,16 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
 
         if access == "member" or access.startswith("path:"):
             ctx.account_id = match.group("aid")
-            ctx.role = cs.get_membership_role(ctx.account_id, current_user["id"])
+            ctx.role = _role_for(current_user, ctx.account_id)
             if not ctx.role:
                 return _forbidden("membership")
             perm = access[5:] if access.startswith("path:") else None
         elif access.startswith("acct:"):
             account_id = hdrs.get("x-account-id")
             if not account_id:
-                return 400, {"error": "account_required", "message": "Send the X-Account-Id header."}
-            role = cs.get_membership_role(account_id, current_user["id"])
+                return 400, {"error": "account_required", "code": "select_account",
+                         "message": "Select an account first (send the X-Account-Id header)."}
+            role = _role_for(current_user, account_id)
             if not role:
                 return _forbidden("membership")
             ctx.account_id, ctx.role = account_id, role
@@ -261,6 +272,8 @@ def change_password(ctx, m, q, body):
 
 @route("GET", r"/api/accounts", "session")
 def accounts_list(ctx, m, q, body):
+    if ctx.user.get("is_platform_admin"):
+        return 200, {"accounts": cs.list_all_accounts(ctx.user["id"])}
     return 200, {"accounts": cs.list_accounts_for_user(ctx.user["id"])}
 
 

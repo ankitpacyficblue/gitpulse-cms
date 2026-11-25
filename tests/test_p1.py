@@ -163,5 +163,43 @@ class AutomationReplyTests(P1Base):
         self.assertEqual(out[0]["body"], "Hello Ria")
 
 
+class PlatformAdminTests(P1Base):
+    def test_platform_admin_lists_and_manages_any_account(self):
+        pa = new_user("pa", platform_admin=True)
+        c = Caller(pa, None)
+        code, body = c("GET", "/api/accounts")
+        ids = {a["id"] for a in body["accounts"]}
+        self.assertIn(self.acct, ids)
+        self.assertTrue(all("member_count" in a for a in body["accounts"]))
+        self.assertEqual(Caller(pa, self.acct)("GET", "/api/whatsapp/contacts")[0], 200)
+        self.assertEqual(Caller(pa, self.acct)("GET", f"/api/accounts/{self.acct}/users")[0], 200)
+
+    def test_normal_user_still_sees_only_own_and_is_denied_elsewhere(self):
+        other = new_account()
+        self.assertEqual(self.c["owner"]("GET", "/api/whatsapp/contacts", account_id=other)[0], 403)
+        ids = {a["id"] for a in self.c["owner"]("GET", "/api/accounts")[1]["accounts"]}
+        self.assertNotIn(other, ids)
+
+    def test_missing_account_header_has_select_account_code(self):
+        pa = new_user("pa2", platform_admin=True)
+        code, body = Caller(pa, None)("GET", "/api/projects")
+        self.assertEqual((code, body["code"]), (400, "select_account"))
+
+    def test_delete_account_removes_orphan_logins_only(self):
+        pa = new_user("pa3", platform_admin=True)
+        acct = new_account()
+        solo, shared = new_user("solo2"), new_user("shared2")
+        join(acct, solo, "owner")
+        join(acct, shared, "agent")
+        join(new_account(), shared, "agent")
+        name = cs.get_account(acct)["name"]
+        code, _ = Caller(pa, acct)("DELETE", f"/api/accounts/{acct}", {"confirm_name": name})
+        self.assertEqual(code, 200)
+        uid = lambda u: u["id"] if isinstance(u, dict) else u
+        self.assertIsNone(auth.get_user_by_id(uid(solo)))
+        self.assertIsNotNone(auth.get_user_by_id(uid(shared)))
+        self.assertIsNotNone(auth.get_user_by_id(uid(pa)))
+
+
 if __name__ == "__main__":
     unittest.main()
