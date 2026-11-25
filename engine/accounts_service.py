@@ -106,13 +106,19 @@ def reset_password(account_id: str, actor_role: str, actor_user_id: int, target_
     return temp
 
 
-def remove_member(account_id: str, actor_role: str, target_user_id: int) -> None:
+def remove_member(account_id: str, actor_role: str, target_user_id: int, purge: bool = False) -> Dict[str, Any]:
     current = _target_role(account_id, target_user_id)
     if not has_permission(actor_role, "users.manage") or (current == "owner" and not has_permission(actor_role, "owners.manage")):
         raise ServiceError(403, "forbidden", "You cannot remove this member.")
     if current == "owner" and cs.count_owners(account_id) <= 1:
         raise ServiceError(409, "last_owner", "An account must keep at least one owner.")
     cs.remove_membership(account_id, target_user_id)
+    deleted = False
+    if purge:
+        target = auth.get_user_by_id(target_user_id)
+        if target and not target["is_platform_admin"] and not cs.list_accounts_for_user(target_user_id):
+            deleted = auth.delete_user(target_user_id)
+    return {"success": True, "login_deleted": deleted}
 
 
 def delete_account(account_id: str, actor_role: str, confirm_name: str) -> None:

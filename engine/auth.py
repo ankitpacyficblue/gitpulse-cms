@@ -117,6 +117,17 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+def delete_user(user_id: int) -> bool:
+    """Delete a login that belongs to no account. Callers must check memberships first.
+    Audit rows keep their text; sessions go with the user (FK cascade, explicit for safety)."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM memberships WHERE user_id = ?", (user_id,))
+        cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
+
 TEMP_PASSWORD_HOURS = 72
 
 

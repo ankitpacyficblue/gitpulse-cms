@@ -207,6 +207,10 @@ ALTER TABLE public.users         ADD COLUMN IF NOT EXISTS temp_password_expires 
 ALTER TABLE public.users         ADD COLUMN IF NOT EXISTS sessions_valid_after_ms BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE public.accounts      ADD COLUMN IF NOT EXISTS default_currency      TEXT NOT NULL DEFAULT 'INR';
 ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS assigned_user_id      BIGINT;
+ALTER TABLE public.whatsapp_accounts ADD COLUMN IF NOT EXISTS last_webhook_at    TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.whatsapp_accounts ADD COLUMN IF NOT EXISTS last_test_at       TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.whatsapp_accounts ADD COLUMN IF NOT EXISTS last_test_ok       INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE public.whatsapp_accounts ADD COLUMN IF NOT EXISTS last_test_message  TEXT NOT NULL DEFAULT '';
 
 -- Per-account blog settings: AI provider/key and GitHub token (keys are AES-GCM ciphertext).
 CREATE TABLE IF NOT EXISTS public.account_settings (

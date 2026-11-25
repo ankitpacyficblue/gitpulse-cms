@@ -348,9 +348,11 @@ def users_reset_password(ctx, m, q, body):
 
 @route("DELETE", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)", "path:users.manage")
 def users_remove(ctx, m, q, body):
-    svc.remove_member(ctx.account_id, ctx.role, int(m.group("uid")))
-    db.log_event(f"User #{m.group('uid')} removed from account.", "INFO", account_id=ctx.account_id)
-    return 200, {"success": True}
+    """Removes the person from this account. With ?purge=1 their login is also deleted when it belongs to no other account."""
+    out = svc.remove_member(ctx.account_id, ctx.role, int(m.group("uid")), purge=q.get("purge") in ("1", "true", "yes"))
+    db.log_event(f"User #{m.group('uid')} removed from account" + (" and login deleted." if out["login_deleted"] else "."),
+                 "INFO", account_id=ctx.account_id)
+    return 200, out
 
 
 # ==========================================================================
@@ -626,6 +628,24 @@ def wa_config_save(ctx, m, q, body):
     return 200, out
 
 
+@route("GET", r"/api/whatsapp/connection-status", "acct:crm.read")
+def wa_connection_status(ctx, m, q, body):
+    """Setup wizard: {mock_mode, webhook_url, credentials{...bool}, last_webhook_at, last_test{at,ok,message}, ready}."""
+    pub = _wa_public(ctx.account_id, ctx.host)
+    st = cs.get_whatsapp_status(ctx.account_id)
+    c = st["credentials"]
+    st.update({"mock_mode": pub["mock_mode"], "webhook_url": pub["webhook_url"],
+               "ready": bool(c["phone_number_id"] and c["access_token"] and c["app_secret"] and st["last_webhook_at"])})
+    return 200, st
+
+
+@route("POST", r"/api/whatsapp/config/test", "acct:wa.config")
+def wa_test_connection(ctx, m, q, body):
+    """Read-only check of the saved credentials at Meta. Never sends a message."""
+    res = WhatsAppClient(ctx.account_id).test_connection()
+    return 200, res
+
+
 @route("POST", r"/api/whatsapp/config/verify-token", "acct:wa.config")
 def wa_rotate_verify(ctx, m, q, body):
     token = cs.rotate_verify_token(ctx.account_id)
@@ -638,6 +658,11 @@ def wa_rotate_verify(ctx, m, q, body):
 # WhatsApp CRM: contacts, conversations, deals, broadcasts, automations
 # ==========================================================================
 
+def _valid_phone(phone: str) -> bool:
+    digits = re.sub(r"[\s\-().]", "", str(phone))
+    return bool(re.fullmatch(r"\+?\d{8,15}", digits))
+
+
 @route("GET", r"/api/whatsapp/contacts", "acct:crm.read")
 def contacts_list(ctx, m, q, body):
     return 200, {"contacts": cs.list_contacts(ctx.account_id, search=q.get("search", ""), tag=q.get("tag", ""))}
@@ -648,6 +673,8 @@ def contacts_create(ctx, m, q, body):
     name, phone = str(body.get("name", "")).strip(), str(body.get("phone", "")).strip()
     if not name or not phone:
         return 400, {"error": "Name and phone number are required."}
+    if not _valid_phone(phone):
+        return 400, {"error": "invalid_phone", "message": "Enter the phone number with country code, 8 to 15 digits, for example +919876543210."}
     try:
         cid = cs.create_contact(ctx.account_id, name, phone, email=body.get("email", ""),
                                 tags=body.get("tags") or ["Lead"], notes=body.get("notes", ""))
@@ -743,6 +770,11 @@ def deals_create(ctx, m, q, body):
         value = float(body.get("value", 0.0))
     except (TypeError, ValueError):
         return 400, {"error": "Deal value must be a number."}
+    if value < 0 or value != value or value in (float("inf"), float("-inf")):
+        return 400, {"error": "invalid_value", "message": "Deal value cannot be negative."}
+    cur_in = str(body.get("currency") or "").strip()
+    if cur_in and not re.fullmatch(r"[A-Za-z]{3}", cur_in):
+        return 400, {"error": "invalid_currency", "message": "Currency must be a 3-letter code such as INR or USD."}
     if str(body.get("stage", "lead")) not in DEAL_STAGES:
         return 400, {"error": "invalid_stage", "allowed": DEAL_STAGES}
     try:
@@ -751,7 +783,8 @@ def deals_create(ctx, m, q, body):
                              expected_close=body.get("expected_close", ""), notes=body.get("notes", ""))
     except ValueError:
         return 404, {"error": "Contact not found."}
-    return 201, {"success": True, "id": did, "message": "Deal created successfully."}
+    cur_code = cur_in.upper() or (cs.get_account(ctx.account_id) or {}).get("default_currency") or "INR"
+    return 201, {"success": True, "id": did, "currency": cur_code, "message": "Deal created successfully."}
 
 
 @route("PUT", r"/api/whatsapp/deals/(?P<id>\d+)/stage", "acct:crm.write")
