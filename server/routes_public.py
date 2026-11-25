@@ -7,6 +7,7 @@ and XML sitemaps to client websites without requiring repository builds.
 import json
 from typing import Dict, Any, Tuple, Optional
 from database import get_project, list_posts, get_post_by_slug, increment_post_views
+from engine import media
 from engine.image_generator import generate_hero_svg
 
 def handle_public_request(path: str, query: Dict[str, str], client_ip: str = "") -> Tuple[int, str, str]:
@@ -15,6 +16,15 @@ def handle_public_request(path: str, query: Dict[str, str], client_ip: str = "")
     Returns: (status_code, content_type, response_body_string)
     """
     parts = path.strip("/").split("/")
+    # /api/public/media/<token>: a file linked from a published post. 302 with the target as the body.
+    if len(parts) == 4 and parts[:3] == ["api", "public", "media"]:
+        try:
+            link = media.public_link(parts[3])
+        except media.MediaError:
+            return 503, "application/json", json.dumps({"error": "Storage unavailable."})
+        if not link:
+            return 404, "application/json", json.dumps({"error": "File not found."})
+        return 302, "text/plain", link
     # Expected: /api/public/projects/<id>/...
     if len(parts) < 4 or parts[0] != "api" or parts[1] != "public" or parts[2] != "projects":
         return 404, "application/json", json.dumps({"error": "Invalid public endpoint."})

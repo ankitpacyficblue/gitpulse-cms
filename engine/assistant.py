@@ -219,7 +219,11 @@ def hand_off(account_id: str, contact: Dict[str, Any], conv_id: int, reason: str
     alerts.raise_alert(account_id, "ai_failed" if error else "handoff", f"A chat needs a person: {reason}",
                        link=f"conversation:{conv_id}", severity="error" if error else "warning")
     try:
-        messaging.send(account_id, contact, get_knowledge(account_id)["handoff_message"], sent_by="ai")
+        text = get_knowledge(account_id)["handoff_message"]
+        with db.get_connection() as conn:       # the first thing the assistant says must say what it is
+            ever = conn.execute("SELECT 1 FROM messages WHERE account_id = ? AND conversation_id = ? AND sent_by = 'ai'",
+                                (account_id, conv_id)).fetchone()
+        messaging.send(account_id, contact, text if ever else f"{DISCLOSURE}\n\n{text}", sent_by="ai")
     except messaging.Blocked:
         pass
 

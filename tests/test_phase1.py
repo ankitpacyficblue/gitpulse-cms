@@ -4,6 +4,7 @@ import json
 import os
 import time
 import unittest
+import urllib.error
 from datetime import datetime, timedelta
 from unittest import mock
 
@@ -11,9 +12,12 @@ import tests._env  # noqa: F401
 from tests.apihelpers import Caller, new_user, new_account, join, setup_db
 import crm_store as cs
 import database as db
-from engine import assistant, jobs, llm, messaging
+from engine import assistant, jobs, llm, media, messaging, writer_tokens
 from engine.whatsapp_client import WhatsAppClient
+from database import normalize_repo
+from engine.github_client import GitHubClient
 from server.routes_api import handle_api_request
+from server.routes_public import handle_public_request
 
 KNOWLEDGE = {"ai_enabled": True, "business_facts": "We sell farm plots near Mysuru. Visits are on weekends.",
              "faqs": [{"question": "Where are the plots?", "answer": "Near Mysuru, 25 km from the city."}],
@@ -163,7 +167,7 @@ class ReplyTests(Base):
     def test_provider_error_hands_off_with_alert_and_no_filler(self):
         self.llm_reply = llm.LLMError("AI provider returned HTTP 500")
         self.inbound()
-        self.assertEqual([m["body"] for m in self.out()], [assistant.DEFAULT_HANDOFF])
+        self.assertEqual([m["body"] for m in self.out()], [f"{assistant.DISCLOSURE}\n\n{assistant.DEFAULT_HANDOFF}"])
         self.assertEqual(len(self.alerts("ai_failed")), 1)
 
     def test_media_hands_off_and_reaction_is_ignored(self):
@@ -322,7 +326,7 @@ class TickAndAlertTests(Base):
         self.assertEqual(self.alerts(), [])
 
     def test_worker_stalled_is_reported_and_setup_note_before_the_secret(self):
-        db.set_setting("worker_last_tick", str(time.time() - 400))
+        db.set_setting("worker_last_tick", str(time.time() - 7 * 3600))
         with mock.patch.dict(os.environ, {"CRON_SECRET": "x"}):
             self.assertEqual(self.api("GET", "/api/alerts")[1]["alerts"][0]["type"], "worker_stalled")
         with mock.patch.dict(os.environ, {"CRON_SECRET": ""}):
@@ -333,7 +337,7 @@ class TickAndAlertTests(Base):
                                                 headers={"Authorization": "Bearer x"})[0], 200)
 
     def test_normal_requests_drain_the_queue_at_most_once_a_minute(self):
-        db.set_setting("worker_last_tick", str(time.time() - 400))
+        db.set_setting("worker_last_tick", str(time.time() - 7 * 3600))
         with mock.patch.dict(os.environ, {"OPPORTUNISTIC_TICK": "1"}), mock.patch.object(jobs, "tick") as tick:
             jobs._checked_at = 0
             self.api("GET", "/api/alerts")
@@ -343,60 +347,462 @@ class TickAndAlertTests(Base):
         self.assertEqual(tick.call_count, 1)
 
 
+class UatTests(Base):
+    def test_a_first_message_that_hands_off_still_says_it_is_automated(self):
+        self.api("PUT", "/api/ai/knowledge", {"ai_enabled": True, "business_name": "Villa"})
+        self.llm_reply = {"reply": "", "confident": False, "reason": "unsure"}
+        self.inbound("Can I speak to someone?")
+        self.assertIn(assistant.DISCLOSURE, self.out()[-1]["body"])
+
+    def test_broadcast_preview_counts_who_is_skipped_and_sends_nothing(self):
+        self.sync_templates()
+        cs.create_contact(self.a, "A", "+" + self.phone + "1")
+        out = cs.create_contact(self.a, "B", "+" + self.phone + "2")
+        messaging.set_consent(self.a, out, "opted_out", "test")
+        code, res = self.api("POST", "/api/whatsapp/broadcasts/preview",
+                             {"template_name": "mock_approved", "template_language": "en"})
+        self.assertEqual((code, res["audience"], res["will_send"], res["skipped"]), (200, 2, 1, {"opted_out": 1}))
+        self.assertEqual(cs.list_messages(self.a, cs.get_or_create_conversation(self.a, out)["id"]), [])
+
+
+class RepoNameTests(Base):
+    def test_a_pasted_address_is_saved_and_used_as_owner_repo(self):
+        for given in ("https://github.com/o/site.git/", "github.com/o/site", "git@github.com:o/site.git", " o/site/ ",
+                      "https://github.com/o/site/tree/main"):
+            self.assertEqual(normalize_repo(given), "o/site", given)
+        pid = db.create_project({"name": "S", "github_repo": "https://github.com/o/site", "topic": "t",
+                                 "target_framework": "generic"}, self.a)
+        self.assertEqual(db.get_project(pid)["github_repo"], "o/site")
+        db.update_project(pid, {"github_repo": "https://github.com/o/other.git"}, self.a)
+        self.assertEqual(db.get_project(pid)["github_repo"], "o/other")
+        missing = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+        with mock.patch("urllib.request.urlopen", side_effect=missing):
+            ok, message = GitHubClient("t").test_connection("o/other")
+        self.assertEqual((ok, "repo not found or token has no access" in message), (False, True))
+
+
 class EntryTests(Base):
-    def test_ad_code_and_direct_sources(self):
-        code, link = self.api("POST", "/api/entry-links", {"label": "Website", "code": "web1"})
-        self.assertEqual(code, 201)
+    def link(self, **extra):
+        return self.api("POST", "/api/entry-links", dict({"label": "Website", "code": "web1"}, **extra))
+
+    def test_no_number_no_link(self):
+        code, out = self.link()
+        self.assertEqual((code, out["error"]), (409, "no_number"))
+
+    def test_first_touch_source_and_campaign_are_kept(self):
+        cs.save_whatsapp_account(self.a, phone_number="+91 98000 00000")
+        code, link = self.link(source="social", campaign="diwali")
+        self.assertEqual(code, 201, link)
+        self.assertTrue(link["url"].startswith("https://wa.me/919800000000?text="))
         self.assertTrue(link["prefill"].endswith("(ref: WEB1)"))
-        a = self.inbound("hi", phone=self.phone + "1", referral={"source_id": "ad9", "headline": "Plots"})
-        b = self.inbound("hi (ref: web1)", phone=self.phone + "2")
-        c = self.inbound("hi (ref: NOPE)", phone=self.phone + "3")
-        self.assertEqual((a["source"], b["source"], c["source"]), ("ad", "WEB1", "direct"))
-        self.assertEqual(json.loads(a["source_detail"])["source_id"], "ad9")
-        self.assertEqual(self.inbound("again", phone=self.phone + "2", referral={"source_id": "z"})["source"], "WEB1")
+        ad = self.inbound("hi", phone=self.phone + "1", referral={"source_id": "ad9", "headline": "Plots"})
+        social = self.inbound("hi (ref: web1)", phone=self.phone + "2")
+        direct = self.inbound("hi (ref: NOPE)", phone=self.phone + "3")
+        self.assertEqual((ad["source"], social["source"], social["campaign"], direct["source"]),
+                         ("ad", "social", "diwali", "direct"))
+        self.assertEqual(json.loads(ad["source_detail"])["source_id"], "ad9")
+        again = self.inbound("again", phone=self.phone + "2", referral={"source_id": "z"})
+        self.assertEqual((again["source"], again["campaign"]), ("social", "diwali"))
+        manual = self.phone + "4"
+        cs.create_contact(self.a, "Typed in", "+" + manual)
+        self.assertEqual(self.inbound("hi (ref: WEB1)", phone=manual)["source"], "social")
+        self.assertEqual(self.api("GET", "/api/entry-links")[1]["links"][0]["enquiries"], 2)
         self.assertEqual(self.api_b("DELETE", f"/api/entry-links/{link['id']}")[0], 404)
 
 
-class BlogTests(Base):
-    def project(self, **extra):
-        pid = db.create_project(dict({"name": "Site", "github_repo": "x/y", "topic": "farm plots", "publish_time": "00:00",
-                                      "target_framework": "generic"}, **extra), self.a)
-        return pid
+class CustomFieldTests(Base):
+    def field(self, name, kind, **extra):
+        code, out = self.api("POST", "/api/contact-fields", dict({"name": name, "type": kind}, **extra))
+        self.assertEqual(code, 201, out)
+        return str(out["field"]["id"])
 
-    def tick_project(self, pid):
-        jobs.tick(limit=1000)
-        return [p for p in db.list_posts_for_account(self.a, limit=50) if p["project_id"] == pid]
+    def contacts(self, **query):
+        return self.api("GET", "/api/whatsapp/contacts", query=query)
 
-    def test_no_ai_key_means_no_post_and_an_alert_once_a_day(self):
-        pid = self.project()
-        db.set_setting("ai_provider", "gemini")
-        with mock.patch("engine.pipeline.DEFAULT_GEMINI_API_KEY", ""), mock.patch("engine.pipeline.fetch_repo_readme", return_value=""):
-            self.assertEqual(self.tick_project(pid), [])
-            self.assertEqual(self.tick_project(pid), [])
-        self.assertEqual(len(self.alerts("blog_failed")), 1)
-        self.assertEqual(self.alerts("blog_failed")[0]["count"], 1)
+    def add(self, custom):
+        return self.agent_api("POST", "/api/whatsapp/contacts",
+                              {"name": "C", "phone": "+9198" + str(int.from_bytes(os.urandom(4), "big"))[:8], "custom": custom})
 
-    def test_review_by_default_and_banned_claim_is_held(self):
-        self.api("PUT", "/api/ai/knowledge", KNOWLEDGE)
-        pid = self.project()
-        self.assertEqual(db.get_project(pid)["auto_publish"], 0)
-        article = {"title": "Plots", "slug": "plots", "excerpt": "e", "tags": [], "meta_seo": {}, "image_prompt": "",
-                   "content_markdown": "These plots are RERA approved."}
-        with mock.patch("engine.pipeline.AIGenerator.generate_article", return_value=article), \
-                mock.patch("engine.pipeline.fetch_repo_readme", return_value=""):
-            posts = self.tick_project(pid)
-        self.assertEqual([p["status"] for p in posts], ["in_review"])
-        self.assertIn("banned claim", self.alerts("blog_failed")[0]["message"])
+    def test_define_validate_filter_and_archive(self):
+        self.assertEqual(self.agent_api("POST", "/api/contact-fields", {"name": "x", "type": "text"})[0], 403)
+        city, budget = self.field("City", "text"), self.field("Budget", "number")
+        when, phase = self.field("Visit", "date"), self.field("Phase", "select", options=["1", "2"])
+        self.assertEqual(self.api("POST", "/api/contact-fields", {"name": "city", "type": "text"})[0], 409)
+        for bad in ({budget: "lots"}, {when: "tomorrow"}, {phase: "3"}):
+            self.assertEqual(self.add(bad)[0], 400, bad)
+        self.assertEqual(self.contacts()[1]["contacts"], [])                      # nothing saved by a bad request
+        self.assertEqual(self.add({city: "Mysuru", budget: "50", phase: "1", when: "2026-12-05"})[0], 201)
+        self.assertEqual(self.add({city: "Pune", budget: 20})[0], 201)
+        names = lambda **q: len(self.contacts(**q)[1]["contacts"])
+        self.assertEqual(names(**{"cf_" + budget + "_min": "30"}), 1)
+        self.assertEqual(names(**{"cf_" + city: "mys", "cf_" + phase: "1"}), 1)
+        self.assertEqual(names(**{"cf_" + when + "_max": "2026-12-01"}), 0)
+        self.assertEqual(self.api("PATCH", f"/api/contact-fields/{budget}", {"type": "text"})[0], 409)
+        cid = self.contacts(**{"cf_" + city: "pune"})[1]["contacts"][0]["id"]
+        self.assertEqual(self.agent_api("PUT", f"/api/whatsapp/contacts/{cid}", {"custom": {city: ""}})[0], 200)
+        self.assertEqual(names(**{"cf_" + city: "pune"}), 0)
+        self.assertEqual(self.api("DELETE", f"/api/contact-fields/{city}")[0], 200)
+        self.assertTrue(all(city not in c["custom"] for c in self.contacts()[1]["contacts"]))
+        self.assertEqual(self.add({city: "x"})[0], 404)
 
-    def test_auto_publish_without_github_token_fails_instead_of_pretending(self):
-        pid = self.project(auto_publish=True)
-        article = {"title": "Plots", "slug": "plots", "excerpt": "e", "tags": [], "meta_seo": {}, "image_prompt": "",
-                   "content_markdown": "Plots near Mysuru."}
-        with mock.patch("engine.pipeline.AIGenerator.generate_article", return_value=article), \
-                mock.patch("engine.pipeline.fetch_repo_readme", return_value=""):
-            posts = self.tick_project(pid)
-        self.assertEqual([p["status"] for p in posts], ["failed"])
+    def test_other_account_cannot_use_a_field(self):
+        mine = self.field("City", "text")
+        self.assertEqual(self.api_b("GET", "/api/contact-fields")[1]["fields"], [])
+        self.assertEqual(self.api_b("GET", "/api/whatsapp/contacts", query={"cf_" + mine: "x"})[0], 404)
+        self.assertEqual(self.api_b("DELETE", f"/api/contact-fields/{mine}")[0], 404)
+
+
+class BlogPlanTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.writer = self.agent_api
+        self.pid = db.create_project({"name": "Site", "github_repo": "x/y", "topic": "farm plots",
+                                      "target_framework": "generic"}, self.a)
+
+    def new(self, minutes=-1, api=None, **extra):
+        when = (datetime.utcnow() + timedelta(minutes=minutes)).isoformat() + "Z"
+        code, out = (api or self.writer)("POST", "/api/blog/plan", dict(
+            {"title": "Visiting the plots", "body": "Visits are on weekends.", "publish_at": when, "project_id": self.pid}, **extra))
+        self.assertEqual(code, 201, out)
+        return out["item"]["id"]
+
+    def step(self, item, action, api=None):
+        return (api or self.api)("POST", f"/api/blog/plan/{item}/{action}")
+
+    def item(self, item):
+        return next(i for i in self.api("GET", "/api/blog/plan")[1]["items"] if i["id"] == item)
+
+    def publisher(self, success=True):
+        res = {"success": success, "pr_url": "https://github.com/x/y/pull/1", "error": "boom"}
+        return mock.patch("engine.github_client.GitHubClient.publish_post", return_value=res)
+
+    def test_roles_and_illegal_jumps(self):
+        self.assertEqual(self.viewer_api("POST", "/api/blog/plan", {"title": "x"})[0], 403)
+        item = self.new()
+        self.assertEqual(self.step(item, "approve")[0], 409)                      # draft cannot jump to approved
+        self.assertEqual(self.step(item, "submit", self.writer)[0], 200)
+        self.assertEqual(self.step(item, "approve", self.writer)[0], 403)         # writers cannot approve
+        self.assertEqual(self.step(item, "approve")[0], 200)
+        self.assertEqual(self.step(item, "submit")[0], 409)
+
+    def test_scoping(self):
+        item = self.new()
+        self.assertEqual(self.api_b("PATCH", f"/api/blog/plan/{item}", {"title": "mine"})[0], 404)
+        self.assertEqual(self.api_b("GET", "/api/blog/plan")[1]["items"], [])
+        self.assertEqual(self.api("POST", "/api/blog/plan", {"title": "t", "assignee_id": 10 ** 9})[0], 404)
+        self.assertEqual(self.api_b("POST", "/api/blog/plan", {"title": "t", "project_id": self.pid})[0], 404)
+
+    def test_editing_approved_post_needs_approval_again(self):
+        item = self.new(minutes=60)
+        self.step(item, "submit"), self.step(item, "approve")
+        self.writer("PATCH", f"/api/blog/plan/{item}", {"assignee_id": self.agent["id"]})
+        self.assertEqual(self.item(item)["status"], "approved")
+        self.writer("PATCH", f"/api/blog/plan/{item}", {"body": "New text"})
+        self.assertEqual(self.item(item)["status"], "needs_approval")
+
+    def test_only_due_approved_posts_publish_once(self):
+        cs.save_account_settings(self.a, github_token="gh-test-token")
+        due, later, unapproved = self.new(), self.new(minutes=600), self.new()
+        for item in (due, later):
+            self.step(item, "submit"), self.step(item, "approve")
+        self.step(unapproved, "submit")
+        with self.publisher() as pub:
+            jobs.tick(limit=1000)
+            jobs.tick(limit=1000)
+        self.assertEqual(pub.call_count, 1)
+        self.assertIn("Visits are on weekends.", pub.call_args.kwargs["file_content"])
+        self.assertEqual([self.item(i)["status"] for i in (due, later, unapproved)], ["published", "approved", "needs_approval"])
+        self.assertTrue(self.item(due)["post_url"])
+        self.assertEqual(self.writer("PATCH", f"/api/blog/plan/{due}", {"title": "z"})[0], 409)
+
+    def test_failure_and_missing_token_raise_alert_and_do_not_repeat(self):
+        item = self.new()
+        self.step(item, "submit"), self.step(item, "approve")
+        with self.publisher() as pub:
+            jobs.tick(limit=1000)
+            jobs.tick(limit=1000)
+        self.assertEqual(pub.call_count, 0)
+        self.assertEqual(self.item(item)["status"], "failed")
         self.assertIn("GitHub token", self.alerts("blog_failed")[0]["message"])
+
+    def test_banned_claim_cannot_be_approved(self):
+        self.api("PUT", "/api/ai/knowledge", {"banned_claims": ["guaranteed returns"]})
+        item = self.new(body="Guaranteed returns for all.")
+        self.step(item, "submit")
+        self.assertEqual(self.step(item, "approve")[1]["error"], "blocked")
+
+    def test_empty_item_is_drafted_then_waits_for_approval(self):
+        item = self.new(body="")
+        article = {"content_markdown": "## Visits\nCome on a weekend."}
+        with mock.patch("engine.ai_generator.AIGenerator.generate_article", return_value=article), self.publisher() as pub:
+            jobs.tick(limit=1000)
+        self.assertEqual(self.item(item)["status"], "needs_approval")
+        self.assertEqual(pub.call_count, 0)
+
+    def test_ai_failure_leaves_the_draft_empty_with_alert(self):
+        item = self.new(body="")
+        db.set_setting("ai_provider", "gemini")
+        with mock.patch("config.DEFAULT_GEMINI_API_KEY", ""):
+            self.assertEqual(self.step(item, "draft")[0], 502)
+            jobs.tick(limit=1000)
+        self.assertEqual((self.item(item)["status"], self.item(item)["body"]), ("draft", ""))
+        self.assertEqual(len(self.alerts("blog_failed")), 1)
+
+    def test_nothing_planned_means_nothing_published(self):
+        with self.publisher() as pub:
+            jobs.tick(limit=1000)
+        self.assertEqual((pub.call_count, db.list_posts_for_account(self.a, limit=5)), (0, []))
+
+
+class MediaTests(Base):
+    PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 8
+    PDF = b"%PDF-1.7 " + b"0" * 7
+
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict(os.environ, {"MEDIA_SUPABASE_URL": "https://store.test", "MEDIA_SUPABASE_KEY": "k",
+                                           "MEDIA_BUCKET": "b"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.stored, self.next_upload = {}, None
+        for name, fake in (
+            ("storage_sign_upload", lambda path: self._arrive(path)),
+            ("storage_sign", lambda paths, seconds: {p: "https://store.test/s/" + p for p in paths}),
+            ("storage_head", lambda path: (len(self.stored[path]), self.stored[path][:16]) if path in self.stored else None),
+            ("storage_remove", lambda paths: [self.stored.pop(p, None) for p in paths]),
+            ("storage_put", lambda path, content, mime: self.stored.__setitem__(path, content)),
+        ):
+            p = mock.patch.object(media, name, fake)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _arrive(self, path):
+        if self.next_upload is not None:
+            self.stored[path] = self.next_upload
+        return "https://store.test/up/" + path
+
+    def upload(self, content=PNG, mime="image/png", name="plot.png", size=None):
+        self.next_upload = content
+        code, out = self.agent_api("POST", "/api/media/upload-url", {"name": name, "mime": mime, "size": size or 16})
+        if code != 201:
+            return code, out
+        return self.agent_api("POST", "/api/media", {"media_id": out["media_id"]})
+
+    def test_checks_isolation_and_delete(self):
+        self.assertEqual(self.upload(mime="image/gif")[1]["error"], "type_not_allowed")
+        self.assertEqual(self.upload(size=6 * 1024 * 1024)[1]["error"], "too_large")
+        code, out = self.upload(content=self.PDF)                       # claims PNG, is a PDF
+        self.assertEqual((code, out["error"], self.stored), (400, "file_rejected", {}))
+        self.assertEqual(self.upload(content=None)[1]["error"], "not_uploaded")
+        code, out = self.upload()
+        self.assertEqual(code, 201, out)
+        item = out["item"]["id"]
+        self.assertEqual([i["id"] for i in self.viewer_api("GET", "/api/media")[1]["items"]], [item])
+        self.assertEqual(self.viewer_api("POST", "/api/media/upload-url", {})[0], 403)
+        self.assertEqual(self.api_b("GET", "/api/media")[1]["items"], [])
+        self.assertEqual(self.api_b("DELETE", f"/api/media/{item}")[0], 404)
+        self.assertEqual(self.agent_api("DELETE", f"/api/media/{item}")[0], 403)
+        self.assertEqual(self.api("DELETE", f"/api/media/{item}")[0], 200)
+        self.assertEqual(self.stored, {})
+
+    def test_off_without_settings(self):
+        with mock.patch.dict(os.environ, {"MEDIA_BUCKET": ""}):
+            self.assertEqual(self.api("GET", "/api/media")[1], {"configured": False, "items": []})
+            self.assertEqual(self.api("POST", "/api/media/upload-url", {})[0], 503)
+
+    def test_chat_send_window_and_in_use(self):
+        pdf = self.upload(content=self.PDF, mime="application/pdf", name="brochure.pdf")[1]["item"]["id"]
+        webp = self.upload(content=b"RIFF0000WEBP0000", mime="image/webp", name="a.webp")[1]["item"]["id"]
+        self.inbound("Send the brochure")
+        url = f"/api/whatsapp/conversations/{self.conv()['id']}/messages"
+        self.assertEqual(self.api("POST", url, {"media_id": webp})[1]["error"], "unsupported_on_whatsapp")
+        code, out = self.api("POST", url, {"media_id": pdf})
+        self.assertEqual(code, 200, out)
+        sent = [m for m in self.api("GET", url)[1]["messages"] if m.get("media")]
+        self.assertEqual((sent[0]["message_type"], sent[0]["media"]["name"]), ("document", "brochure.pdf"))
+        self.assertEqual(self.api("DELETE", f"/api/media/{pdf}")[1]["error"], "in_use")
+        self.assertEqual(self.api("DELETE", f"/api/media/{pdf}", query={"force": "1"})[0], 200)
+        self.close_window()
+        self.assertEqual(self.api("POST", url, {"media_id": webp, "body": "x"})[0], 409)
+
+    def test_link_is_public_only_after_the_post_is_published(self):
+        out = self.upload()[1]["item"]
+        token = out["blog_url"].rsplit("/", 1)[1]
+        self.assertEqual(handle_public_request(f"/api/public/media/{token}", {})[0], 404)
+        pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
+        cs.save_account_settings(self.a, github_token="t")
+        when = (datetime.utcnow() - timedelta(1)).isoformat() + "Z"
+        item = self.api("POST", "/api/blog/plan", {"title": "T", "body": f"![plot]({out['blog_url']})",
+                                                   "publish_at": when, "project_id": pid})[1]["item"]["id"]
+        self.api("POST", f"/api/blog/plan/{item}/submit")
+        self.api("POST", f"/api/blog/plan/{item}/approve")
+        self.assertEqual(handle_public_request(f"/api/public/media/{token}", {})[0], 404)
+        with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}), \
+                mock.patch("engine.github_client.GitHubClient.publish_post", return_value={"success": True, "pr_url": "u"}):
+            jobs.tick(limit=1000)
+        code, _, link = handle_public_request(f"/api/public/media/{token}", {})
+        self.assertEqual(code, 302)
+        self.assertTrue(link.startswith("https://store.test/s/"))
+        self.assertEqual(self.api("GET", "/api/media")[1]["items"][0]["used_by"], ["blog"])
+
+    def post(self, **extra):
+        pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
+        cs.save_account_settings(self.a, github_token="t")
+        when = (datetime.utcnow() - timedelta(1)).isoformat() + "Z"
+        return self.agent_api("POST", "/api/blog/plan", dict({"title": "Plots", "body": "Visit on weekends.",
+                                                            "publish_at": when, "project_id": pid}, **extra))
+
+    def publisher(self):
+        return mock.patch("engine.github_client.GitHubClient.publish_post", return_value={"success": True, "pr_url": "u"})
+
+    def test_agent_writes_with_images_admin_rejects_then_approves(self):
+        cover, inline = (self.upload(name=n)[1]["item"]["id"] for n in ("cover.png", "inline.png"))
+        pdf = self.upload(content=self.PDF, mime="application/pdf", name="a.pdf")[1]["item"]["id"]
+        self.assertEqual(self.post(images=[{"media_id": pdf}])[1]["error"], "not_an_image")
+        self.assertEqual(self.api_b("POST", "/api/blog/plan", {"title": "x", "images": [{"media_id": cover}]})[0], 404)
+        code, out = self.post(images=[{"media_id": cover, "cover": True, "alt": "Gate"}, {"media_id": inline, "alt": "Road"}])
+        self.assertEqual(code, 201, out)
+        item = out["item"]["id"]
+        saved = self.agent_api("GET", "/api/blog/plan")[1]["items"][0]["images"]
+        self.assertEqual([(i["media_id"], i["cover"], bool(i["url"])) for i in saved], [(cover, True, True), (inline, False, True)])
+        url = f"/api/blog/plan/{item}"
+        with self.publisher() as pub:
+            jobs.tick(limit=1000)                                             # draft: never
+            self.assertEqual(self.agent_api("POST", url + "/submit")[0], 200)
+            jobs.tick(limit=1000)                                             # waiting for approval: never
+            self.assertEqual(self.api("DELETE", f"/api/media/{inline}", query={"force": "1"})[1]["error"], "in_use_by_post")
+            self.assertEqual(self.agent_api("POST", url + "/reject", {"note": "n"})[0], 403)
+            self.assertEqual(self.api("POST", url + "/reject", {"note": " "})[1]["error"], "note_required")
+            rejected = self.api("POST", url + "/reject", {"note": "Use a better photo"})[1]["item"]
+            self.assertEqual((rejected["status"], rejected["rejected_note"]), ("draft", "Use a better photo"))
+            jobs.tick(limit=1000)                                             # rejected: never
+            self.assertEqual(pub.call_count, 0)
+        self.assertIsNone(self.agent_api("POST", url + "/submit")[1]["item"]["rejected_note"])
+        self.assertEqual(self.api("POST", url + "/approve")[0], 200)
+        changed = self.agent_api("PATCH", url, {"images": [{"media_id": cover, "cover": True, "alt": "Main gate"},
+                                                          {"media_id": inline}]})[1]["item"]
+        self.assertEqual(changed["status"], "needs_approval")
+        self.api("POST", url + "/approve")
+        with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}), self.publisher() as pub:
+            jobs.tick(limit=1000)
+        sent = pub.call_args.kwargs["file_content"]
+        self.assertLess(sent.index("![Main gate](https://cms.test/api/public/media/"), sent.rindex("Visit on weekends."))
+        self.assertEqual(sent.count("/api/public/media/"), 2)
+        token = sent.split("/api/public/media/")[2].split(")")[0]
+        self.assertEqual(handle_public_request(f"/api/public/media/{token}", {})[0], 302)
+
+    def test_relative_media_links_are_published_with_the_full_address(self):
+        out = self.upload()[1]["item"]
+        path = "/api/public/media/" + out["blog_url"].rsplit("/", 1)[1]
+        item = self.post(body=f"![x]({path}) and ![y](https://cms.test{path})")[1]["item"]["id"]
+        self.agent_api("POST", f"/api/blog/plan/{item}/submit")
+        self.api("POST", f"/api/blog/plan/{item}/approve")
+        with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}), self.publisher() as pub:
+            jobs.tick(limit=1000)
+        self.assertIn(f"![x](https://cms.test{path}) and ![y](https://cms.test{path})", pub.call_args.kwargs["file_content"])
+
+    def test_a_missing_image_stops_the_whole_post(self):
+        image = self.upload()[1]["item"]["id"]
+        item = self.post(images=[{"media_id": image}])[1]["item"]["id"]
+        self.agent_api("POST", f"/api/blog/plan/{item}/submit")
+        with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}):
+            self.assertEqual(self.api("POST", f"/api/blog/plan/{item}/approve")[0], 200)
+            self.stored.clear()
+            with self.publisher() as pub:
+                jobs.tick(limit=1000)
+        self.assertEqual(pub.call_count, 0)
+        self.assertEqual(len(self.alerts("blog_failed")), 1)
+
+    def writer(self, name="Toby", account_api=None):
+        code, out = (account_api or self.api)("POST", "/api/writer-tokens", {"name": name})
+        self.assertEqual(code, 201, out)
+        header = {"Authorization": "Bearer " + out["token"]}
+        return out, lambda method, path, body=None: handle_api_request(method, path, {}, body or {}, headers=header)
+
+    def test_writer_token_submits_for_review_and_can_do_nothing_else(self):
+        pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
+        self.assertEqual(self.agent_api("POST", "/api/writer-tokens", {"name": "x"})[0], 403)
+        token, writer = self.writer()
+        self.assertTrue(token["token"].startswith("gpw_"))
+        listed = self.api("GET", "/api/writer-tokens")[1]["tokens"]
+        self.assertNotIn(token["token"], json.dumps(listed))
+        self.assertEqual(self.api("GET", "/api/writer/posts")[0], 401)          # a session is not a writer token
+        pdf = writer("POST", "/api/writer/media/upload-url", {"name": "a.pdf", "mime": "application/pdf", "size": 9})
+        self.assertEqual(pdf[1]["error"], "type_not_allowed")
+        self.next_upload = self.PNG
+        up = writer("POST", "/api/writer/media/upload-url", {"name": "a.png", "mime": "image/png", "size": 16})[1]
+        got = writer("POST", "/api/writer/media", {"media_id": up["media_id"]})[1]
+        draft = {"title": "Plots", "body": f"Hi ![a]({got['markdown_url']})", "images": [{"media_id": up["media_id"]}],
+                 "publish_at": (datetime.utcnow() - timedelta(1)).isoformat() + "Z", "status": "approved", "external_id": "e1"}
+        staff_image = self.upload()[1]["item"]["id"]
+        self.assertEqual(writer("POST", "/api/writer/posts", dict(draft, images=[{"media_id": staff_image}], external_id="e2"))[0], 404)
+        self.assertEqual(writer("POST", "/api/writer/posts", dict(draft, body="<img src=x onerror=a>", external_id="e3"))[1]["error"],
+                         "html_not_allowed")
+        code, out = writer("POST", "/api/writer/posts", draft)
+        self.assertEqual((code, out["item"]["state"]), (201, "draft"), out)
+        item = out["item"]["id"]
+        again = writer("POST", "/api/writer/posts", draft)
+        self.assertEqual((again[0], again[1]["item"]["id"], again[1]["created"]), (200, item, False))
+        self.assertEqual(writer("POST", f"/api/writer/posts/{item}/submit")[1]["item"]["state"], "in_review")
+        for path in (f"/api/blog/plan/{item}/approve", "/api/blog/plan", "/api/media", "/api/whatsapp/contacts",
+                     "/api/internal/tick"):
+            self.assertEqual(writer("POST", path)[0], 401, path)
+        other = self.writer("Other", self.api_b)[1]
+        self.assertEqual((other("GET", "/api/writer/posts")[1]["items"], other("GET", f"/api/writer/posts/{item}")[0]), ([], 404))
+        self.api("POST", f"/api/blog/plan/{item}/reject", {"note": "Shorter"})
+        self.assertEqual(writer("GET", f"/api/writer/posts/{item}")[1]["item"]["rejected_note"], "Shorter")
+        self.assertEqual(writer("PATCH", f"/api/writer/posts/{item}", {"body": "Short."})[1]["item"]["state"], "rejected")
+        self.assertEqual(writer("POST", f"/api/writer/posts/{item}/submit")[1]["item"]["state"], "in_review")
+        row = self.api("GET", "/api/blog/plan")[1]
+        self.assertEqual((row["items"][0]["writer"], row["items"][0]["project_id"], row["tick_hours"]), ("Toby", pid, 3))
+        cs.save_account_settings(self.a, github_token="t")
+        with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}):
+            self.assertEqual(self.api("POST", f"/api/blog/plan/{item}/approve")[0], 200)
+            self.assertEqual(writer("PATCH", f"/api/writer/posts/{item}", {"body": "Changed."})[1]["error"], "wrong_status")
+            with self.publisher() as pub:
+                jobs.tick(limit=1000)
+        self.assertEqual(pub.call_args.kwargs["mode"], "direct")
+        done = self.api("GET", "/api/blog/plan")[1]["items"][0]
+        self.assertEqual((done["state"], bool(done["published_at"])), ("published", True))
+        self.assertEqual(self.api("DELETE", f"/api/writer-tokens/{token['item']['id']}")[0], 200)
+        self.assertEqual(writer("GET", "/api/writer/posts")[0], 401)
+
+    def test_a_planned_slot_can_be_given_to_a_writer_and_requests_are_limited(self):
+        token, writer = self.writer()
+        slot = self.agent_api("POST", "/api/blog/plan", {"title": "Slot"})[1]["item"]["id"]
+        tid = token["item"]["id"]
+        self.assertEqual(self.agent_api("PATCH", f"/api/blog/plan/{slot}", {"writer_token_id": tid})[0], 403)
+        self.assertEqual(self.api("PATCH", f"/api/blog/plan/{slot}", {"writer_token_id": tid})[0], 200)
+        self.assertEqual(writer("PATCH", f"/api/writer/posts/{slot}", {"body": "Text."})[0], 200)
+        with mock.patch.object(writer_tokens, "MAX_PER_HOUR", 2):
+            self.assertEqual([writer("GET", "/api/writer/posts")[0] for _ in range(2)], [200, 429])
+
+    def test_template_header_and_incoming_file(self):
+        image = self.upload()[1]["item"]["id"]
+        self.inbound("hello")
+        self.sync_templates()
+        with db.get_connection() as c:
+            c.execute("UPDATE wa_templates SET header_format = 'IMAGE' WHERE account_id = ?", (self.a,))
+            c.commit()
+        tpl = {"name": "mock_approved", "language": "en", "params": ["A"]}
+        url = f"/api/whatsapp/conversations/{self.conv()['id']}/template"
+        self.assertEqual(self.api("POST", url, tpl)[1]["error"], "missing_media")
+        self.assertEqual(self.api("POST", url, dict(tpl, media_id=image))[0], 200)
+        sent = []
+        with mock.patch.dict(os.environ, {"WHATSAPP_MOCK": ""}), \
+                mock.patch.object(WhatsAppClient, "is_configured", lambda self: True), \
+                mock.patch.object(WhatsAppClient, "_post_message",
+                                  lambda self, payload: sent.append(payload) or {"success": True, "message_id": "w"}):
+            self.assertEqual(self.api("POST", url, dict(tpl, media_id=image))[0], 200)
+        header = sent[0]["template"]["components"][0]
+        self.assertEqual((header["type"], header["parameters"][0]["type"]), ("header", "image"))
+
+        with mock.patch.object(media, "download_from_meta", lambda account, wa_id: self.PDF):
+            message = cs.list_messages(self.a, self.conv()["id"])[0]
+            jobs.run_job(jobs.enqueue(self.a, "media_fetch", {"message_id": message["id"], "wa_media_id": "1"}))
+        got = self.api("GET", f"/api/whatsapp/conversations/{self.conv()['id']}/messages")[1]["messages"]
+        self.assertEqual(next(m for m in got if m["id"] == message["id"])["media"]["mime"], "application/pdf")
+        self.assertEqual(len(self.api("GET", "/api/media")[1]["items"]), 1)      # received files stay out of the library
 
 
 if __name__ == "__main__":

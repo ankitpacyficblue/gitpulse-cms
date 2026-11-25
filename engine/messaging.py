@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import crm_store as cs
 import database as db
-from engine import alerts, jobs
+from engine import alerts, jobs, media
 from engine.whatsapp_client import WhatsAppClient
 
 WINDOW = timedelta(hours=24)
@@ -102,20 +102,29 @@ def _set_message(account_id: str, message_id: int, status: str, wa_id: str = "",
 
 
 def _record(account_id: str, conv: Dict[str, Any], contact: Dict[str, Any], body: str, sent_by: str,
-            template: Optional[Dict[str, Any]], broadcast_id: Optional[int]) -> int:
-    mid = cs.create_message(account_id, conv["id"], contact["id"], "outbound", body,
-                            message_type="template" if template else "text", status="queued")
+            template: Optional[Dict[str, Any]], broadcast_id: Optional[int], file: Optional[Dict[str, Any]] = None) -> int:
+    kind = "template" if template else media.TYPES[file["mime"]][2] if file else "text"
+    mid = cs.create_message(account_id, conv["id"], contact["id"], "outbound", body, message_type=kind, status="queued")
     with db.get_connection() as conn:
-        conn.execute("UPDATE messages SET sent_by = ?, broadcast_id = ? WHERE id = ? AND account_id = ?",
-                     (sent_by, broadcast_id, mid, account_id))
+        conn.execute("UPDATE messages SET sent_by = ?, broadcast_id = ?, media_id = ? WHERE id = ? AND account_id = ?",
+                     (sent_by, broadcast_id, file["id"] if file else None, mid, account_id))
         conn.commit()
     return mid
 
 
-def _transmit(account_id: str, phone: str, body: str, template: Optional[Dict[str, Any]], params: List[str]) -> Dict[str, Any]:
+def _transmit(account_id: str, phone: str, body: str, template: Optional[Dict[str, Any]], params: List[str],
+              media_id: Optional[int] = None) -> Dict[str, Any]:
     client = WhatsAppClient(account_id)
+    file = None
+    if media_id:
+        try:
+            file = media.send_link(account_id, media_id)      # a fresh link for every attempt
+        except media.MediaError as e:
+            return {"success": False, "status": "failed", "error": e.message, "retryable": e.status >= 500}
     if template:
-        return client.send_template_message(phone, template["name"], template["language"], params)
+        return client.send_template_message(phone, template["name"], template["language"], params, file)
+    if file:
+        return client.send_media_message(phone, file, "" if body == file["filename"] else body)
     return client.send_text_message(phone, body)
 
 
@@ -135,11 +144,33 @@ def _alert_send_failed(account_id: str, conv_id: int, error: str) -> None:
 
 
 def _queue(account_id: str, message_id: int, params: List[str], template: Optional[Dict[str, Any]],
-           run_at: Optional[float] = None, attempts: int = 0, allow_opted_out: bool = False) -> None:
+           run_at: Optional[float] = None, attempts: int = 0, allow_opted_out: bool = False,
+           media_id: Optional[int] = None) -> None:
     jobs.enqueue(account_id, "send", {"message_id": message_id, "params": params, "allow_opted_out": allow_opted_out,
+                                      "media_id": media_id,
                                       "template": template["name"] if template else "",
                                       "language": template["language"] if template else ""},
                  run_at=run_at, attempts=attempts)
+
+
+def media_for(account_id: str, template: Optional[Dict[str, Any]], media_id: Any) -> Optional[Dict[str, Any]]:
+    """The file to send, checked against the template's header. Raises Blocked."""
+    wanted = (template or {}).get("header_format", "") if template else ""
+    if not media_id:
+        if wanted in ("IMAGE", "VIDEO", "DOCUMENT"):
+            raise Blocked("missing_media", f"This template needs a {wanted.lower()} file.")
+        return None
+    try:
+        media.require()
+        file = media.get(account_id, media_id)
+    except media.MediaError as e:
+        raise Blocked(e.code, e.message)
+    kind = media.TYPES[file["mime"]][2]
+    if not kind:
+        raise Blocked("unsupported_on_whatsapp", "WhatsApp does not take WebP. Use JPEG or PNG.")
+    if template and wanted != kind.upper():
+        raise Blocked("wrong_media_type", f"This template takes {wanted.lower() or 'no'} file in its header.")
+    return file
 
 
 def _prepare(account_id: str, contact: Dict[str, Any], body: str, template_name: str, template_language: str,
@@ -156,23 +187,26 @@ def _prepare(account_id: str, contact: Dict[str, Any], body: str, template_name:
 
 def send(account_id: str, contact: Dict[str, Any], body: str = "", sent_by: str = "staff",
          template_name: str = "", template_language: str = "", params: Optional[List[str]] = None,
-         allow_opted_out: bool = False) -> Dict[str, Any]:
+         allow_opted_out: bool = False, media_id: Any = None) -> Dict[str, Any]:
     """Send now; queue only if the failure is worth retrying. Raises Blocked, and then stores nothing."""
     params = params or []
     conv, template, body = _prepare(account_id, contact, body, template_name, template_language, params, allow_opted_out)
+    file = media_for(account_id, template, media_id)
+    file_id = file["id"] if file else None
+    body = body or (file["name"] if file else "")
     capped = bool(template) and _cap_reached(account_id, contact["id"])
-    mid = _record(account_id, conv, contact, body, sent_by, template, None)
+    mid = _record(account_id, conv, contact, body, sent_by, template, None, file)
     if capped:
-        _queue(account_id, mid, params, template, run_at=_next_day_ts())
+        _queue(account_id, mid, params, template, run_at=_next_day_ts(), media_id=file_id)
         return {"success": True, "status": "queued", "message_id": mid, "reason": "daily_cap"}
-    res = _transmit(account_id, contact["phone"], body, template, params)
+    res = _transmit(account_id, contact["phone"], body, template, params, file_id)
     status = _apply_result(account_id, mid, res)
     if status != "failed":
         return {"success": True, "status": status, "message_id": mid, "mock": bool(res.get("mock"))}
     if res.get("retryable"):
         _set_message(account_id, mid, "queued", error=res.get("error", ""))
         _queue(account_id, mid, params, template, run_at=time.time() + jobs.RETRY_DELAYS[0], attempts=1,
-               allow_opted_out=allow_opted_out)
+               allow_opted_out=allow_opted_out, media_id=file_id)
         return {"success": True, "status": "queued", "message_id": mid, "error": res.get("error")}
     _set_message(account_id, mid, "failed", error=res.get("error", ""))
     _alert_send_failed(account_id, conv["id"], res.get("error", "unknown error"))
@@ -181,12 +215,13 @@ def send(account_id: str, contact: Dict[str, Any], body: str = "", sent_by: str 
 
 def queue_send(account_id: str, contact: Dict[str, Any], body: str = "", sent_by: str = "automation",
                template_name: str = "", template_language: str = "", params: Optional[List[str]] = None,
-               broadcast_id: Optional[int] = None) -> int:
+               broadcast_id: Optional[int] = None, media_id: Any = None) -> int:
     """Bulk and scheduled sends: one job per recipient. Raises Blocked."""
     params = params or []
     conv, template, body = _prepare(account_id, contact, body, template_name, template_language, params)
-    mid = _record(account_id, conv, contact, body, sent_by, template, broadcast_id)
-    _queue(account_id, mid, params, template)
+    file = media_for(account_id, template, media_id)
+    mid = _record(account_id, conv, contact, body or (file["name"] if file else ""), sent_by, template, broadcast_id, file)
+    _queue(account_id, mid, params, template, media_id=file["id"] if file else None)
     return mid
 
 
@@ -208,7 +243,7 @@ def _send_job(job: Dict[str, Any]) -> None:
         return
     if template and _cap_reached(account_id, contact["id"]):
         raise jobs.Defer(_next_day_ts())
-    res = _transmit(account_id, contact["phone"], msg["body"], template, p.get("params") or [])
+    res = _transmit(account_id, contact["phone"], msg["body"], template, p.get("params") or [], p.get("media_id"))
     if _apply_result(account_id, msg["id"], res) != "failed":
         return
     if res.get("retryable"):

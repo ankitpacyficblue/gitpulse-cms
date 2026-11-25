@@ -198,17 +198,56 @@ def init_schema(conn) -> None:
         label TEXT NOT NULL, code TEXT NOT NULL, prefill TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
         UNIQUE (account_id, code)
     )""")
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS blog_plan (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        project_id INTEGER, title TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '', keyword TEXT NOT NULL DEFAULT '',
+        publish_at TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'draft', body TEXT NOT NULL DEFAULT '',
+        assignee_id INTEGER, post_url TEXT NOT NULL DEFAULT '', post_id INTEGER, error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""")
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS contact_fields (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        name TEXT NOT NULL, type TEXT NOT NULL, options TEXT NOT NULL DEFAULT '[]', archived INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+    )""")
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS media_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL DEFAULT 0, path TEXT NOT NULL,
+        token TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'pending', source TEXT NOT NULL DEFAULT 'library',
+        is_public INTEGER NOT NULL DEFAULT 0, created_by INTEGER, created_at TEXT NOT NULL
+    )""")
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS writer_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+        name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, hint TEXT NOT NULL DEFAULT '', created_by INTEGER,
+        created_at TEXT NOT NULL, last_used_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT '',
+        project_id INTEGER, window_start REAL NOT NULL DEFAULT 0, window_count INTEGER NOT NULL DEFAULT 0
+    )""")
     for table, columns in (
+        ("media_files", (("writer_token_id", "INTEGER"),)),
+        ("blog_plan", (("images", "TEXT NOT NULL DEFAULT '[]'"), ("rejected_note", "TEXT NOT NULL DEFAULT ''"),
+                       ("rejected_by", "INTEGER"), ("rejected_at", "TEXT NOT NULL DEFAULT ''"),
+                       ("publish_origin", "TEXT NOT NULL DEFAULT ''"),
+                       ("writer_token_id", "INTEGER"), ("published_at", "TEXT NOT NULL DEFAULT ''"),
+                       ("external_id", "TEXT NOT NULL DEFAULT ''"))),
+        ("entry_links", (("source", "TEXT NOT NULL DEFAULT 'website'"), ("campaign", "TEXT NOT NULL DEFAULT ''"))),
         ("contacts", (("consent_status", "TEXT NOT NULL DEFAULT 'unknown'"), ("consent_source", "TEXT NOT NULL DEFAULT ''"),
                       ("consent_at", "TEXT NOT NULL DEFAULT ''"), ("consent_wording", "TEXT NOT NULL DEFAULT ''"),
-                      ("source", "TEXT NOT NULL DEFAULT ''"), ("source_detail", "TEXT NOT NULL DEFAULT ''"))),
+                      ("source", "TEXT NOT NULL DEFAULT ''"), ("source_detail", "TEXT NOT NULL DEFAULT ''"),
+                      ("campaign", "TEXT NOT NULL DEFAULT ''"), ("entry_code", "TEXT NOT NULL DEFAULT ''"),
+                      ("custom", "TEXT NOT NULL DEFAULT '{}'"))),
         ("conversations", (("last_inbound_at", "TEXT NOT NULL DEFAULT ''"), ("needs_human", "INTEGER NOT NULL DEFAULT 0"),
                            ("handoff_reason", "TEXT NOT NULL DEFAULT ''"), ("ai_mode", "TEXT NOT NULL DEFAULT 'on'"),
                            ("ai_paused_at", "REAL NOT NULL DEFAULT 0"))),
         ("messages", (("sent_by", "TEXT NOT NULL DEFAULT ''"), ("sent_at", "TEXT NOT NULL DEFAULT ''"),
-                      ("broadcast_id", "INTEGER"))),
+                      ("broadcast_id", "INTEGER"), ("media_id", "INTEGER"))),
+        ("wa_templates", (("header_format", "TEXT NOT NULL DEFAULT ''"),)),
         ("broadcasts", (("template_name", "TEXT NOT NULL DEFAULT ''"), ("template_language", "TEXT NOT NULL DEFAULT ''"),
-                        ("template_params", "TEXT NOT NULL DEFAULT '[]'"), ("skipped_count", "INTEGER NOT NULL DEFAULT 0"))),
+                        ("template_params", "TEXT NOT NULL DEFAULT '[]'"), ("skipped_count", "INTEGER NOT NULL DEFAULT 0"),
+                        ("media_id", "INTEGER"))),
         ("automations", (("template_name", "TEXT NOT NULL DEFAULT ''"), ("template_language", "TEXT NOT NULL DEFAULT ''"),
                          ("template_params", "TEXT NOT NULL DEFAULT '[]'"))),
     ):
@@ -217,6 +256,10 @@ def init_schema(conn) -> None:
             if col not in have:
                 cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
     for stmt in (
+        "CREATE INDEX IF NOT EXISTS idx_blog_plan_acct ON blog_plan (account_id, publish_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_plan_external ON blog_plan (writer_token_id, external_id) "
+        "WHERE external_id != ''",
+        "CREATE INDEX IF NOT EXISTS idx_media_acct ON media_files (account_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs (status, run_at)",
         "CREATE INDEX IF NOT EXISTS idx_alerts_acct ON alerts (account_id, resolved_at)",
         "CREATE INDEX IF NOT EXISTS idx_contacts_acct ON contacts (account_id, updated_at)",

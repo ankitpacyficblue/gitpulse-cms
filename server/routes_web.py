@@ -373,6 +373,16 @@ def render_dashboard_html() -> str:
                         </span>
                         <span id="sidebar-badge-repos" class="sidebar-badge bg-slate-800 text-slate-300">-</span>
                     </a>
+                    <a class="sidebar-nav-item" id="nav-blog-plan" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('blog-plan')">
+                        <span class="flex items-center gap-2"><span aria-hidden="true">🗓️</span><span>Blog Schedule</span></span>
+                    </a>
+                    <a class="sidebar-nav-item" id="nav-blog-status" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('blog-status')">
+                        <span class="flex items-center gap-2"><span aria-hidden="true">🚦</span><span>Blog Status</span></span>
+                        <span id="badge-awaiting" class="hidden sidebar-badge bg-amber-500/20 text-amber-300 border border-amber-500/30" aria-label="posts awaiting approval">0</span>
+                    </a>
+                    <a class="sidebar-nav-item" id="nav-media" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('media')">
+                        <span class="flex items-center gap-2"><span aria-hidden="true">🖼️</span><span>Media Library</span></span>
+                    </a>
                     <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('staging')">
                         <span class="flex items-center gap-2">
                             <span>✍️</span>
@@ -440,6 +450,9 @@ def render_dashboard_html() -> str:
                     </a>
                     <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-templates')">
                         <span class="flex items-center gap-2"><span aria-hidden="true">🧾</span><span>Message Templates</span></span>
+                    </a>
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-entry')">
+                        <span class="flex items-center gap-2"><span aria-hidden="true">🔗</span><span>Entry Links</span></span>
                     </a>
                 </div>
 
@@ -538,6 +551,14 @@ def render_dashboard_html() -> str:
                     <button type="button" class="btn-primary" onclick="openAddClientModal()">+ New account</button>
                 </section>
                 <!-- 5 Top Metric Stat Cards -->
+                <section id="admin-alert-counts" class="hidden mb-4 bg-slate-900 border border-slate-800 rounded-xl p-4" aria-labelledby="admin-alerts-h">
+                    <h2 id="admin-alerts-h" class="text-sm font-semibold text-white mb-2">Open problems by client</h2>
+                    <ul class="flex flex-wrap gap-2"></ul>
+                </section>
+                <div id="awaiting-card" class="hidden mb-4 flex flex-wrap items-center justify-between gap-2 bg-slate-900 border border-amber-500/30 rounded-xl p-4">
+                    <span id="awaiting-count" class="text-sm text-amber-200" role="status"></span>
+                    <button type="button" class="btn-secondary text-xs" onclick="switchTab('blog-status')">Review</button>
+                </div>
                 <section id="alerts-panel" class="hidden mb-4 bg-slate-900 border border-slate-800 rounded-xl p-4" aria-labelledby="alerts-h">
                     <div class="flex justify-between items-center gap-3 mb-2">
                         <h2 id="alerts-h" class="text-sm font-semibold text-white">Problems <span id="alerts-count" class="hidden ml-1 text-[10px] px-1.5 rounded-full bg-red-500 text-white"></span></h2>
@@ -897,8 +918,16 @@ def render_dashboard_html() -> str:
                     <select id="chat-tpl" class="input-select text-xs w-full" onchange="showTemplateFields('chat')"></select>
                     <div id="chat-tpl-vars" class="space-y-2 mt-2"></div>
                     <p id="chat-tpl-preview" class="text-[11px] text-slate-400 mt-1 whitespace-pre-wrap break-words" aria-live="polite"></p>
+                            <div id="chat-media-wrap" class="hidden flex flex-wrap items-center gap-2 text-xs text-slate-300">
+                                <span data-label></span><button type="button" class="btn-secondary text-xs" onclick="attachMedia('tpl', this.parentElement.dataset.format)">Choose file</button>
+                                <span id="tpl-media-name" class="break-all" aria-live="polite"></span><button type="button" id="tpl-media-clear" class="hidden underline" onclick="clearMedia('tpl')">Remove</button>
+                            </div>
                             <button type="submit" class="btn-primary text-xs">Send template</button>
                         </form>
+                        <div data-requires="crm.write" class="px-3 pt-2 flex flex-wrap items-center gap-2 text-xs text-slate-300 bg-slate-950">
+                            <button type="button" class="btn-secondary text-xs" onclick="attachMedia('chat')">Attach file</button>
+                            <span id="chat-media-name" class="break-all" aria-live="polite"></span><button type="button" id="chat-media-clear" class="hidden underline" onclick="clearMedia('chat')">Remove</button>
+                        </div>
                         <form onsubmit="sendWhatsAppReply(event)" data-requires="crm.write" class="p-3 border-t border-slate-800 bg-slate-950 flex items-center gap-2">
                             <input type="text" id="wa-message-input" placeholder="Type WhatsApp message (Enter to send)..." class="input-text text-xs flex-1 py-2">
                             <button type="submit" class="btn-primary text-xs py-2 px-4 flex items-center gap-1.5 shadow-indigo-500/30">
@@ -948,6 +977,18 @@ def render_dashboard_html() -> str:
                 </div>
                 <button onclick="loadWhatsAppContacts()" class="btn-secondary text-xs whitespace-nowrap">Refresh List</button>
             </div>
+
+            <div id="cf-filters" class="hidden flex flex-wrap items-end gap-2 mb-3"></div>
+            <details id="cf-settings" data-requires="automations.manage" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4">
+                <summary class="text-sm font-semibold text-white cursor-pointer">Custom fields</summary>
+                <div id="cf-list" class="mt-3 space-y-2"></div>
+                <form onsubmit="saveContactField(event)" class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+                    <div><label for="cf-name" class="block text-xs text-slate-400 mb-1">Field name</label><input id="cf-name" class="input-text text-sm w-full" required maxlength="60"></div>
+                    <div><label for="cf-type" class="block text-xs text-slate-400 mb-1">Type</label><select id="cf-type" class="input-select text-sm w-full" onchange="document.getElementById('cf-options-wrap').classList.toggle('hidden', this.value !== 'select')"><option value="text">Text</option><option value="number">Number</option><option value="date">Date</option><option value="select">Choice list</option></select></div>
+                    <div id="cf-options-wrap" class="hidden"><label for="cf-options" class="block text-xs text-slate-400 mb-1">Choices (comma separated)</label><input id="cf-options" class="input-text text-sm w-full"></div>
+                    <button type="submit" class="btn-secondary text-xs">Add field</button>
+                </form>
+            </details>
 
             <!-- Contacts Table -->
             <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto shadow-xl">
@@ -1116,6 +1157,109 @@ def render_dashboard_html() -> str:
         </div>
 
         <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
+        <div id="tab-wa-entry" class="tab-content hidden">
+            <form data-requires="automations.manage" onsubmit="saveEntryLink(event)" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4 space-y-3">
+                <h2 class="text-sm font-semibold text-white">New entry link</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div><label for="entry-source" class="block text-xs text-slate-400 mb-1">Source</label>
+                        <select id="entry-source" class="input-select text-sm w-full"><option value="website">Website</option><option value="ad">Ad</option><option value="social">Social</option><option value="other">Other</option></select></div>
+                    <div><label for="entry-label" class="block text-xs text-slate-400 mb-1">Label</label><input id="entry-label" class="input-text text-sm w-full" required maxlength="100" placeholder="Website button"></div>
+                    <div><label for="entry-code" class="block text-xs text-slate-400 mb-1">Source code (optional)</label><input id="entry-code" class="input-text text-sm w-full" maxlength="40" pattern="[A-Za-z0-9_-]+" placeholder="WEB-HOME"></div>
+                    <div><label for="entry-campaign" class="block text-xs text-slate-400 mb-1">Campaign (optional)</label><input id="entry-campaign" class="input-text text-sm w-full" maxlength="100"></div>
+                </div>
+                <div><label for="entry-message" class="block text-xs text-slate-400 mb-1">Message the customer starts with</label><input id="entry-message" class="input-text text-sm w-full" maxlength="300" placeholder="Hi, I would like to know more."></div>
+                <button type="submit" class="btn-primary text-xs">Create link</button>
+            </form>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4"><h2 class="text-sm font-semibold text-white mb-2">Enquiries by source</h2><div id="entry-counts" class="flex flex-wrap gap-2"></div></div>
+            <div id="entry-list" class="space-y-3"></div>
+        </div>
+
+        <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
+        <div id="tab-blog-plan" class="tab-content hidden">
+            <div class="flex flex-wrap items-end gap-2 mb-4">
+                <div role="group" aria-label="View" class="flex gap-1">
+                    <button type="button" id="plan-view-list" class="btn-secondary text-xs" aria-pressed="true" onclick="setPlanView('list')">List</button>
+                    <button type="button" id="plan-view-month" class="btn-secondary text-xs" aria-pressed="false" onclick="setPlanView('month')">Month</button>
+                </div>
+                <label class="sr-only" for="plan-filter-status">Status</label>
+                <select id="plan-filter-status" class="input-select text-xs w-auto" onchange="renderPlan()"><option value="">All statuses</option><option value="draft">Draft</option><option value="needs_approval">In review</option><option value="rejected">Rejected</option><option value="approved">Approved</option><option value="published">Published</option><option value="failed">Failed</option></select>
+                <label class="sr-only" for="plan-filter-assignee">Assignee</label>
+                <select id="plan-filter-assignee" class="input-select text-xs w-auto" onchange="renderPlan()"><option value="">Anyone</option></select>
+                <button type="button" data-requires="content.write" class="btn-primary text-xs ml-auto" onclick="editPlan(null)">+ Plan a post</button>
+            </div>
+            <div id="plan-month-nav" class="hidden flex items-center justify-between mb-2">
+                <button type="button" class="btn-secondary text-xs" onclick="shiftPlanMonth(-1)">&larr; Previous</button>
+                <h2 id="plan-month-title" class="text-sm font-semibold text-white" aria-live="polite"></h2>
+                <button type="button" class="btn-secondary text-xs" onclick="shiftPlanMonth(1)">Next &rarr;</button>
+            </div>
+            <form id="plan-form" onsubmit="savePlan(event)" class="hidden bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4 space-y-3">
+                <h2 id="plan-form-h" class="text-sm font-semibold text-white">Plan a post</h2>
+                <p id="plan-form-note" class="text-xs text-amber-200"></p>
+                <p id="plan-rejected" class="hidden text-xs text-red-300 break-words"></p>
+                <fieldset id="plan-fields" class="space-y-3">
+                    <div><label for="plan-title" class="block text-xs text-slate-400 mb-1">Title</label><input id="plan-title" class="input-text text-sm w-full" required maxlength="200"></div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div><label for="plan-topic" class="block text-xs text-slate-400 mb-1">Topic</label><input id="plan-topic" class="input-text text-sm w-full" maxlength="300"></div>
+                        <div><label for="plan-keyword" class="block text-xs text-slate-400 mb-1">Target keyword</label><input id="plan-keyword" class="input-text text-sm w-full" maxlength="100"></div>
+                        <div><label for="plan-when" class="block text-xs text-slate-400 mb-1">Publish date and time (India time)</label><input id="plan-when" class="input-text text-sm w-full" type="datetime-local" required></div>
+                        <div><label for="plan-project" class="block text-xs text-slate-400 mb-1">Blog project</label><select id="plan-project" class="input-select text-sm w-full" required></select></div>
+                        <div><label for="plan-assignee" class="block text-xs text-slate-400 mb-1">Assignee</label><select id="plan-assignee" class="input-select text-sm w-full" ></select></div>
+                        <div id="plan-writer-wrap" class="hidden"><label for="plan-writer" class="block text-xs text-slate-400 mb-1">AI writer</label><select id="plan-writer" class="input-select text-sm w-full"></select></div>
+                    </div>
+                    <div><label for="plan-body" class="block text-xs text-slate-400 mb-1">Article (Markdown)</label><textarea id="plan-body" class="input-text text-sm w-full font-mono" rows="10" oninput="previewPlan()"></textarea></div>
+                    <div>
+                        <div class="flex justify-between items-center gap-2 mb-1"><h3 class="text-xs text-slate-400">Images</h3><button type="button" id="plan-add-image" class="btn-secondary text-xs" onclick="addPlanImage()">Add image</button></div>
+                        <ul id="plan-images" class="space-y-2"></ul>
+                        <p class="text-[11px] text-slate-500 mt-1">The cover goes at the top. Other images not linked in the text are added at the end.</p>
+                    </div>
+                </fieldset>
+                <details><summary class="text-xs text-indigo-300 cursor-pointer">Preview</summary><div id="plan-preview" class="text-sm text-slate-200 mt-2 break-words"></div></details>
+                <p class="text-[11px] text-slate-500">Approved posts publish within 3 hours of the scheduled time, directly to the website.</p>
+                <div id="plan-reject-box" class="hidden space-y-2">
+                    <label for="plan-reject-note" class="block text-xs text-slate-400">Why is it rejected?</label>
+                    <textarea id="plan-reject-note" class="input-text text-sm w-full" rows="2" maxlength="1000"></textarea>
+                    <button type="button" class="btn-secondary text-xs" onclick="rejectFromEditor()">Send back</button>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button type="submit" id="plan-save" class="btn-primary text-xs">Save</button>
+                    <button type="button" id="plan-draft" class="btn-secondary text-xs" onclick="planAction('draft')">Draft with AI</button>
+                    <button type="button" id="plan-submit" class="btn-secondary text-xs" onclick="planAction('submit')">Submit for approval</button>
+                    <button type="button" id="plan-approve" class="btn-secondary text-xs text-emerald-300" onclick="planAction('approve')">Approve</button>
+                    <button type="button" id="plan-reject" class="btn-secondary text-xs text-red-300" onclick="toggleRejectBox()">Reject</button>
+                    <button type="button" id="plan-delete" class="btn-secondary text-xs text-red-300" onclick="deletePlan()">Delete</button>
+                    <button type="button" class="btn-secondary text-xs" onclick="closePlanForm()">Close</button>
+                </div>
+            </form>
+            <div id="plan-list" class="space-y-2"></div>
+        </div>
+
+        <div id="tab-blog-status" class="tab-content hidden">
+            <p class="text-xs text-slate-400 mb-4">Approved posts publish within 3 hours of the scheduled time.</p>
+            <section aria-labelledby="review-h" class="mb-6">
+                <h2 id="review-h" class="text-sm font-semibold text-white mb-2">Waiting for approval</h2>
+                <div id="review-queue" class="space-y-2" aria-live="polite"></div>
+            </section>
+            <section aria-labelledby="status-h">
+                <h2 id="status-h" class="text-sm font-semibold text-white mb-2">All posts</h2>
+                <div id="status-filters" role="group" aria-label="Filter by state" class="flex flex-wrap gap-2 mb-3"></div>
+                <div id="status-list" class="space-y-2"></div>
+            </section>
+        </div>
+
+        <div id="tab-media" class="tab-content hidden">
+            <p id="media-not-ready" class="hidden text-sm text-amber-200 mb-3" role="status">File storage is not set up on the server yet, so nothing can be uploaded.</p>
+            <div class="flex flex-wrap items-end gap-3 mb-4">
+                <div class="flex-1 min-w-[12rem]"><label for="media-search" class="block text-xs text-slate-400 mb-1">Search by name</label><input id="media-search" type="search" class="input-text text-sm w-full" oninput="searchMedia()"></div>
+                <div id="media-upload" class="hidden min-w-0">
+                    <label for="media-file" class="block text-xs text-slate-400 mb-1">Upload: JPEG, PNG, WebP 5 MB · PDF 20 MB · MP4 16 MB</label>
+                    <input id="media-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf,video/mp4" class="text-xs text-slate-300 max-w-full" onchange="handleUpload(this, 'media', loadMedia)">
+                    <progress id="media-progress" class="hidden w-full" max="100" value="0" aria-label="Upload progress"></progress>
+                </div>
+            </div>
+            <div id="media-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3"></div>
+        </div>
+
+        <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
         <div id="tab-users" class="tab-content hidden">
             <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <section class="xl:col-span-2 bg-slate-900 border border-slate-800 rounded-xl shadow-xl" aria-labelledby="users-h">
@@ -1144,6 +1288,21 @@ def render_dashboard_html() -> str:
                         <button type="button" onclick="deleteAccount()" class="btn-secondary text-xs py-2 px-3 text-red-400">Delete account</button>
                     </form>
                     <p class="text-[11px] text-slate-500">Deleting hides the account and its data from everyone. Type the account name to confirm.</p>
+                </section>
+                <section id="writer-tokens-card" class="hidden xl:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-3" aria-labelledby="tokens-h">
+                    <h2 id="tokens-h" class="text-base font-semibold text-white">Writer tokens</h2>
+                    <p class="text-xs text-slate-400">For AI writer agents. A token can only upload images and submit drafts. It can never publish: every draft waits for an admin to approve it.</p>
+                    <form onsubmit="createWriterToken(event)" class="flex flex-wrap items-end gap-2">
+                        <div class="flex-1 min-w-[12rem]"><label for="token-name" class="block text-xs font-medium text-slate-300 mb-1">Writer name</label><input id="token-name" class="input-text text-xs w-full" required maxlength="80" placeholder="e.g. Toby"></div>
+                        <div class="min-w-[10rem]"><label for="token-project" class="block text-xs font-medium text-slate-300 mb-1">Default blog project</label><select id="token-project" class="input-select text-xs w-full"></select></div>
+                        <button type="submit" class="btn-primary text-xs py-2 px-3">Create token</button>
+                    </form>
+                    <div id="token-new" class="hidden border border-amber-500/40 rounded-lg p-3 space-y-2" role="status">
+                        <label for="token-value" class="block text-xs text-amber-200">Copy this token now. It is shown only once.</label>
+                        <input id="token-value" class="input-text text-xs w-full font-mono" readonly>
+                        <div class="flex gap-2"><button type="button" class="btn-secondary text-xs" onclick="copyNewToken()">Copy</button><button type="button" class="btn-secondary text-xs" onclick="hideNewToken()">Done</button></div>
+                    </div>
+                    <ul id="token-list" class="space-y-2"></ul>
                 </section>
                 <section id="account-keys-card" class="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-3" aria-labelledby="keys-h" data-requires="account.manage">
                     <h2 id="keys-h" class="text-base font-semibold text-white">Blog AI, GitHub and currency</h2>
@@ -1693,12 +1852,12 @@ def render_dashboard_html() -> str:
 
                 <div class="grid grid-cols-2 gap-3">
                     <div>
-                        <label class="block text-xs font-medium text-slate-300 mb-1">Daily Publishing Time (UTC)</label>
+                        <label class="block text-xs font-medium text-slate-300 mb-1">Daily Publishing Time (India time)</label>
                         <select id="wizard-publish-time" class="input-select text-xs">
-                            <option value="09:00">Morning (09:00 UTC / 2:30 PM IST)</option>
-                            <option value="13:00">Midday (13:00 UTC / 6:30 PM IST)</option>
-                            <option value="18:00">Evening (18:00 UTC / 11:30 PM IST)</option>
-                            <option value="04:00">Early Morning (04:00 UTC / 9:30 AM IST)</option>
+                            <option value="09:00">Morning (9:00 AM)</option>
+                            <option value="13:00">Midday (1:00 PM)</option>
+                            <option value="18:00">Evening (6:00 PM)</option>
+                            <option value="04:00">Early morning (4:00 AM)</option>
                         </select>
                     </div>
                     <div>
@@ -1770,6 +1929,7 @@ def render_dashboard_html() -> str:
                     <label class="block text-xs font-medium text-slate-300 mb-1">Audience Tags (Comma-separated)</label>
                     <input type="text" id="new-contact-tags" value="Lead" class="input-text" placeholder="e.g. VIP, Customer, Lead, Enterprise">
                 </div>
+                <div id="new-contact-custom" class="space-y-2"></div>
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Notes / Company Context</label>
                     <textarea id="new-contact-notes" rows="2" class="input-text text-xs resize-none" placeholder="Notes on lead source, interest, or requirements..."></textarea>
@@ -1860,6 +2020,10 @@ def render_dashboard_html() -> str:
                     <select id="bc-tpl" class="input-select text-xs w-full" onchange="showTemplateFields('bc')"></select>
                     <div id="bc-tpl-vars" class="space-y-2 mt-2"></div>
                     <p id="bc-tpl-preview" class="text-[11px] text-slate-400 mt-1 whitespace-pre-wrap break-words" aria-live="polite"></p>
+                    <div id="bc-media-wrap" class="hidden flex flex-wrap items-center gap-2 text-xs text-slate-300 mt-2">
+                        <span data-label></span><button type="button" class="btn-secondary text-xs" onclick="attachMedia('bc', this.parentElement.dataset.format)">Choose file</button>
+                        <span id="bc-media-name" class="break-all" aria-live="polite"></span><button type="button" id="bc-media-clear" class="hidden underline" onclick="clearMedia('bc')">Remove</button>
+                    </div>
                 </div>
                 <div class="flex items-center gap-2 pt-1">
                     <input type="checkbox" id="new-broadcast-send-now" class="w-4 h-4 rounded text-indigo-600">
@@ -1920,10 +2084,42 @@ def render_dashboard_html() -> str:
         </div>
     </div>
 
+    <div id="modal-contact-fields" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-contact-fields-h">
+        <div class="modal-dialog max-w-lg">
+            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
+                <h3 id="modal-contact-fields-h" class="text-base font-bold text-white">Contact fields</h3>
+                <button type="button" aria-label="Close" onclick="document.getElementById('modal-contact-fields').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
+            </div>
+            <form onsubmit="saveContactValues(event)" class="space-y-3">
+                <div id="edit-contact-custom" class="space-y-2"></div>
+                <button type="submit" class="btn-primary text-xs">Save</button>
+            </form>
+        </div>
+    </div>
+
     <!-- Notification Toast -->
     <div id="toast" class="toast hidden"></div>
 
+    <script src="/static/js/qrcode.js"></script>
+    <div id="modal-media" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-media-h">
+        <div class="modal-dialog max-w-lg">
+            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-3">
+                <h3 id="modal-media-h" class="text-base font-bold text-white">Choose a file</h3>
+                <button type="button" aria-label="Close" onclick="closePicker(null)" class="text-slate-400 hover:text-white">&times;</button>
+            </div>
+            <label for="picker-search" class="sr-only">Search by name</label>
+            <input id="picker-search" type="search" class="input-text text-sm w-full mb-2" placeholder="Search by name" oninput="searchPicker()">
+            <div id="picker-upload" class="hidden mb-2">
+                <label for="picker-file" class="block text-xs text-slate-400 mb-1">Or upload a new file</label>
+                <input id="picker-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf,video/mp4" class="text-xs text-slate-300 max-w-full" onchange="uploadFromPicker(this)">
+                <progress id="picker-progress" class="hidden w-full" max="100" value="0" aria-label="Upload progress"></progress>
+            </div>
+            <div id="picker-grid" class="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-[50vh] overflow-y-auto"></div>
+        </div>
+    </div>
+
     <script src="/static/js/app.js"></script>
+    <script src="/static/js/phase1b.js"></script>
     <script>
         // Automatic runtime fallback if external script failed to load
         if (typeof initApp !== 'function') {

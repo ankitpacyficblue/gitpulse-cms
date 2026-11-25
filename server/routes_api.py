@@ -28,7 +28,10 @@ from config import FRAMEWORK_PRESETS, DEFAULT_AI_PROVIDER
 from engine import accounts_service as svc
 from engine import auth
 from engine import secrets_box
-from engine import assistant, jobs, messaging
+from engine import assistant, contact_fields, jobs, messaging
+from engine import media
+from database import normalize_repo
+from engine import writer_tokens
 from engine.accounts_service import ServiceError
 from engine.auth import (
     authenticate_user, revoke_session, update_user_password, verify_password,
@@ -127,6 +130,17 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
         if access == "public":
             ctx = Ctx(None, ip=client_ip, user_agent=user_agent)
             ctx.headers = hdrs
+            return fn(ctx, match, query_params, body)
+
+        if access == "writer":      # an AI writer's own token, never a session; scoped to its account
+            writer = writer_tokens.authenticate(hdrs.get("authorization", ""))
+            if not writer:
+                return 401, {"error": "invalid_writer_token", "message": "This writer token is not valid."}
+            ctx = Ctx(None, writer["account_id"], ip=client_ip, user_agent=user_agent,
+                      host=hdrs.get("x-forwarded-host") or hdrs.get("host", ""))
+            if writer["over_limit"]:
+                return 429, {"error": "rate_limited", "message": "This writer token has used its requests for this hour."}
+            ctx.writer = writer
             return fn(ctx, match, query_params, body)
 
         if not current_user:
@@ -461,7 +475,7 @@ def status(ctx, m, q, body):
 
 @route("POST", r"/api/github/verify", "acct:content.publish")
 def github_verify(ctx, m, q, body):
-    repo = body.get("github_repo", "").strip()
+    repo = normalize_repo(body.get("github_repo", ""))
     if not repo:
         return 400, {"valid": False, "message": "Please enter a GitHub repository (e.g. username/repo)."}
     ok, msg = GitHubClient(token=body.get("github_token", "").strip()).test_connection(repo)
@@ -712,7 +726,12 @@ def _valid_phone(phone: str) -> bool:
 
 @route("GET", r"/api/whatsapp/contacts", "acct:crm.read")
 def contacts_list(ctx, m, q, body):
-    return 200, {"contacts": cs.list_contacts(ctx.account_id, search=q.get("search", ""), tag=q.get("tag", ""))}
+    rows = contact_fields.present(ctx.account_id, cs.list_contacts(ctx.account_id, search=q.get("search", ""),
+                                                                   tag=q.get("tag", "")))
+    try:
+        return 200, {"contacts": contact_fields.filter_contacts(ctx.account_id, rows, q)}
+    except contact_fields.FieldError as e:
+        return e.status, {"error": e.code, "message": e.message}
 
 
 @route("POST", r"/api/whatsapp/contacts", "acct:crm.write")
@@ -723,10 +742,16 @@ def contacts_create(ctx, m, q, body):
     if not _valid_phone(phone):
         return 400, {"error": "invalid_phone", "message": "Enter the phone number with country code, 8 to 15 digits, for example +919876543210."}
     try:
+        custom = contact_fields.validate(ctx.account_id, body.get("custom"))
+    except contact_fields.FieldError as e:
+        return e.status, {"error": e.code, "message": e.message}
+    try:
         cid = cs.create_contact(ctx.account_id, name, phone, email=body.get("email", ""),
                                 tags=body.get("tags") or ["Lead"], notes=body.get("notes", ""))
     except ValueError:
         return 409, {"error": "duplicate_phone", "message": "A contact with this phone number already exists."}
+    if custom:
+        contact_fields.save(ctx.account_id, cid, custom)
     cs.get_or_create_conversation(ctx.account_id, cid)
     return 201, {"success": True, "id": cid, "message": "Contact created successfully."}
 
@@ -735,11 +760,18 @@ def contacts_create(ctx, m, q, body):
 def contacts_update(ctx, m, q, body):
     fields = {k: body[k] for k in ("name", "phone", "email", "tags", "notes", "status") if k in body}
     try:
-        ok = cs.update_contact(ctx.account_id, int(m.group("id")), **fields)
+        custom = contact_fields.validate(ctx.account_id, body.get("custom"))
+    except contact_fields.FieldError as e:
+        return e.status, {"error": e.code, "message": e.message}
+    try:
+        ok = cs.update_contact(ctx.account_id, int(m.group("id")), **fields) if fields else \
+            cs.get_contact(ctx.account_id, int(m.group("id"))) is not None
     except Exception as e:
         if dbcompat.is_unique_violation(e):
             return 409, {"error": "duplicate_phone"}
         raise
+    if ok and custom:
+        contact_fields.save(ctx.account_id, int(m.group("id")), custom)
     return (200, {"success": True}) if ok else (404, {"error": "Contact not found."})
 
 
@@ -790,20 +822,21 @@ def conv_messages(ctx, m, q, body):
     cid = int(m.group("id"))
     if not cs.get_conversation(ctx.account_id, cid):
         return 404, {"error": "Conversation not found."}
-    return 200, {"messages": cs.list_messages(ctx.account_id, cid, limit=_int(q.get("limit"), 100))}
+    return 200, {"messages": media.attach(ctx.account_id, cs.list_messages(ctx.account_id, cid, limit=_int(q.get("limit"), 100)))}
 
 
 @route("POST", r"/api/whatsapp/conversations/(?P<id>\d+)/messages", "acct:crm.write")
 def conv_send(ctx, m, q, body):
     text = str(body.get("body", "")).strip()
-    if not text:
+    media_id = body.get("media_id")
+    if not text and not media_id:
         return 400, {"error": "Message body is required."}
     conv = cs.get_conversation(ctx.account_id, int(m.group("id")))
     if not conv:
         return 404, {"error": "Conversation not found."}
     contact = cs.get_contact(ctx.account_id, conv["contact_id"])
     try:
-        res = messaging.send(ctx.account_id, contact, text, sent_by="staff")
+        res = messaging.send(ctx.account_id, contact, text, sent_by="staff", media_id=media_id)
     except messaging.Blocked as b:
         return 409, {"success": False, "error": b.code, "message": b.message}
     assistant.staff_replied(ctx.account_id, conv["id"])
@@ -916,14 +949,29 @@ def bc_create(ctx, m, q, body):
         return 400, {"error": "template_required", "message": "Campaign name and an approved template are required."}
     try:
         tpl, params = _template_choice(ctx.account_id, body)
+        file = messaging.media_for(ctx.account_id, tpl, body.get("media_id"))
     except messaging.Blocked as b:
         return 400, {"error": b.code, "message": b.message}
     bid = cs.create_broadcast(ctx.account_id, name, tpl["body"], target_tag=str(body.get("target_tag") or "all"),
                               template_name=tpl["name"], template_language=tpl["language"], template_params=params)
+    if file:
+        with db.get_connection() as conn:
+            conn.execute("UPDATE broadcasts SET media_id = ? WHERE id = ? AND account_id = ?", (file["id"], bid, ctx.account_id))
+            conn.commit()
     if body.get("auto_send"):
         return 201, {"success": True, "id": bid, "executed": True,
                      "stats": WhatsAppClient(ctx.account_id).execute_broadcast(bid)}
     return 201, {"success": True, "id": bid, "message": "Broadcast created."}
+
+
+@route("POST", r"/api/whatsapp/broadcasts/preview", "acct:broadcasts.run")
+def bc_preview(ctx, m, q, body):
+    try:
+        tpl = messaging.approved_template(ctx.account_id, str(body.get("template_name") or ""),
+                                          str(body.get("template_language") or ""))
+    except messaging.Blocked as b:
+        return 400, {"error": b.code, "message": b.message}
+    return 200, WhatsAppClient(ctx.account_id).preview_broadcast(tpl, str(body.get("target_tag") or "all"))
 
 
 @route("POST", r"/api/whatsapp/broadcasts/(?P<id>\d+)/run", "acct:broadcasts.run")
@@ -953,6 +1001,7 @@ def auto_create(ctx, m, q, body):
     if trig == "blog_publish":      # goes to people outside the 24-hour window, so it needs an approved template
         try:
             template, params = _template_choice(ctx.account_id, body)
+            messaging.media_for(ctx.account_id, template, None)      # an automatic alert has no file to attach
         except messaging.Blocked as b:
             return 400, {"error": b.code, "message": b.message}
         tpl = template["body"] or template["name"]

@@ -60,7 +60,28 @@ class WhatsAppClient:
                    "type": "text", "text": {"preview_url": True, "body": body}}
         return self._post_message(payload)
 
-    def send_template_message(self, to_phone: str, name: str, language: str, params: List[str]) -> Dict[str, Any]:
+    @staticmethod
+    def _file(media: Dict[str, str], caption: str = "") -> Dict[str, str]:
+        out = {"link": media["link"]}
+        if media["kind"] == "document":
+            out["filename"] = media["filename"]
+        if caption:
+            out["caption"] = caption
+        return out
+
+    def send_media_message(self, to_phone: str, media: Dict[str, str], caption: str = "") -> Dict[str, Any]:
+        """`media`: {kind: image|video|document, link, filename}."""
+        clean_phone = re.sub(r"[^\d+]", "", to_phone)
+        if mock_enabled():
+            return {"success": True, "message_id": f"wamid.mock_{uuid.uuid4().hex[:16]}", "status": "sent",
+                    "mock": True, "recipient": clean_phone}
+        if not self.is_configured():
+            return {"success": False, "status": "failed", "error": "WhatsApp is not configured for this account."}
+        return self._post_message({"messaging_product": "whatsapp", "recipient_type": "individual", "to": clean_phone,
+                                   "type": media["kind"], media["kind"]: self._file(media, caption)})
+
+    def send_template_message(self, to_phone: str, name: str, language: str, params: List[str],
+                              media: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         clean_phone = re.sub(r"[^\d+]", "", to_phone)
         if mock_enabled():
             return {"success": True, "message_id": f"wamid.mock_{uuid.uuid4().hex[:16]}", "status": "sent",
@@ -68,8 +89,13 @@ class WhatsAppClient:
         if not self.is_configured():
             return {"success": False, "status": "failed", "error": "WhatsApp is not configured for this account."}
         template: Dict[str, Any] = {"name": name, "language": {"code": language}}
+        components = []
+        if media:
+            components.append({"type": "header", "parameters": [{"type": media["kind"], media["kind"]: self._file(media)}]})
         if params:
-            template["components"] = [{"type": "body", "parameters": [{"type": "text", "text": str(p)} for p in params]}]
+            components.append({"type": "body", "parameters": [{"type": "text", "text": str(p)} for p in params]})
+        if components:
+            template["components"] = components
         return self._post_message({"messaging_product": "whatsapp", "to": clean_phone, "type": "template",
                                    "template": template})
 
@@ -125,10 +151,12 @@ class WhatsAppClient:
             for t in items:
                 body = next((c.get("text", "") for c in t.get("components", []) if str(c.get("type", "")).upper() == "BODY"), "")
                 variables = len(set(re.findall(r"\{\{(\d+)\}\}", body)))
-                conn.execute("INSERT INTO wa_templates (account_id, name, language, category, status, body, variables, synced_at) "
-                             "VALUES (?,?,?,?,?,?,?,?)", (self.account_id, t.get("name", ""), t.get("language", ""),
+                header = next((str(c.get("format", "")).upper() for c in t.get("components", [])
+                               if str(c.get("type", "")).upper() == "HEADER"), "")
+                conn.execute("INSERT INTO wa_templates (account_id, name, language, category, status, body, variables, synced_at, "
+                             "header_format) VALUES (?,?,?,?,?,?,?,?,?)", (self.account_id, t.get("name", ""), t.get("language", ""),
                              str(t.get("category", "MARKETING")).upper(), str(t.get("status", "PENDING")).upper(), body,
-                             variables, now))
+                             variables, now, header))
             conn.commit()
         return {"ok": True, "count": len(items), "mock": mock_enabled()}
 
@@ -172,6 +200,25 @@ class WhatsAppClient:
             out.append(param)
         return out
 
+    def audience(self, target_tag: str) -> List[Dict[str, Any]]:
+        contacts = cs.list_contacts(self.account_id)
+        if target_tag == "all":
+            return contacts
+        return [c for c in contacts if target_tag.lower() in [t.lower() for t in c.get("tags", [])]]
+
+    def preview_broadcast(self, template: Dict[str, Any], target_tag: str) -> Dict[str, Any]:
+        """What a send would do now, by the same rules. Nothing is stored or sent."""
+        from engine import messaging
+        contacts, skipped = self.audience(target_tag), {}
+        for contact in contacts:
+            try:
+                messaging.check(contact, {}, template)
+            except messaging.Blocked as b:
+                skipped[b.code] = skipped.get(b.code, 0) + 1
+        n_skipped = sum(skipped.values())
+        return {"audience": len(contacts), "will_send": len(contacts) - n_skipped, "skipped_count": n_skipped,
+                "skipped": skipped}
+
     def execute_broadcast(self, broadcast_id: int) -> Dict[str, Any]:
         """Queue an approved template, one job per recipient. A broadcast runs once."""
         from engine import messaging
@@ -192,9 +239,7 @@ class WhatsAppClient:
             return {"success": False, "error": "This broadcast has already been run.", "code": "already_run"}
 
         target_tag = broadcast.get("target_tag", "all")
-        contacts = cs.list_contacts(self.account_id)
-        if target_tag != "all":
-            contacts = [c for c in contacts if target_tag.lower() in [t.lower() for t in c.get("tags", [])]]
+        contacts = self.audience(target_tag)
 
         queued, skipped = 0, {}
         params = json.loads(broadcast.get("template_params") or "[]")
@@ -203,7 +248,8 @@ class WhatsAppClient:
             try:
                 messaging.queue_send(self.account_id, contact, sent_by="broadcast", broadcast_id=broadcast_id,
                                      template_name=broadcast["template_name"],
-                                     template_language=broadcast["template_language"], params=self._fill(params, values))
+                                     template_language=broadcast["template_language"], params=self._fill(params, values),
+                                     media_id=broadcast.get("media_id"))
                 queued += 1
             except messaging.Blocked as b:
                 skipped[b.code] = skipped.get(b.code, 0) + 1
@@ -264,29 +310,38 @@ class WhatsAppClient:
             return conn.execute("SELECT 1 FROM messages WHERE account_id = ? AND wa_message_id = ? AND direction = 'inbound'",
                                 (self.account_id, wa_message_id)).fetchone() is not None
 
-    def _entry_source(self, msg: Dict[str, Any], body: str):
-        """(source, detail): a click-to-WhatsApp ad, a known entry link code, or direct."""
+    def _entry_source(self, msg: Dict[str, Any], body: str) -> Dict[str, str]:
+        """Where this message came from: a known entry link code, a click-to-WhatsApp ad, or direct."""
         ref = msg.get("referral") or {}
-        if ref:
-            return "ad", json.dumps({k: str(ref.get(k, ""))[:300] for k in ("source_id", "headline", "source_url")})
+        detail = json.dumps({k: str(ref.get(k, ""))[:300] for k in ("source_id", "headline", "source_url")}) if ref else ""
         m = re.search(r"\(ref:\s*([A-Za-z0-9_-]{1,40})\)", body or "")
         if m:
             with db.get_connection() as conn:
-                row = conn.execute("SELECT code, label FROM entry_links WHERE account_id = ? AND code = ?",
+                row = conn.execute("SELECT code, label, source, campaign FROM entry_links WHERE account_id = ? AND code = ?",
                                    (self.account_id, m.group(1).upper())).fetchone()
             if row:
-                return row["code"], row["label"]
-        return "direct", ""
+                return {"source": row["source"], "campaign": row["campaign"], "entry_code": row["code"],
+                        "source_detail": detail or row["label"]}
+        return {"source": "ad" if ref else "direct", "campaign": "", "entry_code": "", "source_detail": detail}
+
+    def _record_first_touch(self, contact_id: int, touch: Dict[str, str]) -> None:
+        """Only while nothing is recorded: the first touch is never overwritten."""
+        with db.get_connection() as conn:
+            conn.execute("UPDATE contacts SET source = ?, campaign = ?, entry_code = ?, source_detail = ? "
+                         "WHERE id = ? AND account_id = ? AND source = ''",
+                         (touch["source"], touch["campaign"], touch["entry_code"], touch["source_detail"], contact_id,
+                          self.account_id))
+            conn.commit()
 
     def _process_message(self, msg: Dict[str, Any], names: Dict[str, str]) -> bool:
-        from engine import assistant, jobs, messaging
+        from engine import assistant, jobs, media, messaging
         sender, wa_id = msg.get("from", ""), msg.get("id", "")
         msg_type = msg.get("type", "text")
         if not sender or msg_type == "reaction" or self._seen(wa_id):
             return False        # Meta redelivers: the same message must not be answered twice
         body = (msg.get("text") or {}).get("body", "") if msg_type == "text" else f"[{msg_type.capitalize()} message received]"
 
-        source, detail = self._entry_source(msg, body)
+        touch = self._entry_source(msg, body)
         contact = cs.get_contact_by_phone(self.account_id, sender)
         is_new = False
         if not contact:
@@ -296,16 +351,21 @@ class WhatsAppClient:
                                         notes="Automatically discovered via inbound WhatsApp message")
             except ValueError:
                 return False
-            with db.get_connection() as conn:
-                conn.execute("UPDATE contacts SET source = ?, source_detail = ? WHERE id = ? AND account_id = ?",
-                             (source, detail, cid, self.account_id))
-                conn.commit()
             contact, is_new = cs.get_contact(self.account_id, cid), True
-        elif source != "direct":
-            db.log_event(f"Contact #{contact['id']} came back through '{source}'.", "INFO", account_id=self.account_id)
+        if not contact["source"]:
+            self._record_first_touch(contact["id"], touch)
+            contact = cs.get_contact(self.account_id, contact["id"])
+        elif touch["source"] != "direct":
+            db.log_event(f"Contact #{contact['id']} came back through '{touch['source']}' "
+                         f"{touch['entry_code']}.", "INFO", account_id=self.account_id)
         conv = cs.get_or_create_conversation(self.account_id, contact["id"])
-        cs.create_message(self.account_id, conv["id"], contact["id"], "inbound", body, message_type=msg_type,
-                          wa_message_id=wa_id, status="delivered")
+        message_id = cs.create_message(self.account_id, conv["id"], contact["id"], "inbound", body, message_type=msg_type,
+                                       wa_message_id=wa_id, status="delivered")
+        attachment = msg.get(msg_type) if msg_type in ("image", "document", "video") else None
+        if message_id and attachment and attachment.get("id") and media.configured() and not mock_enabled():
+            jobs.enqueue(self.account_id, "media_fetch", {"message_id": message_id, "wa_media_id": attachment["id"],
+                                                          "filename": str(attachment.get("filename") or "")},
+                         dedupe_key=f"media:{self.account_id}:{message_id}")
 
         if msg_type == "text" and messaging.is_stop_message(self.account_id, body):
             if contact["consent_status"] != "opted_out":

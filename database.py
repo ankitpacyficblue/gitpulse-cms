@@ -3,6 +3,7 @@ GitPulse CMS - SQLite Database Layer
 Handles persistent storage with WAL mode, robust transaction management, and ORM-like accessors.
 """
 
+import re
 import dbcompat
 import hashlib
 import inspect
@@ -340,6 +341,15 @@ def _seal_token(account_id: str, value: str) -> str:
     return secrets_box.encrypt(value, account_id)
 
 
+def normalize_repo(value: Any) -> str:
+    """A pasted repository address -> "owner/repo"."""
+    repo = str(value or "").strip()
+    repo = re.sub(r"^(?:(?:https?|ssh)://)?(?:git@)?(?:www\.)?github\.com[/:]", "", repo, flags=re.I)
+    repo = repo.split("?")[0].split("#")[0].strip("/")
+    repo = re.sub(r"\.git$", "", repo, flags=re.I)
+    return "/".join(repo.split("/")[:2])
+
+
 def _open_project(p: Dict[str, Any]) -> Dict[str, Any]:
     """Decrypt github_token for server-side use. Old plaintext rows still work and are sealed on next save."""
     from engine import secrets_box
@@ -349,6 +359,8 @@ def _open_project(p: Dict[str, Any]) -> Dict[str, Any]:
             p["github_token"] = secrets_box.decrypt(tok, p.get("account_id") or "")
         except secrets_box.SecretsBoxError:
             p["github_token"] = ""      # wrong key or foreign row: treat as missing, never leak ciphertext
+    if p.get("github_repo"):
+        p["github_repo"] = normalize_repo(p["github_repo"])      # rows saved before this was cleaned
     return p
 
 
@@ -423,7 +435,7 @@ def create_project(data: Dict[str, Any], account_id: str) -> int:
         """, (
             account_id,
             data.get("name", "New Project"),
-            data.get("github_repo", "").strip(),
+            normalize_repo(data.get("github_repo", "")),
             data.get("github_branch", "main").strip(),
             _seal_token(account_id, data.get("github_token", "")),
             framework,
@@ -455,7 +467,7 @@ def create_project(data: Dict[str, Any], account_id: str) -> int:
             if sb.is_configured():
                 sb.table("projects").insert({
                     "name": data.get("name", "New Project"),
-                    "github_repo": data.get("github_repo", "").strip(),
+                    "github_repo": normalize_repo(data.get("github_repo", "")),
                     "github_branch": data.get("github_branch", "main").strip(),
                     "target_framework": framework,
                     "content_dir": content_dir.strip("/"),
@@ -512,7 +524,7 @@ def update_project(project_id: int, data: Dict[str, Any], account_id: str) -> bo
             WHERE id = ? AND account_id = ?
         """, (
             data.get("name"),
-            data.get("github_repo"),
+            normalize_repo(data["github_repo"]) if data.get("github_repo") is not None else None,
             data.get("github_branch"),
             _seal_token(account_id, data["github_token"]) if data.get("github_token") else None,
             data.get("target_framework"),
