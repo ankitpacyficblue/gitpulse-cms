@@ -2189,7 +2189,7 @@ function toggleSidebar(force) {
 document.addEventListener('keydown', ev => {
     if (ev.key === 'Escape') {
         toggleSidebar(false);
-        document.querySelectorAll('[id^="modal-"]:not(.hidden)').forEach(m => m.classList.add('hidden'));
+        document.querySelectorAll('.modal-backdrop:not(.hidden)').forEach(m => m.classList.add('hidden'));
     }
 });
 
@@ -2302,7 +2302,7 @@ function toggleNewMenu(force) {
             if (!el.id || !el.id.startsWith('modal-')) return;
             if (!el.classList.contains('hidden')) {
                 opener.set(el, document.activeElement);
-                const f = el.querySelector('input:not([type=hidden]), select, textarea, button');
+                const f = el.querySelector('input:not([type=hidden]), select, textarea') || el.querySelector('button');
                 if (f) setTimeout(() => f.focus(), 30);
             } else {
                 const prev = opener.get(el);
@@ -2311,14 +2311,14 @@ function toggleNewMenu(force) {
         });
     });
     document.addEventListener('DOMContentLoaded', () => {
-        document.querySelectorAll('[id^="modal-"]').forEach(m => {
+        document.querySelectorAll('.modal-backdrop').forEach(m => {
             m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true');
             obs.observe(m, { attributes: true, attributeFilter: ['class'] });
         });
     });
     document.addEventListener('keydown', ev => {
         if (ev.key !== 'Tab') return;
-        const m = document.querySelector('[id^="modal-"]:not(.hidden)');
+        const m = document.querySelector('.modal-backdrop:not(.hidden)');
         if (!m) return;
         const f = [...m.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select, textarea')].filter(x => x.offsetParent !== null);
         if (!f.length) return;

@@ -1328,11 +1328,11 @@ def render_dashboard_html() -> str:
 </div>
 
     <!-- Post Preview & Markdown Modal -->
-    <div id="modal-post" class="modal-backdrop hidden">
+    <div id="modal-post" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-post-title">
         <div class="modal-dialog max-w-4xl">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
                 <h3 class="text-lg font-bold text-white" id="modal-post-title">Article Preview</h3>
-                <button onclick="closePostModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <button type="button" aria-label="Close" onclick="closePostModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -1355,11 +1355,11 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Split Screen Editorial Staging Editor Modal -->
-    <div id="modal-staging-editor" class="modal-backdrop hidden">
+    <div id="modal-staging-editor" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-staging-editor-heading">
         <div class="modal-dialog max-w-6xl">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
                 <div class="flex items-center gap-3">
-                    <h3 class="text-lg font-bold text-white">Editorial Staging & Split Markdown Editor</h3>
+                    <h3 id="modal-staging-editor-heading" class="text-lg font-bold text-white">Editorial Staging & Split Markdown Editor</h3>
                     <span id="editor-seo-badge" class="text-xs px-2.5 py-0.5 rounded-full font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">SEO: 100/100</span>
                 </div>
                 <button onclick="closeStagingEditor()" class="text-slate-400 hover:text-white">&times;</button>
@@ -1407,18 +1407,18 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Interactive 3-Step Website Connection Wizard (Built for Non-Technical Users) -->
-    <div id="modal-add-project" class="modal-backdrop hidden">
+    <div id="modal-add-project" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-project-heading">
         <div class="modal-dialog max-w-2xl">
             <!-- Header -->
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
                 <div>
-                    <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                    <h3 id="modal-add-project-heading" class="text-lg font-bold text-white flex items-center gap-2">
                         <span>⚡ Connect Your Website</span>
                         <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-normal">3-Step Easy Setup</span>
                     </h3>
                     <p class="text-xs text-slate-400 mt-0.5">Automate daily SEO blog publishing directly into any GitHub project.</p>
                 </div>
-                <button onclick="closeAddProjectModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+                <button type="button" aria-label="Close" onclick="closeAddProjectModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
             </div>
 
             <!-- Visual Step Indicator -->
@@ -1640,11 +1640,11 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Modal: Add New Business / Client -->
-    <div id="modal-add-client" class="modal-backdrop hidden">
+    <div id="modal-add-client" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-client-heading">
         <div class="modal-dialog max-w-md">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-base font-bold text-white">New client account</h3>
-                <button onclick="closeAddClientModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <h3 id="modal-add-client-heading" class="text-base font-bold text-white">New client account</h3>
+                <button type="button" aria-label="Close" onclick="closeAddClientModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <form onsubmit="submitAddClient(event)" class="space-y-4">
                 <div>
@@ -1667,13 +1667,13 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Modal: Add WhatsApp Contact / Lead -->
-    <div id="modal-add-contact" class="modal-backdrop hidden">
+    <div id="modal-add-contact" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-contact-heading">
         <div class="modal-dialog max-w-md">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <h3 id="modal-add-contact-heading" class="text-base font-bold text-white flex items-center gap-2">
                     <span>👥 Add Contact / Lead</span>
                 </h3>
-                <button onclick="closeAddContactModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <button type="button" aria-label="Close" onclick="closeAddContactModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <form onsubmit="submitAddContact(event)" class="space-y-4">
                 <div>
@@ -1705,13 +1705,13 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Modal: Add Sales Pipeline Deal -->
-    <div id="modal-add-deal" class="modal-backdrop hidden">
+    <div id="modal-add-deal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-deal-heading">
         <div class="modal-dialog max-w-md">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <h3 id="modal-add-deal-heading" class="text-base font-bold text-white flex items-center gap-2">
                     <span>💰 Add Sales Pipeline Deal</span>
                 </h3>
-                <button onclick="closeAddDealModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <button type="button" aria-label="Close" onclick="closeAddDealModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <form onsubmit="submitAddDeal(event)" class="space-y-4">
                 <input type="hidden" id="new-deal-contact-id">
@@ -1757,13 +1757,13 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Modal: New Broadcast Campaign -->
-    <div id="modal-add-broadcast" class="modal-backdrop hidden">
+    <div id="modal-add-broadcast" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-broadcast-heading">
         <div class="modal-dialog max-w-lg">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <h3 id="modal-add-broadcast-heading" class="text-base font-bold text-white flex items-center gap-2">
                     <span>📢 New WhatsApp Broadcast Campaign</span>
                 </h3>
-                <button onclick="closeAddBroadcastModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <button type="button" aria-label="Close" onclick="closeAddBroadcastModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <form onsubmit="submitAddBroadcast(event)" class="space-y-4">
                 <div>
@@ -1795,13 +1795,13 @@ def render_dashboard_html() -> str:
     </div>
 
     <!-- Modal: New No-Code Automation Rule -->
-    <div id="modal-add-automation" class="modal-backdrop hidden">
+    <div id="modal-add-automation" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-automation-heading">
         <div class="modal-dialog max-w-lg">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <h3 id="modal-add-automation-heading" class="text-base font-bold text-white flex items-center gap-2">
                     <span>🤖 Create No-Code Automation Rule</span>
                 </h3>
-                <button onclick="closeAddAutomationModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <button type="button" aria-label="Close" onclick="closeAddAutomationModal()" class="text-slate-400 hover:text-white">&times;</button>
             </div>
             <form onsubmit="submitAddAutomation(event)" class="space-y-4">
                 <div>
@@ -1846,7 +1846,7 @@ def render_dashboard_html() -> str:
         }
     </script>
 
-    <div id="overlay-no-access" class="hidden fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6" role="alertdialog" aria-labelledby="noaccess-h">
+    <div id="overlay-no-access" role="dialog" aria-modal="true" aria-label="Account access" class="hidden fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6" role="alertdialog" aria-labelledby="noaccess-h">
         <div class="max-w-md text-center space-y-3">
             <h1 id="noaccess-h" class="text-xl font-bold text-white">No access to a client account</h1>
             <p id="noaccess-text" class="text-sm text-slate-400">Your access was removed or has not been set up yet. Ask an account owner to add you.</p>
@@ -1855,7 +1855,7 @@ def render_dashboard_html() -> str:
             </div>
         </div>
     </div>
-    <div id="overlay-change-password" class="hidden fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6" role="dialog" aria-labelledby="chpw-h">
+    <div id="overlay-change-password" role="dialog" aria-modal="true" aria-label="Choose a new password" class="hidden fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6" role="dialog" aria-labelledby="chpw-h">
         <form onsubmit="submitFirstLoginPassword(event)" class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-3">
             <h1 id="chpw-h" class="text-lg font-bold text-white">Choose a new password</h1>
             <p class="text-xs text-slate-400">You signed in with a temporary password. Set your own to continue.</p>
