@@ -415,7 +415,6 @@ async function loadProjects() {
     if (!data || !data.projects) return;
 
     const grid = document.getElementById('projects-grid');
-    grid.innerHTML = '';
 
     const filterSelect = document.getElementById('post-filter-project');
     if (filterSelect) filterSelect.innerHTML = '<option value="">All Repositories</option>';
@@ -434,6 +433,14 @@ async function loadProjects() {
         `;
         return;
     }
+
+    // Drafts waiting and the last failure per project. Quiet: the cards still show if either call fails.
+    const [postData, alertData] = await Promise.all([
+        apiCall('GET', '/api/posts?limit=50', undefined, { quiet: true }),
+        can('crm.read') ? apiCall('GET', '/api/alerts', undefined, { quiet: true }) : null
+    ]);
+    const focused = grid.contains(document.activeElement) ? document.activeElement.id : '';
+    grid.innerHTML = '';
 
     data.projects.forEach(p => {
         // Populate filters
@@ -454,6 +461,8 @@ async function loadProjects() {
         // Render card
         const card = document.createElement('div');
         card.className = 'project-card';
+        card.id = `project-card-${p.id}`;
+        card.tabIndex = -1;
         card.innerHTML = `
             <div>
                 <div class="flex justify-between items-start mb-2">
@@ -464,7 +473,7 @@ async function loadProjects() {
                         ${p.client_name ? `<span class="text-[11px] px-2 py-0.5 rounded font-medium bg-slate-800 text-slate-300 border border-slate-700">🏢 ${escapeHtml(p.client_name)}</span>` : ''}
                     </div>
                     <span class="text-xs text-slate-400 flex items-center gap-1">
-                        ⏰ ${p.publish_time} UTC
+                        ⏰ ${escapeHtml(p.publish_time)} India time
                     </span>
                 </div>
                 <h3 class="font-bold text-white text-base">${escapeHtml(p.name)}</h3>
@@ -473,6 +482,7 @@ async function loadProjects() {
                 </a>
                 <p class="text-xs text-slate-400 mt-2 line-clamp-2"><strong>Niche:</strong> ${escapeHtml(p.topic)}</p>
                 
+                ${projectRunHtml(p, postData, alertData)}
                 <div class="mt-3 py-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
                     <span>Directory: <code>${escapeHtml(p.content_dir)}</code></span>
                     <span>Mode: <strong class="text-slate-200 uppercase">${p.publishing_mode}</strong></span>
@@ -501,7 +511,28 @@ async function loadProjects() {
             </div>
         `;
         grid.appendChild(card);
+        if (focused === card.id) card.focus();
     });
+}
+
+// The scheduler works in India time: it runs a project once a day, at or after its publish time.
+function projectRunHtml(p, postData, alertData) {
+    const ist = d => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(d)
+        .reduce((o, x) => (o[x.type] = x.value, o), {});
+    const last = p.last_run_at ? new Date(/Z|[+-]\d\d:?\d\d$/.test(p.last_run_at) ? p.last_run_at : p.last_run_at.replace(' ', 'T') + 'Z') : null;
+    const now = ist(new Date());
+    const day = o => `${o.year}-${o.month}-${o.day}`;
+    const ranToday = last && day(ist(last)) === day(now);
+    const time = String(p.publish_time || '09:00').padStart(5, '0');
+    const next = ranToday ? `tomorrow ${time}` : `${now.hour}:${now.minute}` >= time ? `due now (${time})` : `today ${time}`;
+    const failure = ((alertData && alertData.alerts) || []).find(a => !a.resolved_at && a.link === `project:${p.id}`);
+    const drafts = postData && postData.posts ? postData.posts.filter(x => x.project_id === p.id && (x.status === 'in_review' || x.status === 'draft')).length : null;
+    const lastText = last ? last.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'never';
+    return `<dl class="mt-3 text-xs text-slate-400 space-y-0.5">
+        <div><dt class="inline">Next run: </dt><dd class="inline text-slate-200">${escapeHtml(next)} India time</dd></div>
+        <div><dt class="inline">Last run: </dt><dd class="inline text-slate-200">${escapeHtml(lastText)}</dd>${failure ? ` <span class="text-red-300">Problem: ${escapeHtml(failure.message)}</span>` : ''}</div>
+        ${drafts === null ? '' : `<div><dt class="inline">Drafts waiting: </dt><dd class="inline text-slate-200">${drafts}</dd>${drafts ? ` <button type="button" class="underline text-cyan-400" onclick="switchTab('staging')">Review</button>` : ''}</div>`}
+    </dl>`;
 }
 
 async function triggerProjectRun(projectId, btn) {
@@ -1717,18 +1748,34 @@ async function loadWhatsAppBroadcasts() {
                 </div>
             </div>
             ${b.queued_count || b.failed_count ? `<p class="text-[11px] text-amber-300">Queued: ${Number(b.queued_count || 0)} · Failed: ${Number(b.failed_count || 0)}</p>` : ''}
+            <details class="text-xs" ontoggle="if (this.open) loadRecipients(${Number(b.id)}, this)">
+                <summary class="cursor-pointer text-cyan-400">Recipients</summary>
+                <div class="mt-2 max-h-60 overflow-y-auto" aria-live="polite"></div>
+            </details>
         `;
         container.appendChild(card);
     });
+}
+
+async function loadRecipients(id, details) {
+    const box = details.querySelector('div');
+    box.innerHTML = '<p class="text-slate-400">Loading...</p>';
+    const data = await apiCall('GET', `/api/whatsapp/broadcasts/${id}/recipients`, undefined, { quiet: true });
+    if (!data || !data.recipients) { box.innerHTML = '<p class="text-amber-300">Could not load recipients. Close and open to retry.</p>'; return; }
+    box.innerHTML = data.recipients.length ? '<ul>' + data.recipients.map(r => `<li class="flex flex-wrap justify-between gap-2 border-t border-slate-800 py-1.5">
+            <span class="text-slate-200">${escapeHtml(r.name || r.phone)} <span class="text-slate-500">${escapeHtml(r.phone)}</span></span>
+            <span class="${r.status === 'failed' ? 'text-red-300' : 'text-slate-300'}">${escapeHtml(r.status)}${r.error_message ? `: ${escapeHtml(r.error_message)}` : ''}</span>
+        </li>`).join('') + '</ul>' : '<p class="text-slate-400">No messages yet. Skipped contacts are not listed.</p>';
 }
 
 async function runBroadcastFromUI(broadcastId) {
     const bc = (window.lastBroadcasts || []).find(x => x.id === broadcastId);
     const cd = await apiGet('/api/whatsapp/contacts');
     broadcastContacts = (cd && cd.contacts) || [];
-    const n = bc ? broadcastAudienceCount(bc.target_tag) : null;
-    if (n === 0) { showToast('No contacts match this audience, so nothing would be sent.', 'error'); return; }
-    if (!confirm(n === null ? 'Send this broadcast now to everyone in its audience?' : `Send this broadcast now to ${n} contact${n === 1 ? '' : 's'}?`)) return;
+    if (bc && bc.template_name) await ensureTemplates();
+    const split = bc ? broadcastSplit(bc.target_tag, bc.template_name) : null;
+    if (split && split.send === 0) { showToast(`Nothing would be sent. ${split.text}`, 'error'); return; }
+    if (!confirm(split ? `Send this broadcast now? ${split.text}` : 'Send this broadcast now to everyone in its audience?')) return;
     showToast('Queuing the broadcast...', 'info');
     const res = await apiPost(`/api/whatsapp/broadcasts/${broadcastId}/run`, {});
     if (res && res.success) {
@@ -1987,12 +2034,23 @@ function broadcastAudienceCount(tag) {
     if (!tag || tag === 'all') return broadcastContacts.length;
     return broadcastContacts.filter(c => (c.tags || []).some(t => String(t).toLowerCase() === tag.toLowerCase())).length;
 }
+function broadcastSplit(tag, templateName) {
+    const audience = !tag || tag === 'all' ? broadcastContacts
+        : broadcastContacts.filter(c => (c.tags || []).some(t => String(t).toLowerCase() === tag.toLowerCase()));
+    const t = approvedTemplates.find(x => x.name === templateName);
+    const marketing = !!t && String(t.category).toUpperCase() === 'MARKETING';
+    const optedOut = audience.filter(c => c.consent_status === 'opted_out').length;
+    const notOptedIn = marketing ? audience.filter(c => c.consent_status !== 'opted_in' && c.consent_status !== 'opted_out').length : 0;
+    const send = audience.length - optedOut - notOptedIn;
+    const why = [optedOut ? `${optedOut} opted out` : '', notOptedIn ? `${notOptedIn} not opted in` : ''].filter(Boolean).join(', ');
+    return { send, skipped: optedOut + notOptedIn, text: `Will send to ${send}, skip ${optedOut + notOptedIn}${why ? ` (${why})` : ''}.` };
+}
 function updateBroadcastAudience() {
     const el = document.getElementById('new-broadcast-count');
     const sel = document.getElementById('new-broadcast-tag');
     if (!el || !sel) return;
-    const n = broadcastAudienceCount(sel.value);
-    el.innerText = n === 1 ? '1 contact will receive this.' : `${n} contacts will receive this.`;
+    const t = pickedTemplate('bc');
+    el.innerText = broadcastSplit(sel.value, t && t.name).text;
 }
 function closeAddBroadcastModal() {
     document.getElementById('modal-add-broadcast').classList.add('hidden');
@@ -2005,9 +2063,9 @@ async function submitAddBroadcast(e) {
     if (!choice) return;
     const auto_send = document.getElementById('new-broadcast-send-now').checked;
     if (auto_send) {
-        const n = broadcastAudienceCount(target_tag);
-        if (n === 0) { showToast('No contacts match this audience, so nothing would be sent.', 'error'); return; }
-        if (!confirm(`Send this now to ${n} contact${n === 1 ? '' : 's'}?`)) return;
+        const split = broadcastSplit(target_tag, choice.template_name);
+        if (split.send === 0) { showToast(`Nothing would be sent. ${split.text}`, 'error'); return; }
+        if (!confirm(`Send this now? ${split.text}`)) return;
     }
     const res = await apiPost('/api/whatsapp/broadcasts', { name, target_tag, auto_send, ...choice });
     if (res && res.success) {
@@ -2536,7 +2594,11 @@ const joined = v => Array.isArray(v) ? v.join('\n') : (v || '');
 
 function leadSourceHtml(c) {
     const label = LEAD_SOURCES[c.source] || c.source || '-';
-    return escapeHtml(label) + (c.source_detail ? `<div class="text-[10px] text-slate-500">${escapeHtml(c.source_detail)}</div>` : '');
+    let detail = c.source_detail || '';
+    if (detail.startsWith('{')) {
+        try { const d = JSON.parse(detail); detail = d.headline || (d.source_id ? `Ad ${d.source_id}` : ''); } catch (e) { detail = ''; }
+    }
+    return escapeHtml(label) + (detail ? `<div class="text-[10px] text-slate-500">${escapeHtml(detail)}</div>` : '');
 }
 
 function consentHtml(c) {
@@ -2686,9 +2748,12 @@ async function syncTemplates(btn) {
 function updateAlertsVisibility(tab) {
     const panel = document.getElementById('alerts-panel');
     if (panel) panel.classList.toggle('hidden', tab !== 'repos' || !getActiveAccountId());
+    const admin = document.getElementById('admin-alert-counts');
+    if (admin && tab !== 'repos') admin.classList.add('hidden');
 }
 
 async function loadAlerts() {
+    loadAdminAlertCounts();
     const onHome = !document.getElementById('tab-repos').classList.contains('hidden');
     updateAlertsVisibility(onHome ? 'repos' : '');
     const acct = getActiveAccountId();
@@ -2706,19 +2771,56 @@ async function loadAlerts() {
         // Only same-app links: '#...' or '/...'.
         const link = /^(#|\/(?!\/))/.test(a.link || '') ? `<a class="btn-secondary text-xs" href="${escapeHtml(a.link)}">Open</a>` : '';
         const post = /^blog:(\d+)$/.exec(a.link || '');
-        const open = post ? `<button type="button" class="btn-secondary text-xs" onclick="openPlanFromAlert(${Number(post[1])})">Open post</button>` : link;
+        const target = /^(conversation|project):(\d+)$/.exec(a.link || '');
+        const btn = (call, text) => `<button type="button" class="btn-secondary text-xs" onclick="${call}">${text}</button>`;
+        const opener = post ? btn(`openPlanFromAlert(${Number(post[1])})`, 'Open post')
+            : target ? btn(`open${target[1] === 'project' ? 'Project' : 'Chat'}FromAlert(${Number(target[2])})`, target[1] === 'project' ? 'Open project' : 'Open chat')
+            : a.link === 'messages' ? btn("switchTab('wa-inbox')", 'Open inbox') : link;
         return `<li class="flex flex-wrap justify-between items-center gap-2 border-t border-slate-800 pt-2">
             <div class="min-w-0 flex-1"><div class="text-xs ${a.severity === 'info' ? 'text-slate-300' : a.severity === 'warning' ? 'text-amber-300' : 'text-red-300'} break-words">${escapeHtml(a.message)}${a.count > 1 ? ` (${Number(a.count)} times)` : ''}</div>
             <div class="text-[10px] text-slate-500">${escapeHtml([String(a.type || '').replace(/_/g, ' '), fmtWhen(a.last_seen || a.first_seen)].filter(Boolean).join(' · '))}</div></div>
-            ${open}${a.id && a.severity !== 'info' && can('crm.write') ? `<button type="button" class="btn-secondary text-xs" onclick="resolveAlert(${Number(a.id)})">Resolve</button>` : ''}
+            ${opener}${a.id && a.severity !== 'info' && can('crm.write') ? `<button type="button" class="btn-secondary text-xs" onclick="resolveAlert(${Number(a.id)})">Resolve</button>` : ''}
         </li>`;
     }).join('') + '</ul>' : '<p class="text-xs text-slate-400">No problems.</p>';
 }
 setInterval(() => { if (typeof currentUser !== 'undefined' && currentUser && !document.hidden) loadAlerts(); }, 30000);
 
+async function openChatFromAlert(id) {
+    switchTab('wa-inbox');
+    await loadWhatsAppInbox();
+    await selectConversation(id, true);
+    const input = document.getElementById('wa-message-input');
+    if (input && !input.disabled) input.focus();
+}
+
+async function openProjectFromAlert(id) {
+    switchTab('repos');
+    await loadProjects();
+    const card = document.getElementById(`project-card-${id}`);
+    if (!card) { showToast('That project no longer exists.', 'error'); return; }
+    card.scrollIntoView({ block: 'center' });
+    card.focus();
+}
+
 async function resolveAlert(id) {
     const res = await apiPost(`/api/alerts/${id}/resolve`, {});
     if (res && !res.error) loadAlerts();
+}
+
+async function loadAdminAlertCounts() {
+    const box = document.getElementById('admin-alert-counts');
+    if (!box) return;
+    const home = () => !document.getElementById('tab-repos').classList.contains('hidden');
+    if (!isPlatformAdmin() || !home()) { box.classList.add('hidden'); return; }
+    const data = await apiCall('GET', '/api/admin/alert-counts', undefined, { quiet: true });
+    const counts = (data && data.counts) || {};
+    const rows = (window.__accounts || []).filter(a => counts[a.id]);
+    box.classList.toggle('hidden', !rows.length || !home());
+    box.querySelector('ul').innerHTML = rows.map(a => `<li><button type="button" class="btn-secondary text-xs" data-account="${escapeHtml(String(a.id))}">${escapeHtml(a.name)}: ${Number(counts[a.id])}</button></li>`).join('');
+    box.querySelectorAll('button').forEach(b => b.onclick = () => {
+        document.getElementById('client-select-filter').value = b.dataset.account;
+        onClientFilterChange().then(loadAlerts);
+    });
 }
 
 function reloadPhase1() {
@@ -2756,7 +2858,13 @@ function pickedTemplate(prefix) {
     const [name, language] = document.getElementById(`${prefix}-tpl`).value.split('|');
     return approvedTemplates.find(t => t.name === name && t.language === language);
 }
+async function ensureTemplates() {
+    if (approvedTemplates.length) return;
+    const data = await apiCall('GET', '/api/whatsapp/templates', undefined, { quiet: true });
+    approvedTemplates = ((data && data.templates) || []).filter(t => String(t.status).toUpperCase() === 'APPROVED');
+}
 function showTemplateFields(prefix) {
+    if (prefix === 'bc') updateBroadcastAudience();
     const t = pickedTemplate(prefix);
     const box = document.getElementById(`${prefix}-tpl-vars`);
     box.innerHTML = '';

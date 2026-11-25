@@ -539,6 +539,10 @@ def render_dashboard_html() -> str:
             <main class="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto" id="main-content">
                 <p class="text-[11px] text-slate-400 mb-3">Working in: <strong id="account-banner-name" class="text-slate-200">All accounts</strong></p>
                 <!-- 5 Top Metric Stat Cards -->
+                <section id="admin-alert-counts" class="hidden mb-4 bg-slate-900 border border-slate-800 rounded-xl p-4" aria-labelledby="admin-alerts-h">
+                    <h2 id="admin-alerts-h" class="text-sm font-semibold text-white mb-2">Open problems by client</h2>
+                    <ul class="flex flex-wrap gap-2"></ul>
+                </section>
                 <section id="alerts-panel" class="hidden mb-4 bg-slate-900 border border-slate-800 rounded-xl p-4" aria-labelledby="alerts-h">
                     <div class="flex justify-between items-center gap-3 mb-2">
                         <h2 id="alerts-h" class="text-sm font-semibold text-white">Problems <span id="alerts-count" class="hidden ml-1 text-[10px] px-1.5 rounded-full bg-red-500 text-white"></span></h2>
@@ -1769,12 +1773,12 @@ def render_dashboard_html() -> str:
 
                 <div class="grid grid-cols-2 gap-3">
                     <div>
-                        <label class="block text-xs font-medium text-slate-300 mb-1">Daily Publishing Time (UTC)</label>
+                        <label class="block text-xs font-medium text-slate-300 mb-1">Daily Publishing Time (India time)</label>
                         <select id="wizard-publish-time" class="input-select text-xs">
-                            <option value="09:00">Morning (09:00 UTC / 2:30 PM IST)</option>
-                            <option value="13:00">Midday (13:00 UTC / 6:30 PM IST)</option>
-                            <option value="18:00">Evening (18:00 UTC / 11:30 PM IST)</option>
-                            <option value="04:00">Early Morning (04:00 UTC / 9:30 AM IST)</option>
+                            <option value="09:00">Morning (9:00 AM)</option>
+                            <option value="13:00">Midday (1:00 PM)</option>
+                            <option value="18:00">Evening (6:00 PM)</option>
+                            <option value="04:00">Early morning (4:00 AM)</option>
                         </select>
                     </div>
                     <div>
