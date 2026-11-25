@@ -5,6 +5,7 @@ come is sent to the site, once: the job is keyed on the approved version, and a 
 interrupted publish is not repeated until someone approves it again."""
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -301,6 +302,12 @@ def _with_images(account_id: str, row: Dict[str, Any]) -> str:
     body, top, end = row["body"], [], []
     images = _post_files(account_id, row)
     origin = _public_origin(row)
+    # A link without a host ("/api/public/media/...") would point at the website itself.
+    relative = re.compile(r"(?<![A-Za-z0-9.:-])" + re.escape(media.PUBLIC_PATH))
+    if relative.search(body):
+        if not origin:
+            raise PlanError(409, "no_public_address", "Set PUBLIC_BASE_URL so images get a full address.")
+        body = relative.sub(lambda _: origin + media.PUBLIC_PATH, body)
     for image in images:
         if media.PUBLIC_PATH + image["token"] in body:
             continue

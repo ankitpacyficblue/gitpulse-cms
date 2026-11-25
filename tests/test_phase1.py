@@ -618,7 +618,8 @@ class MediaTests(Base):
         self.api("POST", f"/api/blog/plan/{item}/submit")
         self.api("POST", f"/api/blog/plan/{item}/approve")
         self.assertEqual(handle_public_request(f"/api/public/media/{token}", {})[0], 404)
-        with mock.patch("engine.github_client.GitHubClient.publish_post", return_value={"success": True, "pr_url": "u"}):
+        with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}), \
+                mock.patch("engine.github_client.GitHubClient.publish_post", return_value={"success": True, "pr_url": "u"}):
             jobs.tick(limit=1000)
         code, _, link = handle_public_request(f"/api/public/media/{token}", {})
         self.assertEqual(code, 302)
@@ -670,6 +671,16 @@ class MediaTests(Base):
         self.assertEqual(sent.count("/api/public/media/"), 2)
         token = sent.split("/api/public/media/")[2].split(")")[0]
         self.assertEqual(handle_public_request(f"/api/public/media/{token}", {})[0], 302)
+
+    def test_relative_media_links_are_published_with_the_full_address(self):
+        out = self.upload()[1]["item"]
+        path = "/api/public/media/" + out["blog_url"].rsplit("/", 1)[1]
+        item = self.post(body=f"![x]({path}) and ![y](https://cms.test{path})")[1]["item"]["id"]
+        self.agent_api("POST", f"/api/blog/plan/{item}/submit")
+        self.api("POST", f"/api/blog/plan/{item}/approve")
+        with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}), self.publisher() as pub:
+            jobs.tick(limit=1000)
+        self.assertIn(f"![x](https://cms.test{path}) and ![y](https://cms.test{path})", pub.call_args.kwargs["file_content"])
 
     def test_a_missing_image_stops_the_whole_post(self):
         image = self.upload()[1]["item"]["id"]
