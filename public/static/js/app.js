@@ -2256,6 +2256,7 @@ async function submitFirstLoginPassword(e) {
     e.preventDefault();
     const msg = document.getElementById('chpw-msg');
     msg.innerText = '';
+    if (document.getElementById('chpw-new').value !== document.getElementById('chpw-confirm').value) { msg.innerText = 'The two new passwords do not match.'; return; }
     const res = await apiPost('/api/auth/change-password', {
         current_password: document.getElementById('chpw-current').value,
         new_password: document.getElementById('chpw-new').value

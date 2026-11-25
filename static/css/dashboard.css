@@ -954,3 +954,9 @@ input:checked + .slider:before {
     .top-actions.open { display: flex !important; }
     .top-actions > * { margin: 0 !important; }
 }
+
+/* Small screens: comfortable tap targets inside screens (FE-18). */
+@media (max-width: 900px) {
+  .tab-content button, .tab-content select, .tab-content input:not([type=checkbox]):not([type=radio]) { min-height: 44px; }
+  #tab-users td, #tab-users th { padding-left: .75rem; padding-right: .75rem; }
+}

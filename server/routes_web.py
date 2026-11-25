@@ -108,7 +108,7 @@ def render_login_html() -> str:
         <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
             <div class="mb-6">
                 <h2 class="text-lg font-semibold text-white">Sign In to Dashboard</h2>
-                <p class="text-xs text-slate-400 mt-0.5">Enter your administrative credentials to continue.</p>
+                <p class="text-xs text-slate-400 mt-0.5">Sign in with the username and password from your account owner.</p>
             </div>
 
             <!-- Error / Lockout Banner -->
@@ -129,7 +129,7 @@ def render_login_html() -> str:
             <form id="login-form" onsubmit="handleLoginSubmit(event)" class="space-y-4">
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Username</label>
-                    <input type="text" id="login-username" required class="input-text" placeholder="admin" autofocus autocomplete="username">
+                    <input type="text" id="login-username" required class="input-text" placeholder="your username" autofocus autocomplete="username">
                 </div>
 
                 <div>
@@ -156,9 +156,7 @@ def render_login_html() -> str:
 
             <!-- Security Footprint -->
             <div class="mt-6 pt-4 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-500">
-                <span class="flex items-center gap-1">🛡️ Rate-Limit Protected</span>
-                <span>PBKDF2-HMAC-256</span>
-                <span>Strict Cookie</span>
+                <span>Forgot your password? Ask your account owner to reset it.</span>
             </div>
         </div>
     </div>
@@ -200,6 +198,8 @@ def render_login_html() -> str:
             lockBanner.classList.add('hidden');
             btn.disabled = true;
             btnText.innerText = 'Verifying...';
+            const slowTimer = setTimeout(() => { btnText.innerText = 'Still working... the server may be waking up'; }, 5000);
+            window.__loginSlow = slowTimer;
 
             const username = document.getElementById('login-username').value;
             const password = document.getElementById('login-password').value;
@@ -246,6 +246,7 @@ def render_login_html() -> str:
                     }
                 }
             } catch (err) {
+                clearTimeout(window.__loginSlow);
                 btn.disabled = false;
                 btnText.innerText = 'Authenticate & Continue';
                 errBanner.classList.remove('hidden');
@@ -1661,7 +1662,7 @@ def render_dashboard_html() -> str:
                 </div>
                 <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
                     <button type="button" onclick="closeAddClientModal()" class="btn-secondary text-xs">Cancel</button>
-                    <button type="submit" class="btn-primary text-xs">Save Client</button>
+                    <button type="submit" class="btn-primary text-xs">Create account</button>
                 </div>
             <p id="new-client-result" class="text-xs text-slate-300 mt-3" role="status" aria-live="polite"></p>
             </form>
@@ -1864,7 +1865,11 @@ def render_dashboard_html() -> str:
             <label for="chpw-current" class="block text-xs text-slate-300">Temporary password</label>
             <input type="password" id="chpw-current" required autocomplete="current-password" class="input-text text-xs">
             <label for="chpw-new" class="block text-xs text-slate-300">New password (8+ characters)</label>
-            <input type="password" id="chpw-new" required minlength="8" autocomplete="new-password" class="input-text text-xs">
+            <input type="password" id="chpw-new" required minlength="8" autocomplete="new-password" class="input-text text-xs" aria-describedby="chpw-rule">
+            <p id="chpw-rule" class="text-[11px] text-slate-500">At least 8 characters. Use a password you do not use elsewhere.</p>
+            <label for="chpw-confirm" class="block text-xs text-slate-300">Repeat the new password</label>
+            <input type="password" id="chpw-confirm" required minlength="8" autocomplete="new-password" class="input-text text-xs">
+            <label class="flex items-center gap-2 text-xs text-slate-400"><input type="checkbox" onchange="['chpw-current','chpw-new','chpw-confirm'].forEach(i=>document.getElementById(i).type=this.checked?'text':'password')"> Show passwords</label>
             <p id="chpw-msg" class="text-xs text-red-400" role="alert"></p>
             <button type="submit" class="btn-primary text-xs py-2 px-3 w-full">Save and continue</button>
         </form>
