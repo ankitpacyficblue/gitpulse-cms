@@ -220,6 +220,9 @@ def init_schema(conn) -> None:
         is_public INTEGER NOT NULL DEFAULT 0, created_by INTEGER, created_at TEXT NOT NULL
     )""")
     for table, columns in (
+        ("blog_plan", (("images", "TEXT NOT NULL DEFAULT '[]'"), ("rejected_note", "TEXT NOT NULL DEFAULT ''"),
+                       ("rejected_by", "INTEGER"), ("rejected_at", "TEXT NOT NULL DEFAULT ''"),
+                       ("publish_origin", "TEXT NOT NULL DEFAULT ''"))),
         ("entry_links", (("source", "TEXT NOT NULL DEFAULT 'website'"), ("campaign", "TEXT NOT NULL DEFAULT ''"))),
         ("contacts", (("consent_status", "TEXT NOT NULL DEFAULT 'unknown'"), ("consent_source", "TEXT NOT NULL DEFAULT ''"),
                       ("consent_at", "TEXT NOT NULL DEFAULT ''"), ("consent_wording", "TEXT NOT NULL DEFAULT ''"),

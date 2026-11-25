@@ -194,17 +194,50 @@ def confirm(account_id: str, media_id: Any, host: str = "") -> Dict[str, Any]:
     return _present(account_id, [dict(row, size=size)], host)[0]
 
 
+def tokens_in(text: str) -> List[str]:
+    return sorted(set(re.findall(re.escape(PUBLIC_PATH) + r"([A-Za-z0-9_-]+)", text)))
+
+
+def by_tokens(account_id: str, tokens: List[str]) -> Dict[str, Dict[str, Any]]:
+    with db.get_connection() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT * FROM media_files WHERE account_id = ? AND status = 'ready'",
+                                              (account_id,)).fetchall()]
+    return {r["token"]: r for r in rows if r["token"] in tokens}
+
+
+def views(rows: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Preview links by storage path; none when storage is off or not answering."""
+    if not rows or not configured():
+        return {}
+    try:
+        return storage_sign([r["path"] for r in rows], VIEW_SECONDS)
+    except MediaError:
+        return {}
+
+
+def present_in_storage(row: Dict[str, Any]) -> bool:
+    return storage_head(row["path"]) is not None
+
+
+def _posts_with(account_id: str, row: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Planned posts that carry this file, as an attached image or as a link in the text."""
+    with db.get_connection() as conn:
+        posts = [dict(p) for p in conn.execute("SELECT id, title, status, body, images FROM blog_plan WHERE account_id = ?",
+                                               (account_id,)).fetchall()]
+    return [p for p in posts if PUBLIC_PATH + row["token"] in p["body"]
+            or any(i.get("media_id") == row["id"] for i in json.loads(p["images"] or "[]"))]
+
+
 def used_by(account_id: str, row: Dict[str, Any]) -> List[str]:
     out = []
     with db.get_connection() as conn:
         for label, query, arg in (
             ("chat", "SELECT 1 FROM messages WHERE account_id = ? AND media_id = ?", row["id"]),
             ("broadcast", "SELECT 1 FROM broadcasts WHERE account_id = ? AND media_id = ?", row["id"]),
-            ("blog", "SELECT 1 FROM blog_plan WHERE account_id = ? AND body LIKE ?", f"%{PUBLIC_PATH}{row['token']}%"),
         ):
             if conn.execute(query + " LIMIT 1", (account_id, arg)).fetchone():
                 out.append(label)
-    return out
+    return out + (["blog"] if _posts_with(account_id, row) else [])
 
 
 def _present(account_id: str, rows: List[Dict[str, Any]], host: str) -> List[Dict[str, Any]]:
@@ -229,6 +262,10 @@ def list_items(account_id: str, search: str = "", host: str = "") -> List[Dict[s
 def delete(account_id: str, media_id: Any, force: bool = False) -> None:
     require()
     row = _row(account_id, media_id)
+    waiting = [p for p in _posts_with(account_id, row) if p["status"] in ("needs_approval", "approved")]
+    if waiting:         # not even with force: the approved page would lose its picture
+        raise MediaError(409, "in_use_by_post", f"Used by the planned post '{waiting[0]['title']}' (#{waiting[0]['id']}), "
+                         "which is waiting for approval or publishing.")
     uses = used_by(account_id, row)
     if uses and not force:
         raise MediaError(409, "in_use", "This file is used in: " + ", ".join(uses) + ".")
@@ -237,11 +274,11 @@ def delete(account_id: str, media_id: Any, force: bool = False) -> None:
 
 def publish_linked(account_id: str, text: str) -> None:
     """A published post makes exactly the files it links to public."""
-    tokens = re.findall(re.escape(PUBLIC_PATH) + r"([A-Za-z0-9_-]+)", text)
+    tokens = tokens_in(text)
     if not tokens:
         return
     with db.get_connection() as conn:
-        for token in set(tokens):
+        for token in tokens:
             conn.execute("UPDATE media_files SET is_public = 1 WHERE account_id = ? AND token = ? AND status = 'ready'",
                          (account_id, token))
         conn.commit()

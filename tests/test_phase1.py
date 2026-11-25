@@ -607,6 +607,64 @@ class MediaTests(Base):
         self.assertTrue(link.startswith("https://store.test/s/"))
         self.assertEqual(self.api("GET", "/api/media")[1]["items"][0]["used_by"], ["blog"])
 
+    def post(self, **extra):
+        pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
+        cs.save_account_settings(self.a, github_token="t")
+        when = (datetime.utcnow() - timedelta(1)).isoformat() + "Z"
+        return self.agent_api("POST", "/api/blog/plan", dict({"title": "Plots", "body": "Visit on weekends.",
+                                                            "publish_at": when, "project_id": pid}, **extra))
+
+    def publisher(self):
+        return mock.patch("engine.github_client.GitHubClient.publish_post", return_value={"success": True, "pr_url": "u"})
+
+    def test_agent_writes_with_images_admin_rejects_then_approves(self):
+        cover, inline = (self.upload(name=n)[1]["item"]["id"] for n in ("cover.png", "inline.png"))
+        pdf = self.upload(content=self.PDF, mime="application/pdf", name="a.pdf")[1]["item"]["id"]
+        self.assertEqual(self.post(images=[{"media_id": pdf}])[1]["error"], "not_an_image")
+        self.assertEqual(self.api_b("POST", "/api/blog/plan", {"title": "x", "images": [{"media_id": cover}]})[0], 404)
+        code, out = self.post(images=[{"media_id": cover, "cover": True, "alt": "Gate"}, {"media_id": inline, "alt": "Road"}])
+        self.assertEqual(code, 201, out)
+        item = out["item"]["id"]
+        saved = self.agent_api("GET", "/api/blog/plan")[1]["items"][0]["images"]
+        self.assertEqual([(i["media_id"], i["cover"], bool(i["url"])) for i in saved], [(cover, True, True), (inline, False, True)])
+        url = f"/api/blog/plan/{item}"
+        with self.publisher() as pub:
+            jobs.tick(limit=1000)                                             # draft: never
+            self.assertEqual(self.agent_api("POST", url + "/submit")[0], 200)
+            jobs.tick(limit=1000)                                             # waiting for approval: never
+            self.assertEqual(self.api("DELETE", f"/api/media/{inline}", query={"force": "1"})[1]["error"], "in_use_by_post")
+            self.assertEqual(self.agent_api("POST", url + "/reject", {"note": "n"})[0], 403)
+            self.assertEqual(self.api("POST", url + "/reject", {"note": " "})[1]["error"], "note_required")
+            rejected = self.api("POST", url + "/reject", {"note": "Use a better photo"})[1]["item"]
+            self.assertEqual((rejected["status"], rejected["rejected_note"]), ("draft", "Use a better photo"))
+            jobs.tick(limit=1000)                                             # rejected: never
+            self.assertEqual(pub.call_count, 0)
+        self.assertIsNone(self.agent_api("POST", url + "/submit")[1]["item"]["rejected_note"])
+        self.assertEqual(self.api("POST", url + "/approve")[0], 200)
+        changed = self.agent_api("PATCH", url, {"images": [{"media_id": cover, "cover": True, "alt": "Main gate"},
+                                                          {"media_id": inline}]})[1]["item"]
+        self.assertEqual(changed["status"], "needs_approval")
+        self.api("POST", url + "/approve")
+        with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}), self.publisher() as pub:
+            jobs.tick(limit=1000)
+        sent = pub.call_args.kwargs["file_content"]
+        self.assertLess(sent.index("![Main gate](https://cms.test/api/public/media/"), sent.rindex("Visit on weekends."))
+        self.assertEqual(sent.count("/api/public/media/"), 2)
+        token = sent.split("/api/public/media/")[2].split(")")[0]
+        self.assertEqual(handle_public_request(f"/api/public/media/{token}", {})[0], 302)
+
+    def test_a_missing_image_stops_the_whole_post(self):
+        image = self.upload()[1]["item"]["id"]
+        item = self.post(images=[{"media_id": image}])[1]["item"]["id"]
+        self.agent_api("POST", f"/api/blog/plan/{item}/submit")
+        with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}):
+            self.assertEqual(self.api("POST", f"/api/blog/plan/{item}/approve")[0], 200)
+            self.stored.clear()
+            with self.publisher() as pub:
+                jobs.tick(limit=1000)
+        self.assertEqual(pub.call_count, 0)
+        self.assertEqual(len(self.alerts("blog_failed")), 1)
+
     def test_template_header_and_incoming_file(self):
         image = self.upload()[1]["item"]["id"]
         self.inbound("hello")

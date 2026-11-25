@@ -3,6 +3,8 @@
 draft -> needs_approval -> approved -> published (or failed). Only an approved post whose time has
 come is sent to the site, once: the job is keyed on the approved version, and a failed or
 interrupted publish is not repeated until someone approves it again."""
+import json
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -11,7 +13,8 @@ import database as db
 from engine import alerts, assistant, jobs, llm, media
 from engine.messaging import IST
 
-EDITABLE = ("title", "topic", "keyword", "publish_at", "project_id", "assignee_id", "body")
+EDITABLE = ("title", "topic", "keyword", "publish_at", "project_id", "assignee_id", "body", "images")
+MAX_IMAGES = 20
 
 
 class PlanError(Exception):
@@ -37,12 +40,35 @@ def _parse_time(value: Any) -> str:
     return dt.replace(microsecond=0).isoformat()
 
 
-def _view(row: Dict[str, Any], names: Dict[int, str]) -> Dict[str, Any]:
+def _view(row: Dict[str, Any], names: Dict[int, str], files: Dict[int, Dict[str, Any]], links: Dict[str, str],
+          host: str) -> Dict[str, Any]:
     d = {k: row[k] for k in ("id", "title", "topic", "keyword", "status", "body", "project_id", "assignee_id",
                              "post_url", "error")}
     d["publish_at"] = row["publish_at"] + "Z" if row["publish_at"] else None
     d["assignee_name"] = names.get(row["assignee_id"])
+    origin = f"https://{host}" if host else ""
+    d["images"] = []
+    for image in json.loads(row["images"] or "[]"):
+        f = files.get(image["media_id"])
+        d["images"].append(dict(image, name=f["name"] if f else None, url=links.get(f["path"]) if f else None,
+                                public_url=origin + media.PUBLIC_PATH + f["token"] if f else None))
+    d["rejected_note"] = row["rejected_note"] or None
+    d["rejected_by_name"] = names.get(row["rejected_by"]) if row["rejected_note"] else None
+    d["rejected_at"] = row["rejected_at"] + "Z" if row["rejected_note"] else None
     return d
+
+
+def _views(account_id: str, rows: List[Dict[str, Any]], host: str) -> List[Dict[str, Any]]:
+    wanted = sorted({i["media_id"] for r in rows for i in json.loads(r["images"] or "[]")})
+    files: Dict[int, Dict[str, Any]] = {}
+    for media_id in wanted:
+        try:
+            files[media_id] = media.get(account_id, media_id)
+        except media.MediaError:
+            pass
+    links = media.views(list(files.values()))
+    names = _names(account_id)
+    return [_view(r, names, files, links, host) for r in rows]
 
 
 def _names(account_id: str) -> Dict[int, str]:
@@ -57,11 +83,11 @@ def _row(account_id: str, item_id: int) -> Dict[str, Any]:
     return dict(row)
 
 
-def get_item(account_id: str, item_id: int) -> Dict[str, Any]:
-    return _view(_row(account_id, item_id), _names(account_id))
+def get_item(account_id: str, item_id: int, host: str = "") -> Dict[str, Any]:
+    return _views(account_id, [_row(account_id, item_id)], host)[0]
 
 
-def list_items(account_id: str, status: str = "", assignee_id: Optional[int] = None) -> List[Dict[str, Any]]:
+def list_items(account_id: str, status: str = "", assignee_id: Optional[int] = None, host: str = "") -> List[Dict[str, Any]]:
     q, args = "SELECT * FROM blog_plan WHERE account_id = ?", [account_id]
     if status:
         q += " AND status = ?"
@@ -71,8 +97,28 @@ def list_items(account_id: str, status: str = "", assignee_id: Optional[int] = N
         args.append(assignee_id)
     with db.get_connection() as conn:
         rows = [dict(r) for r in conn.execute(q + " ORDER BY publish_at, id LIMIT 500", args).fetchall()]
-    names = _names(account_id)
-    return [_view(r, names) for r in rows]
+    return _views(account_id, rows, host)
+
+
+def _clean_images(account_id: str, value: Any) -> str:
+    """[{media_id, alt, cover}] -> stored JSON. Only this account's images; at most one cover."""
+    if value in (None, ""):
+        return "[]"
+    if not isinstance(value, list) or len(value) > MAX_IMAGES or not all(isinstance(i, dict) for i in value):
+        raise PlanError(400, "invalid_images", f"images must be a list of at most {MAX_IMAGES} entries.")
+    out: List[Dict[str, Any]] = []
+    for image in value:
+        try:
+            f = media.get(account_id, image.get("media_id"))
+        except media.MediaError:
+            raise PlanError(404, "media_not_found", "That image is not in this account's media library.")
+        if not f["mime"].startswith("image/"):
+            raise PlanError(400, "not_an_image", f"'{f['name']}' is not an image.")
+        if any(i["media_id"] == f["id"] for i in out):
+            continue
+        cover = bool(image.get("cover")) and not any(i["cover"] for i in out)
+        out.append({"media_id": f["id"], "alt": str(image.get("alt") or "").strip()[:200], "cover": cover})
+    return json.dumps(out)
 
 
 def _clean(account_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -83,6 +129,8 @@ def _clean(account_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
         value = data[key]
         if key == "publish_at":
             out[key] = _parse_time(value)
+        elif key == "images":
+            out[key] = _clean_images(account_id, value)
         elif key in ("project_id", "assignee_id"):
             if value in (None, "", 0):
                 out[key] = None
@@ -110,9 +158,9 @@ def create(account_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     now = _now()
     with db.get_connection() as conn:
         cur = conn.execute("""INSERT INTO blog_plan (account_id, project_id, title, topic, keyword, publish_at, status, body,
-                              assignee_id, created_at, updated_at) VALUES (?,?,?,?,?,?,'draft',?,?,?,?)""",
+                              assignee_id, created_at, updated_at, images) VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?)""",
                            (account_id, f.get("project_id"), f["title"], f.get("topic", ""), f.get("keyword", ""),
-                            f.get("publish_at", ""), f.get("body", ""), f.get("assignee_id"), now, now))
+                            f.get("publish_at", ""), f.get("body", ""), f.get("assignee_id"), now, now, f.get("images", "[]")))
         item_id = cur.lastrowid
         conn.commit()
     return get_item(account_id, item_id)
@@ -162,11 +210,22 @@ def submit(account_id: str, item_id: int) -> Dict[str, Any]:
         raise PlanError(409, "wrong_status", f"A post that is '{row['status']}' cannot be submitted.")
     if not row["body"]:
         raise PlanError(409, "empty_body", "Write or draft the post first.")
-    _set(account_id, item_id, expected_status=row["status"], status="needs_approval", error="")
+    _set(account_id, item_id, expected_status=row["status"], status="needs_approval", error="", rejected_note="")
     return get_item(account_id, item_id)
 
 
-def approve(account_id: str, item_id: int) -> Dict[str, Any]:
+def reject(account_id: str, item_id: int, note: Any, user_id: int) -> Dict[str, Any]:
+    row = _row(account_id, item_id)
+    note = str(note or "").strip()[:1000]
+    if not note:
+        raise PlanError(400, "note_required", "Say what needs to change.")
+    if row["status"] != "needs_approval" or not _set(account_id, item_id, expected_status="needs_approval", status="draft",
+                                                     error="", rejected_note=note, rejected_by=user_id, rejected_at=_now()):
+        raise PlanError(409, "wrong_status", "Only a post waiting for approval can be rejected.")
+    return get_item(account_id, item_id)
+
+
+def approve(account_id: str, item_id: int, host: str = "") -> Dict[str, Any]:
     row = _row(account_id, item_id)
     if row["status"] != "needs_approval":
         raise PlanError(409, "wrong_status", "Only a post waiting for approval can be approved.")
@@ -177,9 +236,59 @@ def approve(account_id: str, item_id: int) -> Dict[str, Any]:
     blocked = _guard(account_id, row)
     if blocked:
         raise PlanError(409, "blocked", f"This post cannot be approved: {blocked}.")
-    if not _set(account_id, item_id, expected_status="needs_approval", status="approved", error=""):
+    _post_files(account_id, row)
+    if not _set(account_id, item_id, expected_status="needs_approval", status="approved", error="", rejected_note="",
+                publish_origin=host[:200]):
         raise PlanError(409, "wrong_status", "The post changed. Reload and try again.")
     return get_item(account_id, item_id)
+
+
+def _post_files(account_id: str, row: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The attached images, after checking that every file the post shows or links to still exists."""
+    images = json.loads(row["images"] or "[]")
+    tokens = media.tokens_in(row["body"])
+    if not images and not tokens:
+        return []
+    if not media.configured():
+        raise PlanError(409, "media_not_configured", "The post has files, but the media library is not set up.")
+    linked = media.by_tokens(account_id, tokens)
+    if len(linked) != len(tokens):
+        raise PlanError(409, "missing_media", "The text links to a file that is not in the media library.")
+    out, files = [], list(linked.values())
+    for image in images:
+        try:
+            f = media.get(account_id, image["media_id"])
+        except media.MediaError:
+            raise PlanError(409, "missing_media", "An attached image is no longer in the media library.")
+        out.append(dict(image, token=f["token"]))
+        files.append(f)
+    try:
+        if not all(media.present_in_storage(f) for f in files):
+            raise PlanError(409, "missing_media", "A file of this post is missing from storage.")
+    except media.MediaError as e:
+        raise PlanError(409, e.code, e.message)
+    return out
+
+
+def _public_origin(row: Dict[str, Any]) -> str:
+    base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+    host = os.environ.get("VERCEL_PROJECT_PRODUCTION_URL") or row["publish_origin"]
+    return base or (f"https://{host}" if host else "")
+
+
+def _with_images(account_id: str, row: Dict[str, Any]) -> str:
+    """The approved text, with the cover on top and any attached image the text does not place at the end."""
+    body, top, end = row["body"], [], []
+    images = _post_files(account_id, row)
+    origin = _public_origin(row)
+    for image in images:
+        if media.PUBLIC_PATH + image["token"] in body:
+            continue
+        if not origin:
+            raise PlanError(409, "no_public_address", "Set PUBLIC_BASE_URL so images get a full address.")
+        alt = image["alt"].replace("[", "(").replace("]", ")").replace("\n", " ")
+        (top if image["cover"] else end).append(f"![{alt}]({origin}{media.PUBLIC_PATH}{image['token']})")
+    return "\n\n".join(top + [body] + end)
 
 
 def _guard(account_id: str, row: Dict[str, Any]) -> Optional[str]:
@@ -305,6 +414,10 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
     token = project.get("github_token") or cs.get_account_github_token(account_id)
     if not token:
         return {"success": False, "error": "No GitHub token is set for this project or account."}
+    try:
+        full = _with_images(account_id, row)
+    except PlanError as e:
+        return {"success": False, "error": e.message}
     title, body = row["title"], row["body"]
     slug = slugify(title)
     day = datetime.now(IST).strftime("%Y-%m-%d")
@@ -315,21 +428,21 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
         "title": title, "excerpt": excerpt, "date": day, "date_iso": _now(), "slug": slug, "tags": tags,
         "author": project.get("author_name", "Editorial Team"), "reading_time": max(1, len(body.split()) // 200)})
     post_id = db.create_post({
-        "project_id": project["id"], "title": title, "slug": slug, "excerpt": excerpt, "content_markdown": body,
+        "project_id": project["id"], "title": title, "slug": slug, "excerpt": excerpt, "content_markdown": full,
         "frontmatter_yaml": front, "target_path": path, "tags": tags, "meta_seo": {}, "image_prompt": "",
         "og_image_svg": generate_hero_svg(title=title, category=project.get("name", "Blog"),
                                           author=project.get("author_name", "Editorial Team"), reading_time=5),
         "seo_score": 100, "seo_issues": [], "status": "publishing"})
     res = GitHubClient(token=token).publish_post(
         repo=project["github_repo"], branch=project["github_branch"], target_path=path,
-        file_content=assemble_post_document(front, body), post_title=title, post_excerpt=excerpt, post_tags=tags,
+        file_content=assemble_post_document(front, full), post_title=title, post_excerpt=excerpt, post_tags=tags,
         mode=project.get("publishing_mode", "pr"))
     if not res.get("success"):
         db.update_post_status(post_id=post_id, status="failed", error=res.get("error", ""))
         return {"success": False, "error": res.get("error", "publishing error")}
     db.update_post_status(post_id=post_id, status="published", commit_sha=res.get("commit_sha"), pr_url=res.get("pr_url"),
                           pr_number=res.get("pr_number"))
-    media.publish_linked(account_id, body)
+    media.publish_linked(account_id, full)
     url = res.get("pr_url") or f"https://github.com/{project['github_repo']}/blob/{project['github_branch']}/{path}"
     try:
         from engine.whatsapp_client import WhatsAppClient

@@ -241,7 +241,8 @@ def _plan(fn, status: int = 200):
 def plan_list(ctx, m, q, body):
     assignee = q.get("assignee_id", "")
     return 200, {"items": blog_plan.list_items(ctx.account_id, status=q.get("status", ""),
-                                               assignee_id=int(assignee) if assignee.isdigit() else None)}
+                                               assignee_id=int(assignee) if assignee.isdigit() else None,
+                                               host=ctx.host)}
 
 
 @route("POST", r"/api/blog/plan", "acct:content.write")
@@ -273,9 +274,18 @@ def plan_submit(ctx, m, q, body):
     return _plan(lambda: blog_plan.submit(ctx.account_id, int(m.group("id"))))
 
 
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/reject", "acct:content.publish")
+def plan_reject(ctx, m, q, body):
+    res = _plan(lambda: blog_plan.reject(ctx.account_id, int(m.group("id")), body.get("note"), ctx.user["id"]))
+    if res[0] == 200:
+        db.log_event(f"Planned post #{m.group('id')} rejected by {ctx.user['username']}: {res[1]['item']['rejected_note']}",
+                     "INFO", account_id=ctx.account_id)
+    return res
+
+
 @route("POST", r"/api/blog/plan/(?P<id>\d+)/approve", "acct:content.publish")
 def plan_approve(ctx, m, q, body):
-    res = _plan(lambda: blog_plan.approve(ctx.account_id, int(m.group("id"))))
+    res = _plan(lambda: blog_plan.approve(ctx.account_id, int(m.group("id")), ctx.host))
     if res[0] == 200:
         db.log_event(f"Planned post #{m.group('id')} approved by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
     return res
