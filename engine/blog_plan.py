@@ -14,7 +14,8 @@ import database as db
 from engine import alerts, assistant, jobs, llm, media
 from engine.messaging import IST
 
-EDITABLE = ("title", "topic", "keyword", "publish_at", "project_id", "assignee_id", "body", "images", "writer_token_id")
+EDITABLE = ("title", "topic", "keyword", "publish_at", "project_id", "assignee_id", "body", "images", "writer_token_id",
+            "meta_description")
 MAX_IMAGES = 20
 
 
@@ -44,7 +45,7 @@ def _parse_time(value: Any) -> str:
 def _view(row: Dict[str, Any], names: Dict[int, str], files: Dict[int, Dict[str, Any]], links: Dict[str, str],
           host: str, writers: Dict[int, str]) -> Dict[str, Any]:
     d = {k: row[k] for k in ("id", "title", "topic", "keyword", "status", "body", "project_id", "assignee_id",
-                             "post_url", "error")}
+                             "post_url", "error", "meta_description")}
     d["publish_at"] = row["publish_at"] + "Z" if row["publish_at"] else None
     d["assignee_name"] = names.get(row["assignee_id"])
     d["state"] = ("rejected" if row["status"] == "draft" and row["rejected_note"]
@@ -149,6 +150,8 @@ def _clean(account_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
             if not token:
                 raise PlanError(404, "writer_not_found", "No active writer token with that id.")
             out[key] = token["id"]
+        elif key == "meta_description":      # one line; a backslash would break quoted frontmatter
+            out[key] = " ".join(str(value or "").replace("\\", " ").split())[:300]
         elif key == "images":
             out[key] = _clean_images(account_id, value)
         elif key in ("project_id", "assignee_id"):
@@ -178,10 +181,11 @@ def create(account_id: str, data: Dict[str, Any], external_id: str = "") -> Dict
     now = _now()
     with db.get_connection() as conn:
         cur = conn.execute("""INSERT INTO blog_plan (account_id, project_id, title, topic, keyword, publish_at, status, body,
-                              assignee_id, created_at, updated_at, images, writer_token_id, external_id) VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?,?,?)""",
+                              assignee_id, created_at, updated_at, images, writer_token_id, external_id, meta_description)
+                              VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?,?,?,?)""",
                            (account_id, f.get("project_id"), f["title"], f.get("topic", ""), f.get("keyword", ""),
                             f.get("publish_at", ""), f.get("body", ""), f.get("assignee_id"), now, now, f.get("images", "[]"),
-                            f.get("writer_token_id"), external_id))
+                            f.get("writer_token_id"), external_id, f.get("meta_description", "")))
         item_id = cur.lastrowid
         conn.commit()
     return get_item(account_id, item_id)
@@ -321,7 +325,7 @@ def _with_images(account_id: str, row: Dict[str, Any]) -> str:
 def _guard(account_id: str, row: Dict[str, Any]) -> Optional[str]:
     """Banned claims always; the price rule only once the account has entered knowledge."""
     knowledge = assistant.get_knowledge(account_id)
-    text = f"{row['title']}\n{row['body']}"
+    text = f"{row['title']}\n{row['meta_description']}\n{row['body']}"
     if assistant.knowledge_text(knowledge):
         return assistant.guard(knowledge, text)
     low = text.lower()
@@ -449,7 +453,7 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
     title, body = row["title"], row["body"]
     slug = slugify(title)
     day = datetime.now(IST).strftime("%Y-%m-%d")
-    excerpt = " ".join(line for line in body.splitlines() if line and not line.startswith("#"))[:155]
+    excerpt = row["meta_description"] or " ".join(line for line in body.splitlines() if line and not line.startswith("#"))[:155]
     tags = [row["keyword"]] if row["keyword"] else []
     path = build_target_filepath(project, slug, day)
     front = format_frontmatter(project["frontmatter_template"], {
@@ -457,7 +461,7 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
         "author": project.get("author_name", "Editorial Team"), "reading_time": max(1, len(body.split()) // 200)})
     post_id = db.create_post({
         "project_id": project["id"], "title": title, "slug": slug, "excerpt": excerpt, "content_markdown": full,
-        "frontmatter_yaml": front, "target_path": path, "tags": tags, "meta_seo": {}, "image_prompt": "",
+        "frontmatter_yaml": front, "target_path": path, "tags": tags, "meta_seo": {"description": excerpt}, "image_prompt": "",
         "og_image_svg": generate_hero_svg(title=title, category=project.get("name", "Blog"),
                                           author=project.get("author_name", "Editorial Team"), reading_time=5),
         "seo_score": 100, "seo_issues": [], "status": "publishing"})
