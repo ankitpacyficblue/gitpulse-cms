@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional, Tuple
 import crm_store as cs
 import dbcompat
 import database as db
+from engine import alerts, jobs
 from engine.whatsapp_client import WhatsAppClient
 
 
@@ -36,6 +37,17 @@ def _signature_ok(raw_body: bytes, signature: str, secret: str) -> bool:
         return False
     expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature[len("sha256="):])
+
+
+def _accounts_in(body: Dict[str, Any]):
+    found = set()
+    for entry in body.get("entry", []):
+        for change in entry.get("changes", []):
+            pn_id = ((change.get("value") or {}).get("metadata") or {}).get("phone_number_id", "")
+            account_id = cs.find_account_by_phone_number_id(pn_id)
+            if account_id:
+                found.add(account_id)
+    return found
 
 
 def _secrets_for_payload(body: Dict[str, Any]):
@@ -78,10 +90,15 @@ def handle_whatsapp_webhook_post(raw_body: bytes, signature: str = "",
         return 503, {"error": "Temporarily unavailable"}
     if not any(_signature_ok(raw_body, signature or "", s) for s in secrets_list):
         db.log_event("WhatsApp webhook rejected: bad or missing signature.", "WARNING")
+        for account_id in _accounts_in(body):
+            alerts.raise_alert(account_id, "webhook_rejected",
+                               "WhatsApp messages are being refused: the app secret does not match.", severity="error")
         return 403, {"error": "Invalid signature"}
 
     try:
-        return 200, WhatsAppClient.process_incoming_webhook(body)
+        result = WhatsAppClient.process_incoming_webhook(body)
+        jobs.maybe_tick()
+        return 200, result
     except Exception as e:
         db.log_event(f"Error processing WhatsApp webhook ({type(e).__name__}).", "ERROR")
         return 500, {"error": "Webhook processing error"}

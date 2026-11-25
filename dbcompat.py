@@ -21,10 +21,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 # Tables whose primary key is a generated integer `id` (INSERT returns it).
 # Tables with a non-integer primary key (RLS is enabled on these too, see database.init_db).
-OTHER_TABLES = {"accounts", "memberships", "sessions", "settings", "account_settings", "schema_version"}
+OTHER_TABLES = {"accounts", "memberships", "sessions", "settings", "account_settings", "schema_version", "ai_knowledge"}
 AUTOID_TABLES = {
     "clients", "projects", "posts", "system_logs", "users", "login_attempts", "post_views",
     "whatsapp_accounts", "contacts", "conversations", "messages", "deals", "broadcasts", "automations",
+    "jobs", "alerts", "wa_templates", "entry_links",
 }
 
 

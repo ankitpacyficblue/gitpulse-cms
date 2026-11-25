@@ -75,6 +75,14 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
         elif ai_provider == "openai":
             ai_key = DEFAULT_OPENAI_API_KEY
 
+    from engine import assistant
+    knowledge = assistant.get_knowledge(account_id) if account_id else None
+    business = assistant.knowledge_text(knowledge) if knowledge else ""
+    if business:
+        enriched_project["business_knowledge"] = business
+        enriched_project["banned_claims"] = knowledge["banned_claims"]
+        enriched_project["topic"] = project["topic"]
+
     generator = AIGenerator(provider=ai_provider, api_key=ai_key)
     article = generator.generate_article(topic_plan, enriched_project)
 
@@ -116,7 +124,10 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
     # Determine initial status:
     # If project requires manual review (auto_publish=0) and not forced, stage for human approval
     auto_publish_enabled = bool(project.get("auto_publish", 1))
-    should_publish_now = force_publish or auto_publish_enabled
+    blocked = None
+    if knowledge and (business or knowledge["banned_claims"]):
+        blocked = assistant.guard(knowledge, "\n".join((article["title"], article["excerpt"], article["content_markdown"])))
+    should_publish_now = (force_publish or auto_publish_enabled) and not blocked
     initial_status = "publishing" if should_publish_now else "in_review"
 
     # 7. Save Post Record in DB
@@ -146,13 +157,16 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
             "title": article["title"],
             "target_path": target_path,
             "status": "in_review",
+            "blocked": blocked,
             "seo_score": lint_results["score"],
             "message": "Article generated and held in Editorial Staging for review."
         }
 
     # 8. GitHub Publication Dispatch
     client = GitHubClient(token=github_token)
-    pub_result = client.publish_post(
+    # Without a token the client only pretends to publish. That is for the explicit "mock" token, never a default.
+    pub_result = {"success": False, "error": "No GitHub token is set for this project or account."} if not github_token \
+        else client.publish_post(
         repo=project["github_repo"],
         branch=project["github_branch"],
         target_path=target_path,

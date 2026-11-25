@@ -1,0 +1,56 @@
+-- Phase 1 (additive). The app applies the same statements itself at start-up (database.init_db).
+
+CREATE TABLE IF NOT EXISTS jobs (
+        id SERIAL PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+        kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', run_at DOUBLE PRECISION NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending', last_error TEXT NOT NULL DEFAULT '', dedupe_key TEXT UNIQUE,
+        locked_at DOUBLE PRECISION NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+CREATE TABLE IF NOT EXISTS alerts (
+        id SERIAL PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+        type TEXT NOT NULL, severity TEXT NOT NULL DEFAULT 'warning', message TEXT NOT NULL, link TEXT NOT NULL DEFAULT '',
+        count INTEGER NOT NULL DEFAULT 1, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, resolved_at TEXT NOT NULL DEFAULT ''
+    );
+CREATE TABLE IF NOT EXISTS ai_knowledge (
+        account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE RESTRICT,
+        data TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+CREATE TABLE IF NOT EXISTS wa_templates (
+        id SERIAL PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+        name TEXT NOT NULL, language TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'MARKETING',
+        status TEXT NOT NULL DEFAULT 'PENDING', body TEXT NOT NULL DEFAULT '', variables INTEGER NOT NULL DEFAULT 0,
+        synced_at TEXT NOT NULL, UNIQUE (account_id, name, language)
+    );
+CREATE TABLE IF NOT EXISTS entry_links (
+        id SERIAL PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+        label TEXT NOT NULL, code TEXT NOT NULL, prefill TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+        UNIQUE (account_id, code)
+    );
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS consent_status TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS consent_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS consent_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS consent_wording TEXT NOT NULL DEFAULT '';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS source_detail TEXT NOT NULL DEFAULT '';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_inbound_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS needs_human INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS handoff_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS ai_mode TEXT NOT NULL DEFAULT 'on';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS ai_paused_at DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS sent_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS sent_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS broadcast_id INTEGER;
+ALTER TABLE broadcasts ADD COLUMN IF NOT EXISTS template_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE broadcasts ADD COLUMN IF NOT EXISTS template_language TEXT NOT NULL DEFAULT '';
+ALTER TABLE broadcasts ADD COLUMN IF NOT EXISTS template_params TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE broadcasts ADD COLUMN IF NOT EXISTS skipped_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE automations ADD COLUMN IF NOT EXISTS template_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE automations ADD COLUMN IF NOT EXISTS template_language TEXT NOT NULL DEFAULT '';
+ALTER TABLE automations ADD COLUMN IF NOT EXISTS template_params TEXT NOT NULL DEFAULT '[]';
+CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs (status, run_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_acct ON alerts (account_id, resolved_at);
+ALTER TABLE jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alerts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ai_knowledge ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wa_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE entry_links ENABLE ROW LEVEL SECURITY;

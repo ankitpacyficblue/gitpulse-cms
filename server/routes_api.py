@@ -19,6 +19,7 @@ import dbcompat
 from currencies import is_valid_currency
 import json
 import re
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import crm_store as cs
@@ -27,6 +28,7 @@ from config import FRAMEWORK_PRESETS, DEFAULT_AI_PROVIDER
 from engine import accounts_service as svc
 from engine import auth
 from engine import secrets_box
+from engine import assistant, jobs, messaging
 from engine.accounts_service import ServiceError
 from engine.auth import (
     authenticate_user, revoke_session, update_user_password, verify_password,
@@ -50,6 +52,7 @@ class Ctx:
         self.user, self.account_id, self.role, self.ip, self.user_agent = user, account_id, role, ip, user_agent
         self.token = token
         self.host = host
+        self.headers = {}
 
 
 PASSWORD_CHANGE_OK = {"/api/auth/change-password", "/api/auth/me", "/api/auth/logout"}
@@ -122,7 +125,9 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
             continue
 
         if access == "public":
-            return fn(Ctx(None, ip=client_ip, user_agent=user_agent), match, query_params, body)
+            ctx = Ctx(None, ip=client_ip, user_agent=user_agent)
+            ctx.headers = hdrs
+            return fn(ctx, match, query_params, body)
 
         if not current_user:
             return 401, {"error": "Authentication required. Please log in.", "code": "UNAUTHORIZED"}
@@ -166,6 +171,7 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
 
         if perm and not has_permission(ctx.role, perm):
             return _forbidden(perm)
+        jobs.maybe_tick()
         try:
             return fn(ctx, match, query_params, body)
         except ServiceError as e:
@@ -743,12 +749,22 @@ def contacts_delete(ctx, m, q, body):
     return (200, {"success": True}) if ok else (404, {"error": "Contact not found."})
 
 
+def _with_window(conv: Dict[str, Any], look_up: bool = False) -> Dict[str, Any]:
+    """window_open / window_expires_at (UTC): free text is possible only while the window is open."""
+    end = messaging.window_expires_at(conv) if (look_up or conv.get("last_inbound_at")) else None
+    return dict(conv, window_expires_at=end.isoformat() + "Z" if end else None,
+                window_open=bool(end and datetime.utcnow() < end))
+
+
 @route("GET", r"/api/whatsapp/conversations", "acct:crm.read")
 def conv_list(ctx, m, q, body):
     mine = ctx.user["id"] if q.get("assigned") == "me" else None
-    return 200, {"conversations": cs.list_conversations(
-        ctx.account_id, status=q.get("status", ""), assigned_user_id=mine,
-        include_empty=q.get("include_empty") in ("1", "true", "yes"), contact_id=_int(q.get("contact_id")))}
+    rows = cs.list_conversations(ctx.account_id, status=q.get("status", ""), assigned_user_id=mine,
+                                 include_empty=q.get("include_empty") in ("1", "true", "yes"),
+                                 contact_id=_int(q.get("contact_id")))
+    if q.get("needs_human") in ("1", "true", "yes"):
+        rows = [r for r in rows if r.get("needs_human")]
+    return 200, {"conversations": [_with_window(r) for r in rows]}
 
 
 @route("PUT", r"/api/whatsapp/conversations/(?P<id>\d+)/assign", "acct:crm.write")
@@ -766,7 +782,7 @@ def conversation_assign(ctx, m, q, body):
 @route("GET", r"/api/whatsapp/conversations/(?P<id>\d+)", "acct:crm.read")
 def conv_get(ctx, m, q, body):
     conv = cs.get_conversation(ctx.account_id, int(m.group("id")))
-    return (200, conv) if conv else (404, {"error": "Conversation not found."})
+    return (200, _with_window(conv, look_up=True)) if conv else (404, {"error": "Conversation not found."})
 
 
 @route("GET", r"/api/whatsapp/conversations/(?P<id>\d+)/messages", "acct:crm.read")
@@ -785,12 +801,14 @@ def conv_send(ctx, m, q, body):
     conv = cs.get_conversation(ctx.account_id, int(m.group("id")))
     if not conv:
         return 404, {"error": "Conversation not found."}
-    res = WhatsAppClient(ctx.account_id).send_text_message(conv["contact_phone"], text)
-    status = ("mock" if res.get("mock") else "sent") if res.get("success") else "failed"
-    msg_id = cs.create_message(ctx.account_id, conv["id"], conv["contact_id"], "outbound", text,
-                               wa_message_id=res.get("message_id", ""), status=status, error_message=res.get("error", ""))
-    return (200 if res.get("success") else 502), {"success": bool(res.get("success")), "message_id": msg_id,
-                                                  "status": status, "error": res.get("error")}
+    contact = cs.get_contact(ctx.account_id, conv["contact_id"])
+    try:
+        res = messaging.send(ctx.account_id, contact, text, sent_by="staff")
+    except messaging.Blocked as b:
+        return 409, {"success": False, "error": b.code, "message": b.message}
+    assistant.staff_replied(ctx.account_id, conv["id"])
+    return (200 if res.get("success") else 502), {"success": bool(res.get("success")), "message_id": res.get("message_id"),
+                                                  "status": res.get("status"), "error": res.get("error")}
 
 
 @route("POST", r"/api/whatsapp/conversations/(?P<id>\d+)/read", "acct:crm.write")
@@ -847,17 +865,61 @@ def deals_delete(ctx, m, q, body):
     return (200, {"success": True}) if ok else (404, {"error": "Deal not found."})
 
 
+def _template_choice(account_id: str, body: Dict[str, Any]):
+    """(template row, params) or raise messaging.Blocked."""
+    tpl = messaging.approved_template(account_id, str(body.get("template_name") or ""),
+                                      str(body.get("template_language") or ""))
+    params = body.get("template_params") or []
+    if not isinstance(params, list) or len(params) < tpl["variables"] or any(not str(p).strip() for p in params):
+        raise messaging.Blocked("missing_variables", f"This template needs {tpl['variables']} values.")
+    return tpl, [str(p) for p in params]
+
+
 @route("GET", r"/api/whatsapp/broadcasts", "acct:crm.read")
 def bc_list(ctx, m, q, body):
-    return 200, {"broadcasts": cs.list_broadcasts(ctx.account_id)}
+    rows = cs.list_broadcasts(ctx.account_id)
+    with db.get_connection() as conn:
+        counts = conn.execute("SELECT broadcast_id, status, COUNT(*) AS n FROM messages WHERE account_id = ? "
+                              "AND broadcast_id IS NOT NULL GROUP BY broadcast_id, status", (ctx.account_id,)).fetchall()
+    by = {}
+    for r in counts:
+        by.setdefault(r["broadcast_id"], {})[r["status"]] = r["n"]
+    for row in rows:
+        c = by.get(row["id"])
+        if c is None:
+            continue
+        row["queued_count"] = c.get("queued", 0)
+        row["failed_count"] = c.get("failed", 0)
+        row["read_count"] = c.get("read", 0)
+        row["delivered_count"] = c.get("delivered", 0) + row["read_count"]
+        row["sent_count"] = c.get("sent", 0) + c.get("mock", 0) + row["delivered_count"]
+        row["status"] = "queued" if row["queued_count"] else "completed"
+    return 200, {"broadcasts": rows}
+
+
+@route("GET", r"/api/whatsapp/broadcasts/(?P<id>\d+)/recipients", "acct:crm.read")
+def bc_recipients(ctx, m, q, body):
+    bid = int(m.group("id"))
+    if not cs.get_broadcast(ctx.account_id, bid):
+        return 404, {"error": "Broadcast not found."}
+    with db.get_connection() as conn:
+        rows = conn.execute("SELECT msg.contact_id, c.name, c.phone, msg.status, msg.error_message FROM messages msg "
+                            "JOIN contacts c ON c.id = msg.contact_id AND c.account_id = msg.account_id "
+                            "WHERE msg.account_id = ? AND msg.broadcast_id = ? ORDER BY msg.id", (ctx.account_id, bid)).fetchall()
+    return 200, {"recipients": [dict(r) for r in rows]}
 
 
 @route("POST", r"/api/whatsapp/broadcasts", "acct:broadcasts.run")
 def bc_create(ctx, m, q, body):
-    name, tpl = str(body.get("name", "")).strip(), str(body.get("template_body", "")).strip()
-    if not name or not tpl:
-        return 400, {"error": "Campaign name and message template are required."}
-    bid = cs.create_broadcast(ctx.account_id, name, tpl, target_tag=body.get("target_tag", "all"))
+    name = str(body.get("name", "")).strip()
+    if not name or not body.get("template_name"):
+        return 400, {"error": "template_required", "message": "Campaign name and an approved template are required."}
+    try:
+        tpl, params = _template_choice(ctx.account_id, body)
+    except messaging.Blocked as b:
+        return 400, {"error": b.code, "message": b.message}
+    bid = cs.create_broadcast(ctx.account_id, name, tpl["body"], target_tag=str(body.get("target_tag") or "all"),
+                              template_name=tpl["name"], template_language=tpl["language"], template_params=params)
     if body.get("auto_send"):
         return 201, {"success": True, "id": bid, "executed": True,
                      "stats": WhatsAppClient(ctx.account_id).execute_broadcast(bid)}
@@ -868,6 +930,8 @@ def bc_create(ctx, m, q, body):
 def bc_run(ctx, m, q, body):
     stats = WhatsAppClient(ctx.account_id).execute_broadcast(int(m.group("id")))
     if not stats.get("success"):
+        if stats.get("code") == "already_run":
+            return 409, stats
         return 404 if "not found" in stats.get("error", "") else 400, stats
     return 200, {"success": True, "stats": stats}
 
@@ -885,6 +949,14 @@ def auto_list(ctx, m, q, body):
 @route("POST", r"/api/whatsapp/automations", "acct:automations.manage")
 def auto_create(ctx, m, q, body):
     name, trig, tpl = (("" if body.get(k) is None else str(body.get(k))).strip() for k in ("name", "trigger_type", "message_template"))
+    extra = {}
+    if trig == "blog_publish":      # goes to people outside the 24-hour window, so it needs an approved template
+        try:
+            template, params = _template_choice(ctx.account_id, body)
+        except messaging.Blocked as b:
+            return 400, {"error": b.code, "message": b.message}
+        tpl = template["body"] or template["name"]
+        extra = {"template_name": template["name"], "template_language": template["language"], "template_params": params}
     if not name or not trig or not tpl:
         return 400, {"error": "Name, trigger type, and message template are required."}
     if trig not in TRIGGER_TYPES:
@@ -893,7 +965,7 @@ def auto_create(ctx, m, q, body):
         return 400, {"error": "keyword_required", "message": "A keyword rule needs trigger_keyword."}
     aid = cs.create_automation(ctx.account_id, name, trig, tpl, trigger_keyword=str(body.get("trigger_keyword") or ""),
                                action_type=str(body.get("action_type") or "send_message"),
-                               is_active=bool(body.get("is_active", True)))
+                               is_active=bool(body.get("is_active", True)), **extra)
     return 201, {"success": True, "id": aid, "message": "Automation rule created."}
 
 
@@ -922,3 +994,6 @@ def simulate_incoming(ctx, m, q, body):
            "contacts": [{"wa_id": phone, "profile": {"name": body.get("name") or f"Lead {phone[-4:]}"}}]}
     msgs, _ = WhatsAppClient(ctx.account_id)._process_change(val)
     return 200, {"success": True, "simulated": True, "processed_messages": msgs}
+
+
+from server import routes_phase1  # noqa: E402,F401  (registers the Phase 1 routes)
