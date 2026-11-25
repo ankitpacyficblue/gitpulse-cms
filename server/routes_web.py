@@ -1858,7 +1858,7 @@ def render_dashboard_html() -> str:
             </div>
         </div>
     </div>
-    <div id="overlay-change-password" role="dialog" aria-modal="true" aria-label="Choose a new password" class="hidden fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6" role="dialog" aria-labelledby="chpw-h">
+    <div id="overlay-change-password" role="dialog" aria-modal="true" aria-labelledby="chpw-h" class="hidden fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6">
         <form onsubmit="submitFirstLoginPassword(event)" class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-3">
             <h1 id="chpw-h" class="text-lg font-bold text-white">Choose a new password</h1>
             <p class="text-xs text-slate-400">You signed in with a temporary password. Set your own to continue.</p>

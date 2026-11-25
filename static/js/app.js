@@ -2321,7 +2321,9 @@ function toggleNewMenu(force) {
     });
     document.addEventListener('keydown', ev => {
         if (ev.key !== 'Tab') return;
-        const m = document.querySelector('.modal-backdrop:not(.hidden)');
+        let m = document.querySelector('.modal-backdrop:not(.hidden)');
+        const pw = document.getElementById('overlay-change-password');
+        if (pw && !pw.classList.contains('hidden')) m = pw;
         if (!m) return;
         const f = [...m.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select, textarea')].filter(x => x.offsetParent !== null);
         if (!f.length) return;
