@@ -12,7 +12,7 @@ import tests._env  # noqa: F401
 from tests.apihelpers import Caller, new_user, new_account, join, setup_db
 import crm_store as cs
 import database as db
-from engine import assistant, blog_plan, jobs, llm, media, messaging, site_publish, writer_tokens
+from engine import assistant, blog_plan, jobs, llm, media, messaging, writer_tokens
 from engine.whatsapp_client import WhatsAppClient
 from database import normalize_repo
 from engine.github_client import GitHubClient
@@ -32,9 +32,11 @@ def without_cover_rule(test):
     test.addCleanup(patch.stop)
 
 
-def git_publishing(account_id):
-    """The older setup: publishing commits to the website repository."""
-    site_publish.save(account_id, {"publish_via_git": True})
+def git_publishing(test):
+    """The older path: publishing commits to the website repository."""
+    patch = mock.patch.dict(os.environ, {"PUBLISH_VIA_GIT": "1"})
+    patch.start()
+    test.addCleanup(patch.stop)
 
 
 class Base(unittest.TestCase):
@@ -468,7 +470,7 @@ class BlogPlanTests(Base):
     def setUp(self):
         super().setUp()
         without_cover_rule(self)
-        git_publishing(self.a)
+        git_publishing(self)
         self.writer = self.agent_api
         self.pid = db.create_project({"name": "Site", "github_repo": "x/y", "topic": "farm plots",
                                       "target_framework": "generic"}, self.a)
@@ -572,7 +574,7 @@ class PublishNowTests(Base):
     def setUp(self):
         super().setUp()
         without_cover_rule(self)
-        git_publishing(self.a)
+        git_publishing(self)
 
     def post_waiting(self, status="approved"):
         pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic", "github_token": "tok"}, self.a)
@@ -687,32 +689,14 @@ class LivePublishTests(Base):
         code, _, body = handle_public_request(f"/api/public/projects/{self.pid}/posts{tail}", {})
         return code, json.loads(body)
 
-    def refresher(self, status=200, error=None):
-        sent = []
-
-        class Opener:
-            def open(_, request, timeout=0):
-                sent.append(request)
-                if error:
-                    raise error
-                return mock.MagicMock(__enter__=lambda s: mock.Mock(status=status), __exit__=lambda *a: False)
-
-        return sent, mock.patch("urllib.request.build_opener", return_value=Opener())
-
-    def test_publishes_without_a_commit_and_tells_the_site(self):
-        self.assertEqual(self.api("PUT", "/api/publishing-settings", {"site_url": "https://www.example.com/",
-                         "revalidate_secret": "s3cret-s3cret-s3cret"})[0], 200)
-        shown = self.api("GET", "/api/publishing-settings")[1]
-        self.assertEqual(shown, {"publish_via_git": False, "site_url": "https://www.example.com", "has_revalidate_secret": True})
+    def test_publishes_without_a_commit_or_any_setup(self):
         self.assertEqual(self.public()[1]["posts"], [])
-        sent, patch = self.refresher()
-        with patch:
-            code, out = self.publish()                     # no GitHub token anywhere
-        self.assertEqual((code, out["item"]["status"], out["item"]["post_url"]),
-                         (200, "published", "https://www.example.com/blog/hill-plots"), out)
+        with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.example.com"}), \
+                mock.patch("urllib.request.urlopen", side_effect=AssertionError("called out")):
+            code, out = self.publish()                     # no GitHub token, no website settings
+        view = f"https://cms.example.com/api/public/projects/{self.pid}/posts/hill-plots/view"
+        self.assertEqual((code, out["item"]["status"], out["item"]["post_url"]), (200, "published", view), out)
         self.git.assert_not_called()
-        self.assertEqual((sent[0].full_url, sent[0].get_header("X-revalidate-secret"), json.loads(sent[0].data)),
-                         ("https://www.example.com/api/revalidate", "s3cret-s3cret-s3cret", {"slug": "hill-plots"}))
         listed = self.public()[1]["posts"][0]
         self.assertEqual((listed["slug"], listed["cover_image"], listed["seo"]),
                          ("hill-plots", self.COVER, {"title": "Hill plots", "description": "What to check."}))
@@ -720,21 +704,16 @@ class LivePublishTests(Base):
         self.assertEqual((code, post["content_markdown"], post["body_format"]), (200, "Visits are on weekends.", "markdown"))
         self.assertEqual(self.public("/missing")[0], 404)
 
-    def test_a_failed_refresh_keeps_the_post_live_and_raises_an_alert(self):
-        site_publish.save(self.a, {"site_url": "https://www.example.com", "revalidate_secret": "s3cret-s3cret-s3cret"})
-        _, patch = self.refresher(error=OSError("down"))
-        with patch:
-            self.assertEqual(self.publish()[1]["item"]["status"], "published")
-        self.assertEqual(len(self.alerts("blog_failed")), 1)
-        self.assertEqual(self.public("/hill-plots")[0], 200)
-
-    def test_settings_are_for_admins_and_refuse_unsafe_addresses(self):
-        self.assertEqual(self.agent_api("PUT", "/api/publishing-settings", {"publish_via_git": True})[0], 403)
-        for url in ("http://www.example.com", "https://localhost", "https://10.0.0.1", "https://a:b@example.com"):
-            self.assertEqual(self.api("PUT", "/api/publishing-settings", {"site_url": url})[0], 400, url)
-        self.assertEqual(self.api("PUT", "/api/publishing-settings", {"revalidate_secret": "short"})[0], 400)
-        self.assertFalse(site_publish.git_enabled(self.a))
-        self.assertEqual(self.api_b("GET", "/api/publishing-settings")[1]["site_url"], "")
+    def test_embed_script_and_readable_page(self):
+        self.publish()
+        code, ctype, script = handle_public_request(f"/api/public/projects/{self.pid}/embed.js", {})
+        self.assertEqual((code, ctype.split(";")[0]), (200, "application/javascript"))
+        self.assertNotIn("innerHTML", script)
+        code, ctype, page = handle_public_request(f"/api/public/projects/{self.pid}/posts/hill-plots/view", {})
+        self.assertEqual((code, ctype.split(";")[0]), (200, "text/html"))
+        self.assertIn("<title>Hill plots</title>", page)
+        self.assertIn('data-post="hill-plots"', page)
+        self.assertEqual(handle_public_request(f"/api/public/projects/{self.pid}/posts/missing/view", {})[0], 404)
 
 
 class MediaTests(Base):
@@ -744,7 +723,7 @@ class MediaTests(Base):
     def setUp(self):
         super().setUp()
         without_cover_rule(self)
-        git_publishing(self.a)
+        git_publishing(self)
         env = mock.patch.dict(os.environ, {"MEDIA_SUPABASE_URL": "https://store.test", "MEDIA_SUPABASE_KEY": "k",
                                            "MEDIA_BUCKET": "b"})
         env.start()

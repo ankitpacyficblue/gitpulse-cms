@@ -10,6 +10,7 @@ from typing import Dict, Any, Tuple, Optional
 from database import get_project, list_posts, list_published_posts, get_post_by_slug, increment_post_views
 from engine import media
 from engine.image_generator import generate_hero_svg
+from server import embed
 
 _IMAGE = re.compile(r"!\[([^\]]*)\]\((https?://[^)\s]+)\)")
 
@@ -89,7 +90,16 @@ def handle_public_request(path: str, query: Dict[str, str], client_ip: str = "")
         svg = generate_hero_svg(title=title, category=project.get("name", "Engineering"), author=author)
         return 200, "image/svg+xml; charset=utf-8", svg
 
-    # 4. GET /api/public/projects/<id>/rss.xml
+    # 4. GET /api/public/projects/<id>/embed.js, and .../posts/<slug>/view (a page a person can read)
+    if sub_path == "embed.js" and len(parts) == 5:
+        return 200, "application/javascript; charset=utf-8", embed.SCRIPT
+    if sub_path == "posts" and len(parts) == 7 and parts[6] == "view":
+        post = get_post_by_slug(project_id, parts[5])
+        if not post or post.get("status") != "published":
+            return 404, "text/plain; charset=utf-8", "Article not found."
+        return 200, "text/html; charset=utf-8", embed.post_page(post["title"], post["excerpt"], post["slug"])
+
+    # 5. GET /api/public/projects/<id>/rss.xml
     if sub_path == "rss.xml":
         all_posts = list_posts(project_id=project_id, limit=25)
         published = [p for p in all_posts if p.get("status") == "published"]

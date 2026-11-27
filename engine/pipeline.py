@@ -165,7 +165,7 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
         }
 
     # 8. GitHub Publication Dispatch
-    use_git = site_publish.git_enabled(project["account_id"])
+    use_git = site_publish.git_enabled()
     client = GitHubClient(token=github_token)
     # Without a token the client only pretends to publish. That is for the explicit "mock" token, never a default.
     pub_result = {"success": True, "mode": "live", "message": "Live in GitPulse."} if not use_git \
@@ -190,8 +190,6 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
             pr_number=pub_result.get("pr_number")
         )
         update_project_last_run(project_id)
-        if not use_git:
-            site_publish.refresh_site(project["account_id"], article["slug"])
         log_msg = f"Published post #{post_id} to {project['github_repo'] if use_git else 'the website'}. {pub_result.get('message')}"
         log_event(log_msg, "INFO", project_id=project_id, post_id=post_id, metadata=pub_result)
 
@@ -201,7 +199,7 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
             wa = WhatsAppClient(project["account_id"])
             post_url = pub_result.get("pr_url") or (
                 f"https://github.com/{project['github_repo']}/blob/{project['github_branch']}/{target_path}" if use_git
-                else site_publish.post_url(project["account_id"], project_id, article["slug"],
+                else site_publish.post_url(project_id, article["slug"],
                                            os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")))
             wa.trigger_blog_publish_alert(article["title"], post_url)
         except Exception:

@@ -342,26 +342,6 @@ async function fillWriterSelect(item) {
 }
 const writerChoice = () => el('plan-writer-wrap').classList.contains('hidden') ? undefined : (Number(el('plan-writer').value) || null);
 
-// --- Website publishing settings (admin only; the secret is write-only) ---
-async function loadPublishing() {
-    const acct = getActiveAccountId();
-    const card = el('publishing-card');
-    card.classList.add('hidden');
-    if (!acct || !can('users.manage')) return;
-    const data = await apiCall('GET', '/api/publishing-settings', undefined, { quiet: true });
-    if (!data || data.error || acct !== getActiveAccountId()) return;
-    el('pub-site').value = data.site_url || '';
-    el('pub-secret').value = '';
-    el('pub-secret').placeholder = data.has_revalidate_secret ? 'Saved. Leave empty to keep it.' : 'Not set';
-    el('pub-git').checked = data.publish_via_git;
-    card.classList.remove('hidden');
-}
-async function savePublishing(e) {
-    e.preventDefault();
-    const res = await apiCall('PUT', '/api/publishing-settings', { site_url: el('pub-site').value.trim(), revalidate_secret: el('pub-secret').value, publish_via_git: el('pub-git').checked });
-    if (res && !res.error) { showToast('Saved.', 'success'); loadPublishing(); }
-}
-
 // --- Writer tokens (AI writer agents submit drafts; they can never publish) ---
 let tokenProjects = {};
 async function loadTokenProjects() {

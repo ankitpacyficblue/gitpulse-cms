@@ -1290,16 +1290,6 @@ def render_dashboard_html() -> str:
                     </form>
                     <p class="text-[11px] text-slate-500">Deleting hides the account and its data from everyone. Type the account name to confirm.</p>
                 </section>
-                <section id="publishing-card" class="hidden xl:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-3" aria-labelledby="publishing-h">
-                    <h2 id="publishing-h" class="text-base font-semibold text-white">Website publishing</h2>
-                    <p class="text-xs text-slate-400">Your website reads published posts from GitPulse. After publishing, GitPulse asks it to refresh.</p>
-                    <form onsubmit="savePublishing(event)" class="space-y-3">
-                        <div><label for="pub-site" class="block text-xs font-medium text-slate-300 mb-1">Website address</label><input id="pub-site" type="url" class="input-text text-xs w-full" placeholder="https://www.example.com"></div>
-                        <div><label for="pub-secret" class="block text-xs font-medium text-slate-300 mb-1">Refresh secret (same value as on the website)</label><input id="pub-secret" type="password" autocomplete="new-password" class="input-text text-xs w-full" minlength="16" maxlength="200"></div>
-                        <label class="flex items-center gap-2 text-xs text-slate-300"><input id="pub-git" type="checkbox"> Also publish by committing to the website repository (older setup)</label>
-                        <button type="submit" class="btn-primary text-xs py-2 px-3">Save</button>
-                    </form>
-                </section>
                 <section id="writer-tokens-card" class="hidden xl:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-3" aria-labelledby="tokens-h">
                     <h2 id="tokens-h" class="text-base font-semibold text-white">Writer tokens</h2>
                     <p class="text-xs text-slate-400">For AI writer agents. A token can only upload images and submit drafts. It can never publish: every draft waits for an admin to approve it.</p>

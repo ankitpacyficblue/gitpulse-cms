@@ -485,7 +485,7 @@ def _cover(account_id: str, row: Dict[str, Any]) -> Optional[Dict[str, str]]:
 
 def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
     """Make the approved text, unchanged, live: in GitPulse's public API by default, or as a commit to the website
-    repository when the account has turned that on."""
+    repository when the server has turned that on."""
     from engine.formatters import slugify, format_frontmatter, build_target_filepath, assemble_post_document
     from engine.github_client import GitHubClient
     from engine.image_generator import generate_hero_svg
@@ -496,7 +496,7 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
         require_cover(row)      # also posts approved before the rule
     except PlanError as e:
         return {"success": False, "error": e.message}
-    use_git = site_publish.git_enabled(account_id)
+    use_git = site_publish.git_enabled()
     token = project.get("github_token") or cs.get_account_github_token(account_id)
     if use_git and not token:
         return {"success": False, "error": "No GitHub token is set for this project or account."}
@@ -535,8 +535,7 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
     else:
         media.publish_linked(account_id, full)      # before the post is visible, so its images load
         db.update_post_status(post_id=post_id, status="published")
-        url = site_publish.post_url(account_id, project["id"], slug, _public_origin(row))
-        site_publish.refresh_site(account_id, slug)
+        url = site_publish.post_url(project["id"], slug, _public_origin(row))
     try:
         from engine.whatsapp_client import WhatsAppClient
         WhatsAppClient(account_id).trigger_blog_publish_alert(title, url)

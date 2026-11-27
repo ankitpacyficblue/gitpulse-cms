@@ -170,7 +170,7 @@ function switchTab(tabName) {
     if (tabName === 'wa-knowledge') loadKnowledge();
     if (tabName === 'media') loadMedia();
     if (tabName === 'blog-status') loadBlogStatus();
-    if (tabName === 'users') { hideNewToken(); loadWriterTokens(); loadPublishing(); }
+    if (tabName === 'users') { hideNewToken(); loadWriterTokens(); }
     if (tabName === 'repos') loadAwaiting(); else el('awaiting-card').classList.add('hidden');
     if (tabName === 'wa-templates') loadTemplates();
     if (tabName === 'blog-plan') loadPlan();
@@ -2904,7 +2904,7 @@ function reloadPhase1() {
     showAwaiting([]); loadAwaiting();
     if (!el('tab-media').classList.contains('hidden')) loadMedia();
     if (!el('tab-blog-status').classList.contains('hidden')) loadBlogStatus();
-    if (!el('tab-users').classList.contains('hidden')) { loadWriterTokens(); loadPublishing(); }
+    if (!el('tab-users').classList.contains('hidden')) loadWriterTokens();
     contactFields = []; cfAccount = null;
     planItems = []; closePlanForm(); document.getElementById('plan-list').innerHTML = '';
     if (!document.getElementById('tab-blog-plan').classList.contains('hidden')) loadPlan();
