@@ -160,6 +160,10 @@ async function openAlert(link, account) {
 }
 
 // --- Posts ---
+function showWebsitePosts(id) {
+    history.pushState(null, '', `#posts${query({ account: el('client-select-filter').value, project_id: id })}`);
+    routeFromHash();
+}
 const dayStart = (day, add) => day ? new Date(Date.parse(`${day}T00:00:00+05:30`) + add * 864e5).toISOString().slice(0, 19) + 'Z' : '';
 function postsFilterChanged() {
     const [kind, id] = el('posts-author').value.split(':');
