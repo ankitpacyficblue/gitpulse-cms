@@ -69,6 +69,10 @@ class RoleTests(Base):
         alerts.raise_alert(self.a, "send_failed", "crm")
         seen = lambda api: {a["type"] for a in api("GET", "/api/alerts")[1]["alerts"] if a["id"] is not None}
         self.assertEqual((seen(editor), seen(agent)), ({"blog_failed"}, {"send_failed"}))
+        ids = {a["type"]: a["id"] for a in alerts.list_alerts(self.a)}
+        for api, theirs, own in ((editor, "send_failed", "blog_failed"), (agent, "blog_failed", "send_failed")):
+            self.assertEqual(api("POST", f"/api/alerts/{ids[theirs]}/resolve")[0], 404, theirs)
+            self.assertEqual(api("POST", f"/api/alerts/{ids[own]}/resolve")[0], 200, own)
 
     def test_overrides_grant_and_revoke_without_escalation(self):
         agent_user, agent = self.person("crm_agent")

@@ -126,7 +126,10 @@ def alerts_list(ctx, m, q, body):
 
 @route("POST", r"/api/alerts/(?P<id>\d+)/resolve", "acct:inbox:manage|contacts:manage|pipeline:manage|posts:manage")
 def alerts_resolve(ctx, m, q, body):
-    ok = alerts.resolve(ctx.account_id, int(m.group("id")))
+    aid = int(m.group("id"))
+    need = {True: "posts:manage", False: "inbox:manage|contacts:manage|pipeline:manage"}
+    ok = any(a["id"] == aid and access.allows(ctx.who, need[a["type"] == "blog_failed"])
+             for a in alerts.list_alerts(ctx.account_id)) and alerts.resolve(ctx.account_id, aid)
     return (200, {"success": True}) if ok else (404, {"error": "Alert not found."})
 
 
