@@ -25,7 +25,6 @@ from engine.image_generator import (
     svg_to_data_uri
 )
 from engine.seo_linter import lint_article
-from engine.templates_embed import generate_one_time_blog_html
 from engine.doc_ingestion import fetch_repo_readme, get_internal_linking_suggestions
 
 __all__ = [
@@ -48,7 +47,6 @@ __all__ = [
     "generate_hero_svg",
     "svg_to_data_uri",
     "lint_article",
-    "generate_one_time_blog_html",
     "fetch_repo_readme",
     "get_internal_linking_suggestions"
 ]

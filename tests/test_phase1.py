@@ -667,9 +667,6 @@ class LivePublishTests(Base):
             patch.start()
             self.addCleanup(patch.stop)
         self.pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
-        git = mock.patch("engine.github_client.GitHubClient.commit_file", side_effect=AssertionError("committed"))
-        self.git = git.start()
-        self.addCleanup(git.stop)
 
     def publish(self, **extra):
         later = (datetime.utcnow() + timedelta(5)).isoformat() + "Z"
@@ -738,6 +735,14 @@ class LivePublishTests(Base):
             bad = handle_api_request("POST", "/api/writer/posts", {}, {"title": "T", "body": "B", "seo_title": "<b>"},
                                      headers=header)
         self.assertEqual(bad[1]["error"], "html_not_allowed")
+
+
+class NoRepositoryWritesTests(Base):
+    def test_nothing_can_write_to_a_repository(self):
+        for name in ("commit_file", "publish_post", "create_branch", "create_pull_request"):
+            self.assertFalse(hasattr(GitHubClient, name), name)
+        pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
+        self.assertEqual(self.api("POST", f"/api/projects/{pid}/install-blog-page", {})[0], 404)
 
 
 class MediaTests(Base):

@@ -21,7 +21,6 @@ from server.http_server import run_server
 from engine.pipeline import run_publication_pipeline
 from engine.github_client import GitHubClient
 from engine.auth import get_user_by_username, update_user_password, create_user, generate_temporary_password
-from engine.templates_embed import generate_one_time_blog_html
 
 def cmd_init(args):
     """Initialize the database schema. Creates no sample data and no default login."""
@@ -62,30 +61,6 @@ def cmd_create_owner(args):
     print(f"✅ Account '{acct['name']}' created (id {acct['id']}); '{username}' is its owner.")
     if password:
         print(f"   One-time password (shown once, change it after login): {password}")
-
-def cmd_install_blog(args):
-    """Install zero-redeploy dynamic blog page to target repository."""
-    init_db()
-    project = get_project(args.project_id)
-    if not project:
-        print(f"❌ Project ID {args.project_id} not found.")
-        sys.exit(1)
-    
-    cms_url = args.cms_url or "http://localhost:8420"
-    html_content = generate_one_time_blog_html(args.project_id, project["name"], cms_url)
-    page_path = project.get("blog_page_path", "public/blog/index.html")
-    
-    settings = get_all_settings()
-    token = project.get("github_token") or settings.get("github_token", "")
-    client = GitHubClient(token=token)
-    commit_msg = f"feat(blog): install zero-redeploy dynamic blog page at {page_path}"
-    
-    ok, sha, err = client.commit_file(project["github_repo"], page_path, html_content, project["github_branch"], commit_msg)
-    if ok or not token:
-        print(f"✅ One-time blog page installed to {project['github_repo']} at '{page_path}' (Commit: {sha or 'sim-commit'}).")
-        print(f"🎉 New posts published from GitPulse will now appear on this website dynamically without any future deployments!")
-    else:
-        print(f"❌ Installation failed: {err}")
 
 def cmd_reset_password(args):
     """Reset password for an administrative user."""
@@ -223,12 +198,6 @@ def main():
     p_pw.add_argument("--username", default="admin", help="Username to update (default: admin)")
     p_pw.add_argument("--password", required=True, help="New password")
     p_pw.set_defaults(func=cmd_reset_password)
-
-    # install-blog-page
-    p_inst = subparsers.add_parser("install-blog-page", help="Commit zero-redeploy dynamic blog page to target repository")
-    p_inst.add_argument("--project-id", type=int, required=True, help="Target project ID")
-    p_inst.add_argument("--cms-url", default="http://localhost:8420", help="Base URL of your GitPulse instance")
-    p_inst.set_defaults(func=cmd_install_blog)
 
     args = parser.parse_args()
     if not args.command:
