@@ -745,6 +745,43 @@ class NoRepositoryWritesTests(Base):
         self.assertEqual(self.api("POST", f"/api/projects/{pid}/install-blog-page", {})[0], 404)
 
 
+class ConnectWebsiteTests(Base):
+    def connect(self, api=None, **body):
+        return (api or self.api)("POST", "/api/projects", dict({"name": "Hill Homes"}, **body))
+
+    def test_name_and_address_are_enough(self):
+        self.assertEqual(self.connect()[1]["error"], "website_url_required")
+        self.assertEqual(self.connect(website_url="http://x.com")[1]["error"], "invalid_website_url")
+        self.assertEqual(self.connect(name=" ", website_url="https://www.example.com")[1]["error"], "name_required")
+        code, out = self.connect(website_url="https://www.example.com/")
+        self.assertEqual(code, 201, out)
+        project = db.get_project(out["id"])
+        self.assertEqual((project["github_repo"], project["topic"]), ("", ""))
+        self.assertEqual(cs.get_account(self.a)["website_url"], "https://www.example.com")
+        self.assertEqual(self.connect()[0], 201)      # the saved address is enough
+        self.assertEqual(self.connect(website_url="https://other.example.com")[0], 409)
+        self.assertEqual(cs.get_account(self.a)["website_url"], "https://www.example.com")
+
+    def test_only_an_owner_saves_the_address(self):
+        admin = new_user("adm")
+        join(self.a, admin, "admin")
+        api = Caller(admin, self.a)
+        self.assertEqual(self.connect(api, website_url="https://www.example.com")[0], 403)
+        self.assertEqual(self.api("GET", "/api/projects")[1]["projects"], [])
+        website(self, self.a)
+        self.assertEqual(self.connect(api)[0], 201)
+
+    def test_generating_and_publishing_work_without_repository_or_topic(self):
+        pid = self.connect(website_url="https://www.example.com")[1]["id"]
+        article = {"title": "Visit", "slug": "visit", "excerpt": "e", "content_markdown": "## Visit\nCome.",
+                   "tags": [], "meta_seo": {}, "image_prompt": ""}
+        with mock.patch("engine.ai_generator.AIGenerator.generate_article", return_value=article), \
+                mock.patch("urllib.request.urlopen", side_effect=AssertionError("no repository to read")):
+            code, out = self.api("POST", f"/api/projects/{pid}/trigger", {"force_publish": True})
+        self.assertEqual((code, out.get("status")), (200, "published"), out)
+        self.assertEqual(handle_public_request(f"/api/public/projects/{pid}/posts/visit", {})[0], 200)
+
+
 class MediaTests(Base):
     PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 8
     PDF = b"%PDF-1.7 " + b"0" * 7
