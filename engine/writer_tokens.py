@@ -193,6 +193,8 @@ def create_draft(writer: Dict[str, Any], data: Dict[str, Any]) -> Tuple[Dict[str
         if existing:
             return existing, False
     fields = dict(_clean(writer, data), writer_token_id=writer["id"], project_id=_default_project(writer))
+    if not blog_plan.has_cover(fields.get("images")):
+        raise WriterError(409, "cover_required", blog_plan.COVER_MESSAGE)
     try:
         item_id = blog_plan.create(writer["account_id"], fields, external_id=external_id)["id"]
     except blog_plan.PlanError:
@@ -211,6 +213,8 @@ def revise(writer: Dict[str, Any], item_id: int, data: Dict[str, Any]) -> Dict[s
     if item["status"] not in ("draft", "needs_approval"):
         raise WriterError(409, "wrong_status", "Only a post that is not yet approved can be changed.")
     fields = _clean(writer, data, [i["media_id"] for i in item["images"]])
+    if item["status"] == "needs_approval" and "images" in fields and not blog_plan.has_cover(fields["images"]):
+        raise WriterError(409, "cover_required", blog_plan.COVER_MESSAGE)
     return _view(blog_plan.update(writer["account_id"], item_id, fields))
 
 
