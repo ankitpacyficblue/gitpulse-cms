@@ -1,6 +1,6 @@
 # GitPulse UI redesign: design and API contract
 
-Status: waiting for god's approval. Owners: Oscar (data, API), Andy (screens).
+Status: approved by god on 2026-11-27, with Unpublish added. Owners: Oscar (data, API), Andy (screens).
 
 ## Why
 The owner/admin runs several business sites. On opening the app they need: what needs approval, what goes
@@ -22,14 +22,15 @@ and blog work is split over four screens and two data models.
 
 ## Data
 - Additive: `blog_plan.origin TEXT NOT NULL DEFAULT ''` and a unique index on `blog_plan.post_id`
-  (where not null).
+  (where not null), both created with `IF NOT EXISTS`. Before any deployment of that code, a read-only check on
+  production confirms there are no duplicate non-null `post_id` values; the PR reports it.
 - Backfill: one row per `posts` row that has no `blog_plan` row and whose website belongs to an account.
   `origin='legacy'`. Nothing in `posts` is changed or deleted.
   Status: published → published; in_review → needs_approval; failed or publishing → failed; other → draft.
 - Backfill is an explicit script (`scripts/merge_posts.py`, dry run by default), **not** run at start-up.
-  Running it again adds nothing. Undo: delete `origin='legacy'` rows.
+  Running it again adds nothing. god sees the dry-run counts per account and status before saying go. Undo: delete `origin='legacy'` rows.
 - **Shared database:** the schema is applied at cold start, so the PR's preview deployment adds the column and
-  index to the live database. Approving this doc approves that. The backfill runs only when god says.
+  index to the live database. god approved that. The backfill runs only when god says.
 - The generator (`engine/pipeline.py`) also creates the `blog_plan` row, so new posts cannot split again.
 - Publishing a post that already has a `post_id` updates that `posts` row instead of adding one.
 
@@ -37,11 +38,15 @@ and blog work is split over four screens and two data models.
 - Legacy posts in review now need a cover image before approval, like every other post.
 - A published post can be edited by someone with `content.publish`; the change goes live at once.
 - A published post cannot be deleted (409 `published`); it would stay live and disappear from the list.
-- "Publish now" works from In review: it approves, then publishes. Same checks as approval.
+- **Unpublish** (needs `content.publish`) takes a post off the website and makes it Draft. The `posts` row is kept
+  and reused on the next publish. Older published copies with the same website address (slug) come off too, so
+  none resurfaces. Files already made public keep their links.
+- "Publish now" works from In review: it approves, then publishes. Same checks as approval, and it records the
+  approver and time as Approve does.
 
 ## UI components (Andy builds)
-Proposal: no new library. The app has no build step; use native `select`, `dialog`, `popover` and tables with
-one set of styles in `static/css`. Andy may swap in a library and tells god which.
+No new library (agreed). The app has no build step; use native `select`, `dialog`, `popover` and tables with
+one set of styles in `static/css`.
 
 ---
 
@@ -75,7 +80,7 @@ Show `state`; ignore the older `status` field.
  "writer_id": 3, "writer": "Toby", "assignee_id": 7, "assignee_name": "…",
  "cover": {"url": "…", "alt": "…"},
  "missing": ["cover"],
- "can": {"edit": true, "approve": false, "publish_now": false, "reject": true, "submit": false, "delete": true}}
+ "can": {"edit": true, "approve": false, "publish_now": false, "reject": true, "submit": false, "delete": true, "unpublish": false}}
 ```
 `cover` may be null. `url` is the website link, empty until published or while no website address is saved.
 `missing` holds any of `body`, `cover`, `website`, `publish_date`. `can` already accounts for role and state.
@@ -143,6 +148,7 @@ Preview: render `body` as markdown with the cover on top. `slug` is what publish
 | AI draft | `POST /api/blog/plan/<id>/draft` |
 | submit / approve / publish now | `POST /api/blog/plan/<id>/submit`, `/approve`, `/publish-now` |
 | reject | `POST /api/blog/plan/<id>/reject` `{"note":"…"}` |
+| unpublish (published only; show it in place of Delete) | `POST /api/blog/plan/<id>/unpublish` |
 | images | existing `/api/media/*` routes |
 
 Editor field `writer_token_id` is `writer_id` in responses. After any change, fetch the post and list again
