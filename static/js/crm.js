@@ -8,6 +8,7 @@ function has(section, level = 'view') {
     return LEVELS.indexOf((window.__access || {})[section] || 'none') >= LEVELS.indexOf(level);
 }
 const hasAny = (...sections) => sections.some(s => has(s));
+const canDismiss = a => a.type === 'blog_failed' ? has('posts', 'manage') : ['inbox', 'contacts', 'pipeline'].some(s => has(s, 'manage'));
 
 // Screen -> section, in the order of the menu. The first allowed one is where a person lands.
 const TAB_SECTION = {
@@ -69,7 +70,7 @@ async function renderCrmDashboard(account, seq) {
     ].join('');
 
     const alerts = (d.alerts || []).length ? panel('crm-alerts', 'Alerts', '', list(d.alerts, '', a => `<li><div class="rd-grow"><p class="rd-alert-${a.severity === 'error' ? 'error' : 'warn'}">${escapeHtml(a.message)}${a.count > 1 ? ` (${Number(a.count)} times)` : ''}</p><p class="rd-meta">${escapeHtml(a.account_name || '')}</p></div>
-        <div class="rd-actions">${a.link ? `<button type="button" class="btn-secondary text-xs" data-alert="${escapeHtml(a.link)}" data-account="${escapeHtml(a.account_id || '')}">Open</button>` : ''}${a.id ? `<button type="button" class="btn-secondary text-xs" data-dismiss="${Number(a.id)}" data-account="${escapeHtml(a.account_id || '')}">Dismiss</button>` : ''}</div></li>`)) : '';
+        <div class="rd-actions">${a.link ? `<button type="button" class="btn-secondary text-xs" data-alert="${escapeHtml(a.link)}" data-account="${escapeHtml(a.account_id || '')}">Open</button>` : ''}${a.id && canDismiss(a) ? `<button type="button" class="btn-secondary text-xs" data-dismiss="${Number(a.id)}" data-account="${escapeHtml(a.account_id || '')}">Dismiss</button>` : ''}</div></li>`)) : '';
 
     const top = Math.max(1, ...(d.pipeline || []).map(s => s.count));
     const pipeline = d.pipeline ? panel('crm-pipeline', 'Pipeline', 'wa-deals', `<ul class="rd-list">${d.pipeline.map(s => `<li class="rd-stage"><span>${DEAL_STAGES[s.stage] || escapeHtml(s.stage)}</span><span class="rd-bar" aria-hidden="true"><span style="width:${Math.round(100 * s.count / top)}%"></span></span><strong>${Number(s.count)}</strong><span class="rd-meta">${escapeHtml(money(s.values))}</span></li>`).join('')}</ul>`) : '';
