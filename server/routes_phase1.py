@@ -296,6 +296,14 @@ def plan_approve(ctx, m, q, body):
     return res
 
 
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/publish-now", "acct:content.publish")
+def plan_publish_now(ctx, m, q, body):
+    res = _plan(lambda: blog_plan.publish_now(ctx.account_id, int(m.group("id"))))
+    if res[0] == 200:
+        db.log_event(f"Planned post #{m.group('id')} published now by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
+    return res
+
+
 # ------------------------------------------------------------------ media library
 
 def _media(action, code=200):

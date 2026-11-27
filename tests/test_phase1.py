@@ -12,7 +12,7 @@ import tests._env  # noqa: F401
 from tests.apihelpers import Caller, new_user, new_account, join, setup_db
 import crm_store as cs
 import database as db
-from engine import assistant, jobs, llm, media, messaging, writer_tokens
+from engine import assistant, blog_plan, jobs, llm, media, messaging, writer_tokens
 from engine.whatsapp_client import WhatsAppClient
 from database import normalize_repo
 from engine.github_client import GitHubClient
@@ -552,6 +552,41 @@ class BlogPlanTests(Base):
         with self.publisher() as pub:
             jobs.tick(limit=1000)
         self.assertEqual((pub.call_count, db.list_posts_for_account(self.a, limit=5)), (0, []))
+
+
+class PublishNowTests(Base):
+    def post_waiting(self, status="approved"):
+        pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic", "github_token": "tok"}, self.a)
+        later = (datetime.utcnow() + timedelta(5)).isoformat() + "Z"
+        item = self.api("POST", "/api/blog/plan", {"title": "T", "body": "B", "project_id": pid, "publish_at": later})[1]["item"]
+        self.api("POST", f"/api/blog/plan/{item['id']}/submit")
+        if status == "approved":
+            self.assertEqual(self.api("POST", f"/api/blog/plan/{item['id']}/approve")[0], 200)
+        return item["id"]
+
+    def publisher(self, **res):
+        return mock.patch("engine.github_client.GitHubClient.publish_post", return_value=res)
+
+    def test_publishes_once_and_only_for_a_publisher(self):
+        item = self.post_waiting()
+        url = f"/api/blog/plan/{item}/publish-now"
+        with self.publisher(success=True, pr_url="u") as publish:
+            self.assertEqual(self.agent_api("POST", url)[0], 403)
+            code, out = self.api("POST", url)
+            self.assertEqual((code, out["item"]["status"], out["item"]["post_url"]), (200, "published", "u"), out)
+            self.assertEqual(self.api("POST", url)[1]["error"], "wrong_status")
+            blog_plan.schedule_due()
+            jobs.tick()
+        self.assertEqual(publish.call_count, 1)
+
+    def test_refuses_unapproved_and_reports_a_failure(self):
+        waiting = self.post_waiting(status="needs_approval")
+        self.assertEqual(self.api("POST", f"/api/blog/plan/{waiting}/publish-now")[1]["error"], "wrong_status")
+        item = self.post_waiting()
+        with self.publisher(success=False, error="no access"):
+            code, out = self.api("POST", f"/api/blog/plan/{item}/publish-now")
+        self.assertEqual((code, out["error"]), (502, "publish_failed"), out)
+        self.assertIn("no access", out["message"])
 
 
 class MediaTests(Base):
