@@ -1,6 +1,6 @@
 # CRM dashboard and section permissions: design and API contract
 
-Status: waiting for god's approval. Backend and migration: Oscar. Screens: Andy, after #18 merges.
+Status: approved by god on 2026-11-27 (conditions on entry links and existing rows included). Backend and migration: Oscar. Screens: Andy, after #18 merges.
 CRM = customer relationship management.
 
 ## Permissions
@@ -49,19 +49,22 @@ already separate a stronger action:
   reply, even with those sections hidden.
 
 ### Existing people keep what they have
-Owner → `owner`, Admin → `admin`, Viewer → `viewer`. Today's **Agent** has no exact match: they become
+Owner → `owner`, Admin → `admin`, Viewer → `viewer`. Today's **Agent** has no exact match: they show as
 `crm_agent` **plus overrides** that restore the rest (posts, websites view, media manage, broadcasts,
 automations, AI, templates, entry links, WhatsApp setup view). The platform admin acts as owner, as today.
 
-One difference: today's Viewer and Agent can see WhatsApp setup and AI knowledge; they still can.
+**No existing row is rewritten.** This mapping is worked out when access is read, so there is no conversion
+to run, repeat or undo.
 
 ### Data (additive, `IF NOT EXISTS`)
-- `memberships.role_key TEXT NOT NULL DEFAULT ''`. The old `role` column and its constraint stay, holding the
-  closest old role so a rollback fails closed (`content_editor`, `crm_agent` → `viewer`). Empty `role_key`
-  means "use `role`", so nobody needs rewriting except agents.
+- `memberships.role_key TEXT` and `memberships.role_key_base TEXT`, both null for existing rows. The old
+  `role` column and its constraint stay. Saving a role writes the closest old role to `role` (`content_editor`,
+  `crm_agent` → `viewer`, so old code fails closed) and remembers it in `role_key_base`.
+- `role_key` and a person's overrides count only while `role` still equals `role_key_base`. So if the old
+  code changes or re-creates a membership, its choice wins.
 - `role_permissions(account_id, role_key, section, level)`; `permission_overrides(account_id, user_id, section, level)`.
 - `automation_runs(account_id, automation_id, ok, error, created_at)`.
-- Agent conversion runs once at start-up, only for `role='agent' AND role_key=''`, so repeating it does nothing.
+- The deployed code keeps working against these rows; a test runs its queries against them.
 
 ### Enforcement
 Every `/api` route has a section and level; an unlisted route is refused. Failure: 403
@@ -74,8 +77,8 @@ webhooks, the scheduler and public endpoints are unchanged. The existing names (
 First item under WhatsApp CRM. Read-only; every block links to its section.
 
 **Two limits of the current data**
-- **Entry-link clicks are not recorded** (links open WhatsApp directly). The block shows leads per link;
-  no click count. Counting clicks would need a redirect address; not built.
+- **Entry-link clicks are not recorded:** links point straight at `wa.me`, not through GitPulse, and they are
+  not changed. The tile is titled **"Leads from entry links"** and has no click count.
 - **Automation runs and failures** are counted only from this release on.
 
 ## API contract
