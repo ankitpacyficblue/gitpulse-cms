@@ -2732,6 +2732,7 @@ async function editPlan(id) {
     document.getElementById('plan-form-note').innerText = item ? NOTES[st] || '' : `New post for ${((window.__accounts || []).find(x => String(x.id) === String(getActiveAccountId())) || {}).name || 'this account'}.`;
     document.getElementById('plan-missing').innerText = item ? missingText(item) : '';
     document.getElementById('plan-fields').disabled = !write;
+    ['plan-topic', 'plan-when', 'plan-project'].forEach(k => { document.getElementById(k).disabled = published; });
     const show = (k, on) => document.getElementById(k).classList.toggle('hidden', !on);
     show('plan-save', write);
     show('plan-draft', write && !!item && !published);
@@ -2750,7 +2751,7 @@ async function editPlan(id) {
 function planBody() {
     const val = k => document.getElementById(k).value.trim();
     return { title: val('plan-title'), topic: val('plan-topic'), keyword: val('plan-keyword'), seo_title: val('plan-seo-title'), meta_description: val('plan-meta'), publish_at: istToIso(val('plan-when')),
-             project_id: Number(val('plan-project')) || val('plan-project'), assignee_id: val('plan-assignee') ? Number(val('plan-assignee')) : null, body: document.getElementById('plan-body').value, images: imagesPayload(planImages),
+             project_id: Number(val('plan-project')) || val('plan-project') || null, assignee_id: val('plan-assignee') ? Number(val('plan-assignee')) : null, body: document.getElementById('plan-body').value, images: imagesPayload(planImages),
              ...(writerChoice() === undefined ? {} : { writer_token_id: writerChoice() }) };
 }
 function planDirty() {
@@ -2763,7 +2764,10 @@ function planDirty() {
 }
 async function savePlan(e) {
     e.preventDefault();
-    const res = planEditing ? await apiCall('PATCH', `/api/blog/plan/${planEditing.id}`, planBody()) : await apiPost('/api/blog/plan', planBody());
+    const body = planBody();
+    // A live post only accepts these; the rest would be refused.
+    if (planEditing && planEditing.status === 'published') ['topic', 'publish_at', 'project_id'].forEach(k => delete body[k]);
+    const res = planEditing ? await apiCall('PATCH', `/api/blog/plan/${planEditing.id}`, body) : await apiPost('/api/blog/plan', body);
     if (res && !res.error) { showToast('Saved.', 'success'); closePlanForm(); renderView(); }
 }
 async function planAction(action) {

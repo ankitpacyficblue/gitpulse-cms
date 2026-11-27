@@ -1814,7 +1814,7 @@ def render_dashboard_html() -> str:
                         <div><label for="plan-seo-title" class="block text-xs text-slate-400 mb-1">Search title (empty: the title)</label><input id="plan-seo-title" class="input-text text-sm w-full" maxlength="120"></div>
                         <div><label for="plan-meta" class="block text-xs text-slate-400 mb-1">Meta description</label><input id="plan-meta" class="input-text text-sm w-full" maxlength="300"></div>
                         <div><label for="plan-when" class="block text-xs text-slate-400 mb-1">Publish date and time (India time)</label><input id="plan-when" class="input-text text-sm w-full" type="datetime-local"></div>
-                        <div><label for="plan-project" class="block text-xs text-slate-400 mb-1">Website</label><select id="plan-project" class="input-select text-sm w-full" required></select></div>
+                        <div><label for="plan-project" class="block text-xs text-slate-400 mb-1">Website</label><select id="plan-project" class="input-select text-sm w-full"></select></div>
                         <div><label for="plan-assignee" class="block text-xs text-slate-400 mb-1">Assignee</label><select id="plan-assignee" class="input-select text-sm w-full" ></select></div>
                         <div id="plan-writer-wrap" class="hidden"><label for="plan-writer" class="block text-xs text-slate-400 mb-1">AI writer</label><select id="plan-writer" class="input-select text-sm w-full"></select></div>
                     </div>
