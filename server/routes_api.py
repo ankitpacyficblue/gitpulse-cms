@@ -39,7 +39,7 @@ from engine.auth import (
 )
 from engine import blog_plan
 from engine.github_client import GitHubClient
-from engine.permissions import permissions_for, has_permission
+from engine import access as perms
 from engine.pipeline import run_publication_pipeline
 from engine.seo_linter import lint_article
 from engine.totp import generate_totp_secret, verify_totp_code, get_totp_uri
@@ -53,6 +53,7 @@ class Ctx:
     """Who is calling and for which account. Built only by the access checks."""
     def __init__(self, user, account_id=None, role=None, ip="", user_agent="", token=None, host=""):
         self.user, self.account_id, self.role, self.ip, self.user_agent = user, account_id, role, ip, user_agent
+        self.who = None      # {role_key, access, ...} in the selected account
         self.token = token
         self.host = host
         self.headers = {}
@@ -92,14 +93,13 @@ def _int(v, default=None):
 # Dispatcher
 # ==========================================================================
 
-def _role_for(user: Dict[str, Any], account_id: str) -> Optional[str]:
-    """Role in an account: the membership role, or "owner" for a platform admin (support access to any active
-    account; every write is still audit-logged against the account)."""
-    role = cs.get_membership_role(account_id, user["id"])
-    if role or not user.get("is_platform_admin"):
-        return role
-    acct = cs.get_account(account_id)
-    return "owner" if acct and acct.get("status", "active") == "active" else None
+def _enter(ctx: Ctx, account_id: str) -> bool:
+    """Select an account for this request. False: not a member (a platform admin may enter any active account;
+    every write is still audit-logged against the account)."""
+    ctx.account_id = account_id
+    ctx.who = perms.of(account_id, ctx.user)
+    ctx.role = ctx.who["role_key"] if ctx.who else None
+    return bool(ctx.who)
 
 
 def handle_api_request(method: str, path: str, *args, **kwargs) -> Response:
@@ -152,11 +152,9 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
                   host=hdrs.get("x-forwarded-host") or hdrs.get("host", ""))
 
         if access == "session":
-            ctx.account_id = hdrs.get("x-account-id") or None   # optional here (used by /api/auth/me)
-            if ctx.account_id:
-                ctx.role = _role_for(current_user, ctx.account_id)
-                if not ctx.role:
-                    return _forbidden("membership")
+            account_id = hdrs.get("x-account-id") or None   # optional here (used by /api/auth/me)
+            if account_id and not _enter(ctx, account_id):
+                return _forbidden("membership")
             return fn(ctx, match, query_params, body)
 
         if access == "platform":
@@ -165,9 +163,7 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
             return fn(ctx, match, query_params, body)
 
         if access == "member" or access.startswith("path:"):
-            ctx.account_id = match.group("aid")
-            ctx.role = _role_for(current_user, ctx.account_id)
-            if not ctx.role:
+            if not _enter(ctx, match.group("aid")):
                 return _forbidden("membership")
             perm = access[5:] if access.startswith("path:") else None
         elif access.startswith("acct:"):
@@ -175,15 +171,13 @@ def _handle_api_request(method: str, path: str, query_params: Dict[str, str], bo
             if not account_id:
                 return 400, {"error": "account_required", "code": "select_account",
                          "message": "Select an account first (send the X-Account-Id header)."}
-            role = _role_for(current_user, account_id)
-            if not role:
+            if not _enter(ctx, account_id):
                 return _forbidden("membership")
-            ctx.account_id, ctx.role = account_id, role
             perm = access[5:]
         else:
             return 500, {"error": "route misconfigured"}
 
-        if perm and not has_permission(ctx.role, perm):
+        if perm and not perms.allows(ctx.who, perm):
             return _forbidden(perm)
         jobs.maybe_tick()
         try:
@@ -243,7 +237,9 @@ def me(ctx, m, q, body):
                  "must_change_password": bool(ctx.user.get("must_change_password")), "totp_enabled": bool(full.get("totp_enabled"))},
         "memberships": memberships,
         "active_account_id": ctx.account_id,
-        "permissions": sorted(permissions_for(ctx.role)) if ctx.account_id else [],
+        "permissions": sorted(perms.names(ctx.who)),
+        "role_key": ctx.role, "role_name": ctx.who["role_name"] if ctx.who else None,
+        "access": ctx.who["access"] if ctx.who else {},
     }
 
 
@@ -315,10 +311,10 @@ def accounts_create(ctx, m, q, body):
 @route("GET", r"/api/accounts/(?P<aid>[0-9a-f]{32})", "member")
 def account_get(ctx, m, q, body):
     a = cs.get_account(ctx.account_id)
-    return 200, {"id": a["id"], "name": a["name"], "default_currency": a.get("default_currency", "INR"), "website_url": a.get("website_url", ""), "role": ctx.role, "permissions": sorted(permissions_for(ctx.role))}
+    return 200, {"id": a["id"], "name": a["name"], "default_currency": a.get("default_currency", "INR"), "website_url": a.get("website_url", ""), "role": ctx.role, "permissions": sorted(perms.names(ctx.who)), "access": ctx.who["access"]}
 
 
-@route("PATCH", r"/api/accounts/(?P<aid>[0-9a-f]{32})", "path:account.manage")
+@route("PATCH", r"/api/accounts/(?P<aid>[0-9a-f]{32})", "path:settings:manage")
 def account_rename(ctx, m, q, body):
     ok = False
     try:
@@ -333,18 +329,18 @@ def account_rename(ctx, m, q, body):
     return 200, {"success": ok}
 
 
-@route("DELETE", r"/api/accounts/(?P<aid>[0-9a-f]{32})", "path:account.manage")
+@route("DELETE", r"/api/accounts/(?P<aid>[0-9a-f]{32})", "path:settings:manage")
 def account_delete(ctx, m, q, body):
-    svc.delete_account(ctx.account_id, ctx.role, body.get("confirm_name", ""))
+    svc.delete_account(ctx.account_id, ctx.who, body.get("confirm_name", ""))
     return 200, {"success": True, "message": "Account deleted. Its data is retained and stays private to it."}
 
 
-@route("GET", r"/api/account/settings", "acct:account.manage")
+@route("GET", r"/api/account/settings", "acct:settings:manage")
 def account_settings_get(ctx, m, q, body):
     return 200, cs.get_account_settings_public(ctx.account_id)
 
 
-@route("POST", r"/api/account/settings", "acct:account.manage")
+@route("POST", r"/api/account/settings", "acct:settings:manage")
 def account_settings_save(ctx, m, q, body):
     if (body.get("ai_api_key") or body.get("github_token")) and not secrets_box.is_configured():
         return 500, _NO_ENC
@@ -358,37 +354,86 @@ def account_settings_save(ctx, m, q, body):
     return 200, {"success": True, "settings": cs.get_account_settings_public(ctx.account_id)}
 
 
-@route("GET", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users", "path:users.manage")
+_ROLE_PATH = r"/api/accounts/(?P<aid>[0-9a-f]{32})/roles"
+
+
+@route("GET", _ROLE_PATH, "path:users:manage")
+def roles_list(ctx, m, q, body):
+    sections = [{"key": k, "name": name, "group": group, "levels": ["none", *levels], "full_name": full}
+                for k, (name, group, levels, full) in perms.SECTIONS.items()]
+    roles = []
+    for key, name in perms.ROLE_NAMES.items():
+        current = perms.role_access(ctx.account_id, key)
+        roles.append({"key": key, "name": name, "editable": key != "owner", "access": current,
+                      "changed": current != perms.full_map(perms.DEFAULTS[key])})
+    return 200, {"sections": sections, "roles": roles, "can_edit_roles": ctx.role == "owner",
+                 "my_access": ctx.who["access"]}
+
+
+def _edit_role(ctx, key: str, levels) -> Response:
+    if ctx.role != "owner":
+        return 403, {"error": "owner_only", "message": "Only an owner can change what a role includes."}
+    if key not in perms.DEFAULTS or key == "owner":
+        return 400, {"error": "invalid_role", "message": "That role cannot be changed."}
+    try:
+        levels = perms.check_levels(levels)
+    except ValueError as e:
+        return 400, {"error": str(e), "message": "That section or level does not exist."}
+    perms.set_role_access(ctx.account_id, key, dict(perms.DEFAULTS[key], **levels) if levels else dict(perms.DEFAULTS[key]))
+    db.log_event(f"Role '{key}' changed.", "INFO", account_id=ctx.account_id)
+    return 200, {"success": True, "access": perms.role_access(ctx.account_id, key)}
+
+
+@route("PUT", _ROLE_PATH + r"/(?P<key>[a-z_]+)", "path:users:manage")
+def roles_save(ctx, m, q, body):
+    if not isinstance(body.get("access"), dict) or not body["access"]:
+        return 400, {"error": "invalid_section", "message": "Send the access to set."}
+    return _edit_role(ctx, m.group("key"), body["access"])
+
+
+@route("DELETE", _ROLE_PATH + r"/(?P<key>[a-z_]+)", "path:users:manage")
+def roles_reset(ctx, m, q, body):
+    return _edit_role(ctx, m.group("key"), {})
+
+
+@route("PUT", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)/overrides", "path:users:manage")
+def users_overrides(ctx, m, q, body):
+    svc.set_overrides(ctx.account_id, ctx.who, ctx.user["id"], int(m.group("uid")), body.get("overrides"))
+    db.log_event(f"Access of user #{m.group('uid')} changed.", "INFO", account_id=ctx.account_id)
+    return 200, {"success": True}
+
+
+@route("GET", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users", "path:users:manage")
 def users_list(ctx, m, q, body):
-    return 200, {"users": cs.list_members(ctx.account_id)}
+    return 200, {"users": perms.members(ctx.account_id)}
 
 
-@route("POST", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users", "path:users.manage")
+@route("POST", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users", "path:users:manage")
 def users_add(ctx, m, q, body):
     ident = body.get("username") or body.get("email") or ""
-    out = svc.add_user(ctx.account_id, ctx.role, ident, body.get("role", ""), body.get("email", ""))
+    out = svc.add_user(ctx.account_id, ctx.who, ident, body.get("role", ""), body.get("email", ""))
     db.log_event(f"User '{out['username']}' added as {out['role']}.", "INFO", account_id=ctx.account_id)
     return 201, out
 
 
-@route("PUT", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)", "path:users.manage")
+@route("PUT", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)", "path:users:manage")
 def users_role(ctx, m, q, body):
-    svc.change_role(ctx.account_id, ctx.role, int(m.group("uid")), body.get("role", ""))
+    svc.change_role(ctx.account_id, ctx.who, int(m.group("uid")), body.get("role", ""))
     db.log_event(f"Role of user #{m.group('uid')} changed to {body.get('role')}.", "INFO", account_id=ctx.account_id)
     return 200, {"success": True}
 
 
-@route("POST", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)/reset-password", "path:users.manage")
+@route("POST", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)/reset-password", "path:users:manage")
 def users_reset_password(ctx, m, q, body):
-    temp = svc.reset_password(ctx.account_id, ctx.role, ctx.user["id"], int(m.group("uid")))
+    temp = svc.reset_password(ctx.account_id, ctx.who, ctx.user["id"], int(m.group("uid")))
     db.log_event(f"Password reset for user #{m.group('uid')}.", "INFO", account_id=ctx.account_id)
     return 200, {"temporary_password": temp, "expires_in_hours": 72, "must_change_password": True}
 
 
-@route("DELETE", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)", "path:users.manage")
+@route("DELETE", r"/api/accounts/(?P<aid>[0-9a-f]{32})/users/(?P<uid>\d+)", "path:users:manage")
 def users_remove(ctx, m, q, body):
     """Removes the person from this account. With ?purge=1 their login is also deleted when it belongs to no other account."""
-    out = svc.remove_member(ctx.account_id, ctx.role, int(m.group("uid")), purge=q.get("purge") in ("1", "true", "yes"))
+    out = svc.remove_member(ctx.account_id, ctx.who, int(m.group("uid")), purge=q.get("purge") in ("1", "true", "yes"))
     db.log_event(f"User #{m.group('uid')} removed from account" + (" and login deleted." if out["login_deleted"] else "."),
                  "INFO", account_id=ctx.account_id)
     return 200, out
@@ -466,7 +511,7 @@ def sb_sync(ctx, m, q, body):
 # Account-scoped: status, blog projects, posts, logs
 # ==========================================================================
 
-@route("GET", r"/api/status", "acct:content.read")
+@route("GET", r"/api/status", "acct:blog_dashboard:view|posts:view|websites:view")
 def status(ctx, m, q, body):
     projects = db.list_projects(ctx.account_id)
     posts = db.list_posts_for_account(ctx.account_id, limit=100)
@@ -475,7 +520,7 @@ def status(ctx, m, q, body):
                  "ai_provider": db.get_setting("ai_provider", DEFAULT_AI_PROVIDER), "mock_mode": mock_enabled()}
 
 
-@route("POST", r"/api/github/verify", "acct:content.publish")
+@route("POST", r"/api/github/verify", "acct:websites:manage")
 def github_verify(ctx, m, q, body):
     repo = normalize_repo(body.get("github_repo", ""))
     if not repo:
@@ -484,12 +529,12 @@ def github_verify(ctx, m, q, body):
     return 200, {"valid": ok, "repo": repo, "branch": "main", "message": msg}
 
 
-@route("GET", r"/api/projects", "acct:content.read")
+@route("GET", r"/api/projects", "acct:websites:view|posts:view|blog_dashboard:view")
 def projects_list(ctx, m, q, body):
     return 200, {"projects": [_mask_project(p) for p in db.list_projects(ctx.account_id)]}
 
 
-@route("POST", r"/api/projects", "acct:content.publish")
+@route("POST", r"/api/projects", "acct:websites:manage")
 def projects_create(ctx, m, q, body):
     """A website needs a name and an address. The address is kept on the website; without one, post links use the
     account's. Where links point is an owner's decision, so only account.manage may use a different address."""
@@ -504,7 +549,7 @@ def projects_create(ctx, m, q, body):
     saved = (cs.get_account(ctx.account_id) or {}).get("website_url") or ""
     if not url and not saved and not body["github_repo"]:      # the older, repository-based shape still works
         return 400, {"error": "website_url_required", "message": "Enter the website address."}
-    if url and url != saved and not has_permission(ctx.role, "account.manage"):
+    if url and url != saved and not perms.allows(ctx.who, "settings:manage"):
         return 403, {"error": "forbidden", "required": "account.manage",
                      "message": "Only an owner can use an address other than the account's."}
     if body.get("github_token") and not secrets_box.is_configured():
@@ -527,13 +572,13 @@ def _own_project(ctx, project_id: int) -> Optional[Dict[str, Any]]:
     return p if p and p.get("account_id") == ctx.account_id else None
 
 
-@route("GET", r"/api/projects/(?P<pid>\d+)", "acct:content.read")
+@route("GET", r"/api/projects/(?P<pid>\d+)", "acct:websites:view|posts:view")
 def project_get(ctx, m, q, body):
     p = _own_project(ctx, int(m.group("pid")))
     return (200, _mask_project(p)) if p else (404, {"error": "Project not found."})
 
 
-@route("PUT", r"/api/projects/(?P<pid>\d+)", "acct:content.publish")
+@route("PUT", r"/api/projects/(?P<pid>\d+)", "acct:websites:manage")
 def project_update(ctx, m, q, body):
     data = {k: v for k, v in body.items() if k not in ("account_id", "client_id", "id")}
     for k in ("github_token", "webhook_secret"):      # empty keeps the stored value
@@ -550,7 +595,7 @@ def project_update(ctx, m, q, body):
         except ValueError as e:
             return 400, {"error": "invalid_website_url", "message": str(e)}
         # Where post links point is an owner's decision, including going back to the account's address.
-        if data["website_url"] != project.get("website_url", "") and not has_permission(ctx.role, "account.manage"):
+        if data["website_url"] != project.get("website_url", "") and not perms.allows(ctx.who, "settings:manage"):
             return 403, {"error": "forbidden", "required": "account.manage",
                          "message": "Only an owner can change a website address."}
     if not db.update_project(int(m.group("pid")), data, ctx.account_id):
@@ -558,14 +603,14 @@ def project_update(ctx, m, q, body):
     return 200, {"message": "Project updated successfully."}
 
 
-@route("DELETE", r"/api/projects/(?P<pid>\d+)", "acct:content.publish")
+@route("DELETE", r"/api/projects/(?P<pid>\d+)", "acct:websites:manage")
 def project_delete(ctx, m, q, body):
     if not db.delete_project(int(m.group("pid")), ctx.account_id):
         return 404, {"error": "Project not found."}
     return 200, {"message": "Project deleted."}
 
 
-@route("POST", r"/api/projects/(?P<pid>\d+)/trigger", "acct:content.publish")
+@route("POST", r"/api/projects/(?P<pid>\d+)/trigger", "acct:posts:full")
 def project_trigger(ctx, m, q, body):
     pid = int(m.group("pid"))
     if not _own_project(ctx, pid):
@@ -576,7 +621,7 @@ def project_trigger(ctx, m, q, body):
         return 500, {"error": str(e)}
 
 
-@route("POST", r"/api/projects/(?P<pid>\d+)/test-github", "acct:content.publish")
+@route("POST", r"/api/projects/(?P<pid>\d+)/test-github", "acct:websites:manage")
 def project_test_github(ctx, m, q, body):
     proj = _own_project(ctx, int(m.group("pid")))
     if not proj:
@@ -585,7 +630,7 @@ def project_test_github(ctx, m, q, body):
     return (200 if ok else 400), {"connected": ok, "message": msg}
 
 
-@route("GET", r"/api/posts", "acct:content.read")
+@route("GET", r"/api/posts", "acct:posts:view")
 def posts_list(ctx, m, q, body):
     posts = db.list_posts_for_account(ctx.account_id, project_id=_int(q.get("project_id")), limit=_int(q.get("limit"), 50))
     return 200, {"posts": [_with_url(ctx.account_id, p) for p in posts]}
@@ -596,13 +641,13 @@ def _with_url(account_id: str, post):
     return dict(post, url=site_publish.post_url(account_id, post["slug"], post.get("project_id")) if post.get("status") == "published" else "")
 
 
-@route("GET", r"/api/posts/(?P<id>\d+)", "acct:content.read")
+@route("GET", r"/api/posts/(?P<id>\d+)", "acct:posts:view")
 def post_get(ctx, m, q, body):
     post = db.get_post_for_account(ctx.account_id, int(m.group("id")))
     return (200, _with_url(ctx.account_id, post)) if post else (404, {"error": "Post not found."})
 
 
-@route("PUT", r"/api/posts/(?P<id>\d+)", "acct:content.publish")
+@route("PUT", r"/api/posts/(?P<id>\d+)", "acct:posts:full")
 def post_update(ctx, m, q, body):
     post_id = int(m.group("id"))
     post = db.get_post_for_account(ctx.account_id, post_id)
@@ -633,17 +678,17 @@ def _publish_post(ctx, post_id: int, approve: bool) -> Response:
                  "pub_result": {"success": True, "mode": "live", "url": site_publish.post_url(ctx.account_id, post["slug"], post.get("project_id"))}}
 
 
-@route("POST", r"/api/posts/(?P<id>\d+)/approve", "acct:content.publish")
+@route("POST", r"/api/posts/(?P<id>\d+)/approve", "acct:posts:full")
 def post_approve(ctx, m, q, body):
     return _publish_post(ctx, int(m.group("id")), True)
 
 
-@route("POST", r"/api/posts/(?P<id>\d+)/publish", "acct:content.publish")
+@route("POST", r"/api/posts/(?P<id>\d+)/publish", "acct:posts:full")
 def post_publish(ctx, m, q, body):
     return _publish_post(ctx, int(m.group("id")), False)
 
 
-@route("GET", r"/api/logs", "acct:audit.read")
+@route("GET", r"/api/logs", "acct:logs:view")
 def logs(ctx, m, q, body):
     return 200, {"logs": db.list_logs(ctx.account_id, limit=_int(q.get("limit"), 60))}
 
@@ -665,12 +710,12 @@ def _wa_public(account_id: str, host: str = "") -> Dict[str, Any]:
     return cfg
 
 
-@route("GET", r"/api/whatsapp/config", "acct:crm.read")
+@route("GET", r"/api/whatsapp/config", "acct:wa_setup:view")
 def wa_config_get(ctx, m, q, body):
     return 200, _wa_public(ctx.account_id, ctx.host)
 
 
-@route("POST", r"/api/whatsapp/config", "acct:wa.config")
+@route("POST", r"/api/whatsapp/config", "acct:wa_setup:manage")
 def wa_config_save(ctx, m, q, body):
     if (body.get("access_token") or body.get("app_secret")) and not secrets_box.is_configured():
         return 500, {"error": "encryption_not_configured",
@@ -691,7 +736,7 @@ def wa_config_save(ctx, m, q, body):
     return 200, out
 
 
-@route("GET", r"/api/whatsapp/connection-status", "acct:crm.read")
+@route("GET", r"/api/whatsapp/connection-status", "acct:crm:view|wa_setup:view")
 def wa_connection_status(ctx, m, q, body):
     """Setup wizard: {mock_mode, webhook_url, credentials{...bool}, last_webhook_at, last_test{at,ok,message}, ready}."""
     pub = _wa_public(ctx.account_id, ctx.host)
@@ -702,14 +747,14 @@ def wa_connection_status(ctx, m, q, body):
     return 200, st
 
 
-@route("POST", r"/api/whatsapp/config/test", "acct:wa.config")
+@route("POST", r"/api/whatsapp/config/test", "acct:wa_setup:manage")
 def wa_test_connection(ctx, m, q, body):
     """Read-only check of the saved credentials at Meta. Never sends a message."""
     res = WhatsAppClient(ctx.account_id).test_connection()
     return 200, res
 
 
-@route("POST", r"/api/whatsapp/config/verify-token", "acct:wa.config")
+@route("POST", r"/api/whatsapp/config/verify-token", "acct:wa_setup:manage")
 def wa_rotate_verify(ctx, m, q, body):
     token = cs.rotate_verify_token(ctx.account_id)
     if not token:
@@ -726,7 +771,7 @@ def _valid_phone(phone: str) -> bool:
     return bool(re.fullmatch(r"\+?\d{8,15}", digits))
 
 
-@route("GET", r"/api/whatsapp/contacts", "acct:crm.read")
+@route("GET", r"/api/whatsapp/contacts", "acct:contacts:view|inbox:view|pipeline:view|broadcasts:view")
 def contacts_list(ctx, m, q, body):
     rows = contact_fields.present(ctx.account_id, cs.list_contacts(ctx.account_id, search=q.get("search", ""),
                                                                    tag=q.get("tag", "")))
@@ -736,7 +781,7 @@ def contacts_list(ctx, m, q, body):
         return e.status, {"error": e.code, "message": e.message}
 
 
-@route("POST", r"/api/whatsapp/contacts", "acct:crm.write")
+@route("POST", r"/api/whatsapp/contacts", "acct:contacts:manage")
 def contacts_create(ctx, m, q, body):
     name, phone = str(body.get("name", "")).strip(), str(body.get("phone", "")).strip()
     if not name or not phone:
@@ -758,7 +803,7 @@ def contacts_create(ctx, m, q, body):
     return 201, {"success": True, "id": cid, "message": "Contact created successfully."}
 
 
-@route("PUT", r"/api/whatsapp/contacts/(?P<id>\d+)", "acct:crm.write")
+@route("PUT", r"/api/whatsapp/contacts/(?P<id>\d+)", "acct:contacts:manage")
 def contacts_update(ctx, m, q, body):
     fields = {k: body[k] for k in ("name", "phone", "email", "tags", "notes", "status") if k in body}
     try:
@@ -777,7 +822,7 @@ def contacts_update(ctx, m, q, body):
     return (200, {"success": True}) if ok else (404, {"error": "Contact not found."})
 
 
-@route("DELETE", r"/api/whatsapp/contacts/(?P<id>\d+)", "acct:crm.delete")
+@route("DELETE", r"/api/whatsapp/contacts/(?P<id>\d+)", "acct:contacts:full")
 def contacts_delete(ctx, m, q, body):
     ok = cs.delete_contact(ctx.account_id, int(m.group("id")))
     return (200, {"success": True}) if ok else (404, {"error": "Contact not found."})
@@ -790,7 +835,7 @@ def _with_window(conv: Dict[str, Any], look_up: bool = False) -> Dict[str, Any]:
                 window_open=bool(end and datetime.utcnow() < end))
 
 
-@route("GET", r"/api/whatsapp/conversations", "acct:crm.read")
+@route("GET", r"/api/whatsapp/conversations", "acct:inbox:view")
 def conv_list(ctx, m, q, body):
     mine = ctx.user["id"] if q.get("assigned") == "me" else None
     rows = cs.list_conversations(ctx.account_id, status=q.get("status", ""), assigned_user_id=mine,
@@ -801,7 +846,7 @@ def conv_list(ctx, m, q, body):
     return 200, {"conversations": [_with_window(r) for r in rows]}
 
 
-@route("PUT", r"/api/whatsapp/conversations/(?P<id>\d+)/assign", "acct:crm.write")
+@route("PUT", r"/api/whatsapp/conversations/(?P<id>\d+)/assign", "acct:inbox:manage")
 def conversation_assign(ctx, m, q, body):
     raw = body.get("user_id")
     uid = None if raw in (None, "", 0) else _int(raw)
@@ -813,13 +858,13 @@ def conversation_assign(ctx, m, q, body):
     return (200, {"success": True}) if ok else (404, {"error": "Conversation not found."})
 
 
-@route("GET", r"/api/whatsapp/conversations/(?P<id>\d+)", "acct:crm.read")
+@route("GET", r"/api/whatsapp/conversations/(?P<id>\d+)", "acct:inbox:view")
 def conv_get(ctx, m, q, body):
     conv = cs.get_conversation(ctx.account_id, int(m.group("id")))
     return (200, _with_window(conv, look_up=True)) if conv else (404, {"error": "Conversation not found."})
 
 
-@route("GET", r"/api/whatsapp/conversations/(?P<id>\d+)/messages", "acct:crm.read")
+@route("GET", r"/api/whatsapp/conversations/(?P<id>\d+)/messages", "acct:inbox:view")
 def conv_messages(ctx, m, q, body):
     cid = int(m.group("id"))
     if not cs.get_conversation(ctx.account_id, cid):
@@ -827,7 +872,7 @@ def conv_messages(ctx, m, q, body):
     return 200, {"messages": media.attach(ctx.account_id, cs.list_messages(ctx.account_id, cid, limit=_int(q.get("limit"), 100)))}
 
 
-@route("POST", r"/api/whatsapp/conversations/(?P<id>\d+)/messages", "acct:crm.write")
+@route("POST", r"/api/whatsapp/conversations/(?P<id>\d+)/messages", "acct:inbox:manage")
 def conv_send(ctx, m, q, body):
     text = str(body.get("body", "")).strip()
     media_id = body.get("media_id")
@@ -846,18 +891,18 @@ def conv_send(ctx, m, q, body):
                                                   "status": res.get("status"), "error": res.get("error")}
 
 
-@route("POST", r"/api/whatsapp/conversations/(?P<id>\d+)/read", "acct:crm.write")
+@route("POST", r"/api/whatsapp/conversations/(?P<id>\d+)/read", "acct:inbox:manage")
 def conv_read(ctx, m, q, body):
     ok = cs.mark_conversation_read(ctx.account_id, int(m.group("id")))
     return (200, {"success": True}) if ok else (404, {"error": "Conversation not found."})
 
 
-@route("GET", r"/api/whatsapp/deals", "acct:crm.read")
+@route("GET", r"/api/whatsapp/deals", "acct:pipeline:view")
 def deals_list(ctx, m, q, body):
     return 200, {"deals": cs.list_deals(ctx.account_id)}
 
 
-@route("POST", r"/api/whatsapp/deals", "acct:crm.write")
+@route("POST", r"/api/whatsapp/deals", "acct:pipeline:manage")
 def deals_create(ctx, m, q, body):
     title = str(body.get("title", "")).strip()
     if not title:
@@ -883,7 +928,7 @@ def deals_create(ctx, m, q, body):
     return 201, {"success": True, "id": did, "currency": cur_code, "message": "Deal created successfully."}
 
 
-@route("PUT", r"/api/whatsapp/deals/(?P<id>\d+)/stage", "acct:crm.write")
+@route("PUT", r"/api/whatsapp/deals/(?P<id>\d+)/stage", "acct:pipeline:manage")
 def deals_stage(ctx, m, q, body):
     stage = str(body.get("stage", "")).strip()
     if not stage:
@@ -894,7 +939,7 @@ def deals_stage(ctx, m, q, body):
     return (200, {"success": True}) if ok else (404, {"error": "Deal not found."})
 
 
-@route("DELETE", r"/api/whatsapp/deals/(?P<id>\d+)", "acct:crm.delete")
+@route("DELETE", r"/api/whatsapp/deals/(?P<id>\d+)", "acct:pipeline:full")
 def deals_delete(ctx, m, q, body):
     ok = cs.delete_deal(ctx.account_id, int(m.group("id")))
     return (200, {"success": True}) if ok else (404, {"error": "Deal not found."})
@@ -910,7 +955,7 @@ def _template_choice(account_id: str, body: Dict[str, Any]):
     return tpl, [str(p) for p in params]
 
 
-@route("GET", r"/api/whatsapp/broadcasts", "acct:crm.read")
+@route("GET", r"/api/whatsapp/broadcasts", "acct:broadcasts:view")
 def bc_list(ctx, m, q, body):
     rows = cs.list_broadcasts(ctx.account_id)
     with db.get_connection() as conn:
@@ -932,7 +977,7 @@ def bc_list(ctx, m, q, body):
     return 200, {"broadcasts": rows}
 
 
-@route("GET", r"/api/whatsapp/broadcasts/(?P<id>\d+)/recipients", "acct:crm.read")
+@route("GET", r"/api/whatsapp/broadcasts/(?P<id>\d+)/recipients", "acct:broadcasts:view")
 def bc_recipients(ctx, m, q, body):
     bid = int(m.group("id"))
     if not cs.get_broadcast(ctx.account_id, bid):
@@ -944,7 +989,7 @@ def bc_recipients(ctx, m, q, body):
     return 200, {"recipients": [dict(r) for r in rows]}
 
 
-@route("POST", r"/api/whatsapp/broadcasts", "acct:broadcasts.run")
+@route("POST", r"/api/whatsapp/broadcasts", "acct:broadcasts:manage")
 def bc_create(ctx, m, q, body):
     name = str(body.get("name", "")).strip()
     if not name or not body.get("template_name"):
@@ -966,7 +1011,7 @@ def bc_create(ctx, m, q, body):
     return 201, {"success": True, "id": bid, "message": "Broadcast created."}
 
 
-@route("POST", r"/api/whatsapp/broadcasts/preview", "acct:broadcasts.run")
+@route("POST", r"/api/whatsapp/broadcasts/preview", "acct:broadcasts:manage")
 def bc_preview(ctx, m, q, body):
     try:
         tpl = messaging.approved_template(ctx.account_id, str(body.get("template_name") or ""),
@@ -976,7 +1021,7 @@ def bc_preview(ctx, m, q, body):
     return 200, WhatsAppClient(ctx.account_id).preview_broadcast(tpl, str(body.get("target_tag") or "all"))
 
 
-@route("POST", r"/api/whatsapp/broadcasts/(?P<id>\d+)/run", "acct:broadcasts.run")
+@route("POST", r"/api/whatsapp/broadcasts/(?P<id>\d+)/run", "acct:broadcasts:manage")
 def bc_run(ctx, m, q, body):
     stats = WhatsAppClient(ctx.account_id).execute_broadcast(int(m.group("id")))
     if not stats.get("success"):
@@ -991,12 +1036,12 @@ TRIGGER_TYPES = {"welcome", "keyword", "blog_publish"}
 DEAL_STAGES = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
 
 
-@route("GET", r"/api/whatsapp/automations", "acct:crm.read")
+@route("GET", r"/api/whatsapp/automations", "acct:automations:view")
 def auto_list(ctx, m, q, body):
     return 200, {"automations": cs.list_automations(ctx.account_id)}
 
 
-@route("POST", r"/api/whatsapp/automations", "acct:automations.manage")
+@route("POST", r"/api/whatsapp/automations", "acct:automations:manage")
 def auto_create(ctx, m, q, body):
     name, trig, tpl = (("" if body.get(k) is None else str(body.get(k))).strip() for k in ("name", "trigger_type", "message_template"))
     extra = {}
@@ -1020,19 +1065,19 @@ def auto_create(ctx, m, q, body):
     return 201, {"success": True, "id": aid, "message": "Automation rule created."}
 
 
-@route("PUT", r"/api/whatsapp/automations/(?P<id>\d+)/toggle", "acct:automations.manage")
+@route("PUT", r"/api/whatsapp/automations/(?P<id>\d+)/toggle", "acct:automations:manage")
 def auto_toggle(ctx, m, q, body):
     ok = cs.toggle_automation(ctx.account_id, int(m.group("id")), bool(body.get("is_active", True)))
     return (200, {"success": True}) if ok else (404, {"error": "Automation not found."})
 
 
-@route("DELETE", r"/api/whatsapp/automations/(?P<id>\d+)", "acct:automations.manage")
+@route("DELETE", r"/api/whatsapp/automations/(?P<id>\d+)", "acct:automations:manage")
 def auto_delete(ctx, m, q, body):
     ok = cs.delete_automation(ctx.account_id, int(m.group("id")))
     return (200, {"success": True}) if ok else (404, {"error": "Automation not found."})
 
 
-@route("POST", r"/api/whatsapp/simulate-incoming", "acct:wa.config")
+@route("POST", r"/api/whatsapp/simulate-incoming", "acct:wa_setup:manage")
 def simulate_incoming(ctx, m, q, body):
     """Dev tool: feeds a fake inbound message into THIS account. Off unless WHATSAPP_MOCK=1."""
     if not mock_enabled():

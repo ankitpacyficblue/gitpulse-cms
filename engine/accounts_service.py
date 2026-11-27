@@ -9,11 +9,10 @@ cannot be skipped by a new route:
 - users are created inside the caller's account, never elsewhere.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import crm_store as cs
-from engine import auth
-from engine.permissions import ROLES, can_assign_role, has_permission
+from engine import access, auth
 
 
 class ServiceError(Exception):
@@ -48,11 +47,46 @@ def create_account_with_owner(actor: Dict[str, Any], name: str, owner_username: 
     return out
 
 
-def add_user(account_id: str, actor_role: str, username: str, role: str, email: str = "") -> Dict[str, Any]:
-    if role not in ROLES:
-        raise ServiceError(400, "invalid_role", "Role must be one of: " + ", ".join(ROLES))
-    if not can_assign_role(actor_role, role):
-        raise ServiceError(403, "forbidden", "You cannot grant this role.")
+ASSIGNABLE = tuple(access.DEFAULTS) + ("agent",)      # "agent": the older role, still accepted
+
+
+def _manager(actor: Any, account_id: str) -> Dict[str, Any]:
+    """`actor`: an access description, or an older role name."""
+    if isinstance(actor, str):
+        key = "crm_agent" if actor == "agent" else actor
+        who = {"role_key": key, "access": access.target_access(account_id, actor)}
+    else:
+        who = actor
+    if not access.allows(who, "users:manage"):
+        raise ServiceError(403, "forbidden", "You cannot manage people in this account.")
+    return who
+
+
+def _may_give(actor: Dict[str, Any], account_id: str, role: str) -> None:
+    if role not in ASSIGNABLE:
+        raise ServiceError(400, "invalid_role", "Role must be one of: " + ", ".join(access.DEFAULTS))
+    if actor["role_key"] == "owner":
+        return
+    if role == "owner" or not access.within(actor, access.target_access(account_id, role)):
+        raise ServiceError(403, "above_your_access", "You cannot grant more than you have.")
+
+
+def _target(actor: Dict[str, Any], account_id: str, user_id: int) -> Dict[str, Any]:
+    """The member to be changed. Only an owner may touch an owner or someone with more access than their own."""
+    member = access.membership(account_id, user_id)
+    if not member:
+        raise ServiceError(404, "not_found", "No such member in this account.")
+    if actor["role_key"] != "owner":
+        if member["role_key"] == "owner":
+            raise ServiceError(403, "owner_only", "Only an owner can change an owner.")
+        if not access.within(actor, member["access"]):
+            raise ServiceError(403, "above_your_access", "This person has access you do not have.")
+    return member
+
+
+def add_user(account_id: str, actor: Any, username: str, role: str, email: str = "") -> Dict[str, Any]:
+    who = _manager(actor, account_id)
+    _may_give(who, account_id, role)
     uname = (username or "").strip().lower()
     if not uname:
         raise ServiceError(400, "username_required", "A username is required.")
@@ -66,36 +100,42 @@ def add_user(account_id: str, actor_role: str, username: str, role: str, email: 
         temp = auth.generate_temporary_password()
         user_id = auth.create_user(uname, temp, email=email, temporary=True)
         out["temporary_password"] = temp
-    cs.add_membership(account_id, user_id, role)
+    cs.add_membership(account_id, user_id, access.OLD_ROLE[role])
+    access.save_role(account_id, user_id, role)
     out.update({"user_id": user_id, "username": uname, "role": role})
     return out
 
 
-def _target_role(account_id: str, user_id: int) -> str:
-    role = cs.get_membership_role(account_id, user_id)
-    if not role:
-        raise ServiceError(404, "not_found", "No such member in this account.")
-    return role
-
-
-def change_role(account_id: str, actor_role: str, target_user_id: int, new_role: str) -> None:
-    if new_role not in ROLES:
-        raise ServiceError(400, "invalid_role", "Role must be one of: " + ", ".join(ROLES))
-    current = _target_role(account_id, target_user_id)
-    if not (can_assign_role(actor_role, new_role) and (current != "owner" or has_permission(actor_role, "owners.manage"))):
-        raise ServiceError(403, "forbidden", "You cannot change this member's role.")
+def change_role(account_id: str, actor: Any, target_user_id: int, new_role: str) -> None:
+    who = _manager(actor, account_id)
+    _may_give(who, account_id, new_role)
+    current = _target(who, account_id, target_user_id)["role_key"]
     if current == "owner" and new_role != "owner" and cs.count_owners(account_id) <= 1:
         raise ServiceError(409, "last_owner", "An account must keep at least one owner.")
-    cs.set_membership_role(account_id, target_user_id, new_role)
+    access.save_role(account_id, target_user_id, new_role)
 
 
-def reset_password(account_id: str, actor_role: str, actor_user_id: int, target_user_id: int) -> str:
+def set_overrides(account_id: str, actor: Any, actor_user_id: int, target_user_id: int, overrides: Any) -> None:
+    who = _manager(actor, account_id)
+    if target_user_id == actor_user_id:
+        raise ServiceError(403, "own_access", "You cannot change your own access.")
+    member = _target(who, account_id, target_user_id)
+    if member["role_key"] == "owner":
+        raise ServiceError(400, "owner_only", "An owner always has everything.")
+    try:
+        levels = access.check_levels(overrides)
+    except ValueError as e:
+        raise ServiceError(400, str(e), "That section or level does not exist.")
+    if who["role_key"] != "owner" and not access.within(who, levels):
+        raise ServiceError(403, "above_your_access", "You cannot grant more than you have.")
+    access.set_overrides(account_id, target_user_id, levels)
+
+
+def reset_password(account_id: str, actor: Any, actor_user_id: int, target_user_id: int) -> str:
     """New one-time password for a member (shown once, expires in 72 h, must be changed). Sessions are revoked.
     Only for people who belong to this account alone, so an admin can never take over a login
     that also works in another account or on the platform."""
-    current = _target_role(account_id, target_user_id)
-    if not has_permission(actor_role, "users.manage") or (current == "owner" and not has_permission(actor_role, "owners.manage")):
-        raise ServiceError(403, "forbidden", "You cannot reset this member's password.")
+    _target(_manager(actor, account_id), account_id, target_user_id)
     if target_user_id == actor_user_id:
         raise ServiceError(400, "use_change_password", "Use change password for your own login.")
     target = auth.get_user_by_id(target_user_id)
@@ -106,13 +146,12 @@ def reset_password(account_id: str, actor_role: str, actor_user_id: int, target_
     return temp
 
 
-def remove_member(account_id: str, actor_role: str, target_user_id: int, purge: bool = False) -> Dict[str, Any]:
-    current = _target_role(account_id, target_user_id)
-    if not has_permission(actor_role, "users.manage") or (current == "owner" and not has_permission(actor_role, "owners.manage")):
-        raise ServiceError(403, "forbidden", "You cannot remove this member.")
+def remove_member(account_id: str, actor: Any, target_user_id: int, purge: bool = False) -> Dict[str, Any]:
+    current = _target(_manager(actor, account_id), account_id, target_user_id)["role_key"]
     if current == "owner" and cs.count_owners(account_id) <= 1:
         raise ServiceError(409, "last_owner", "An account must keep at least one owner.")
     cs.remove_membership(account_id, target_user_id)
+    access.forget(account_id, target_user_id)
     deleted = False
     if purge:
         target = auth.get_user_by_id(target_user_id)
@@ -122,7 +161,7 @@ def remove_member(account_id: str, actor_role: str, target_user_id: int, purge: 
 
 
 def delete_account(account_id: str, actor_role: str, confirm_name: str) -> None:
-    if not has_permission(actor_role, "account.manage"):
+    if (actor_role if isinstance(actor_role, str) else actor_role["role_key"]) != "owner":
         raise ServiceError(403, "forbidden", "Only an owner can delete the account.")
     acct = cs.get_account(account_id)
     if not acct:
