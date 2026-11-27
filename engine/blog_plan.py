@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import crm_store as cs
 import database as db
-from engine import alerts, assistant, jobs, llm, media
+from engine import alerts, assistant, jobs, llm, media, site_publish
 from engine.messaging import IST
 
 EDITABLE = ("title", "topic", "keyword", "publish_at", "project_id", "assignee_id", "body", "images", "writer_token_id",
@@ -476,8 +476,16 @@ def _publish_job(job: Dict[str, Any]) -> None:
          published_at=_now())
 
 
+def _cover(account_id: str, row: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    for image in _post_files(account_id, row):
+        if image["cover"]:
+            return {"url": _public_origin(row) + media.PUBLIC_PATH + image["token"], "alt": image["alt"]}
+    return None
+
+
 def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
-    """Commit the approved text, unchanged, through the account's blog project."""
+    """Make the approved text, unchanged, live: in GitPulse's public API by default, or as a commit to the website
+    repository when the account has turned that on."""
     from engine.formatters import slugify, format_frontmatter, build_target_filepath, assemble_post_document
     from engine.github_client import GitHubClient
     from engine.image_generator import generate_hero_svg
@@ -488,8 +496,9 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
         require_cover(row)      # also posts approved before the rule
     except PlanError as e:
         return {"success": False, "error": e.message}
+    use_git = site_publish.git_enabled(account_id)
     token = project.get("github_token") or cs.get_account_github_token(account_id)
-    if not token:
+    if use_git and not token:
         return {"success": False, "error": "No GitHub token is set for this project or account."}
     try:
         full = _with_images(account_id, row)
@@ -506,21 +515,28 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
         "author": project.get("author_name", "Editorial Team"), "reading_time": max(1, len(body.split()) // 200)})
     post_id = db.create_post({
         "project_id": project["id"], "title": title, "slug": slug, "excerpt": excerpt, "content_markdown": full,
-        "frontmatter_yaml": front, "target_path": path, "tags": tags, "meta_seo": {"description": excerpt}, "image_prompt": "",
+        "frontmatter_yaml": front, "target_path": path, "tags": tags, "meta_seo": {"description": excerpt, "cover": _cover(account_id, row)},
+        "image_prompt": "",
         "og_image_svg": generate_hero_svg(title=title, category=project.get("name", "Blog"),
                                           author=project.get("author_name", "Editorial Team"), reading_time=5),
         "seo_score": 100, "seo_issues": [], "status": "publishing"})
-    res = GitHubClient(token=token).publish_post(
-        repo=project["github_repo"], branch=project["github_branch"], target_path=path,
-        file_content=assemble_post_document(front, full), post_title=title, post_excerpt=excerpt, post_tags=tags,
-        mode="direct")      # approval was the review: "published" must mean live, not waiting for a merge
-    if not res.get("success"):
-        db.update_post_status(post_id=post_id, status="failed", error=res.get("error", ""))
-        return {"success": False, "error": res.get("error", "publishing error")}
-    db.update_post_status(post_id=post_id, status="published", commit_sha=res.get("commit_sha"), pr_url=res.get("pr_url"),
-                          pr_number=res.get("pr_number"))
-    media.publish_linked(account_id, full)
-    url = res.get("pr_url") or f"https://github.com/{project['github_repo']}/blob/{project['github_branch']}/{path}"
+    if use_git:
+        res = GitHubClient(token=token).publish_post(
+            repo=project["github_repo"], branch=project["github_branch"], target_path=path,
+            file_content=assemble_post_document(front, full), post_title=title, post_excerpt=excerpt, post_tags=tags,
+            mode="direct")      # approval was the review: "published" must mean live, not waiting for a merge
+        if not res.get("success"):
+            db.update_post_status(post_id=post_id, status="failed", error=res.get("error", ""))
+            return {"success": False, "error": res.get("error", "publishing error")}
+        db.update_post_status(post_id=post_id, status="published", commit_sha=res.get("commit_sha"),
+                              pr_url=res.get("pr_url"), pr_number=res.get("pr_number"))
+        media.publish_linked(account_id, full)
+        url = res.get("pr_url") or f"https://github.com/{project['github_repo']}/blob/{project['github_branch']}/{path}"
+    else:
+        media.publish_linked(account_id, full)      # before the post is visible, so its images load
+        db.update_post_status(post_id=post_id, status="published")
+        url = site_publish.post_url(account_id, project["id"], slug, _public_origin(row))
+        site_publish.refresh_site(account_id, slug)
     try:
         from engine.whatsapp_client import WhatsAppClient
         WhatsAppClient(account_id).trigger_blog_publish_alert(title, url)

@@ -29,7 +29,7 @@ from engine import accounts_service as svc
 from engine import auth
 from engine import secrets_box
 from engine import assistant, contact_fields, jobs, messaging
-from engine import media
+from engine import media, site_publish
 from database import normalize_repo
 from engine import writer_tokens
 from engine.accounts_service import ServiceError
@@ -582,6 +582,21 @@ def posts_list(ctx, m, q, body):
                                                     limit=_int(q.get("limit"), 50))}
 
 
+@route("GET", r"/api/publishing-settings", "acct:users.manage")
+def publishing_settings_get(ctx, m, q, body):
+    return 200, site_publish.get_public(ctx.account_id)
+
+
+@route("PUT", r"/api/publishing-settings", "acct:users.manage")
+def publishing_settings_save(ctx, m, q, body):
+    try:
+        saved = site_publish.save(ctx.account_id, body)
+    except site_publish.SettingsError as e:
+        return 400, {"error": "invalid_input", "message": str(e)}
+    db.log_event("Publishing settings changed.", "INFO", account_id=ctx.account_id)
+    return 200, saved
+
+
 @route("GET", r"/api/posts/(?P<id>\d+)", "acct:content.read")
 def post_get(ctx, m, q, body):
     post = db.get_post_for_account(ctx.account_id, int(m.group("id")))
@@ -614,6 +629,11 @@ def _publish_post(ctx, post_id: int, approve: bool) -> Response:
         return 404, {"error": "Post not found."}
     project = _own_project(ctx, post["project_id"])
     from engine.formatters import assemble_post_document
+    if not site_publish.git_enabled(ctx.account_id):
+        db.update_post_status(post_id=post_id, status="published")
+        site_publish.refresh_site(ctx.account_id, post["slug"])
+        return 200, {"success": True, "message": "Article published.",
+                     "pub_result": {"success": True, "mode": "live", "commit_sha": None, "pr_url": None}}
     res = GitHubClient(token=_gh_token(ctx, project)).publish_post(
         repo=project["github_repo"], branch=project["github_branch"], target_path=post["target_path"],
         file_content=assemble_post_document(post["frontmatter_yaml"], post["content_markdown"]),

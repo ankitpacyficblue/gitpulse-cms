@@ -612,9 +612,17 @@ def get_post_by_slug(project_id: int, slug: str) -> Optional[Dict[str, Any]]:
             FROM posts p
             JOIN projects proj ON p.project_id = proj.id
             WHERE p.project_id = ? AND p.slug = ?
+            ORDER BY CASE WHEN p.status = 'published' THEN 0 ELSE 1 END, p.published_at DESC, p.id DESC
         """, (project_id, slug))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+def list_published_posts(project_id: int, limit: int = 500) -> List[Dict[str, Any]]:
+    """Newest first."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM posts WHERE project_id = ? AND status = 'published' "
+                            "ORDER BY published_at DESC, id DESC LIMIT ?", (project_id, limit)).fetchall()
+    return [dict(r) for r in rows]
 
 def increment_post_views(post_id: int, ip_hash: str = ""):
     now = datetime.utcnow().isoformat()

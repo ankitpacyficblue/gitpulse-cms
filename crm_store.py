@@ -228,6 +228,8 @@ def init_schema(conn) -> None:
     )""")
     for table, columns in (
         ("media_files", (("writer_token_id", "INTEGER"),)),
+        ("account_settings", (("publish_via_git", "INTEGER NOT NULL DEFAULT 0"), ("site_url", "TEXT NOT NULL DEFAULT ''"),
+                              ("revalidate_secret_enc", "TEXT NOT NULL DEFAULT ''"))),
         ("blog_plan", (("images", "TEXT NOT NULL DEFAULT '[]'"), ("rejected_note", "TEXT NOT NULL DEFAULT ''"),
                        ("rejected_by", "INTEGER"), ("rejected_at", "TEXT NOT NULL DEFAULT ''"),
                        ("publish_origin", "TEXT NOT NULL DEFAULT ''"),

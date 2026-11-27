@@ -7,6 +7,7 @@ SEO & brand safety linting, OpenGraph banner synthesis, and GitHub delivery.
 from datetime import datetime
 from typing import Dict, Any, Optional
 import json
+import os
 
 from database import (
     get_project,
@@ -29,6 +30,7 @@ from engine.formatters import (
     build_target_filepath,
     assemble_post_document
 )
+from engine import site_publish
 from engine.github_client import GitHubClient
 from engine.doc_ingestion import fetch_repo_readme, summarize_readme_context, get_internal_linking_suggestions
 from engine.seo_linter import lint_article
@@ -163,9 +165,11 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
         }
 
     # 8. GitHub Publication Dispatch
+    use_git = site_publish.git_enabled(project["account_id"])
     client = GitHubClient(token=github_token)
     # Without a token the client only pretends to publish. That is for the explicit "mock" token, never a default.
-    pub_result = {"success": False, "error": "No GitHub token is set for this project or account."} if not github_token \
+    pub_result = {"success": True, "mode": "live", "message": "Live in GitPulse."} if not use_git \
+        else {"success": False, "error": "No GitHub token is set for this project or account."} if not github_token \
         else client.publish_post(
         repo=project["github_repo"],
         branch=project["github_branch"],
@@ -186,14 +190,19 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
             pr_number=pub_result.get("pr_number")
         )
         update_project_last_run(project_id)
-        log_msg = f"Published post #{post_id} to {project['github_repo']}. {pub_result.get('message')}"
+        if not use_git:
+            site_publish.refresh_site(project["account_id"], article["slug"])
+        log_msg = f"Published post #{post_id} to {project['github_repo'] if use_git else 'the website'}. {pub_result.get('message')}"
         log_event(log_msg, "INFO", project_id=project_id, post_id=post_id, metadata=pub_result)
 
         # Cross-Engine WhatsApp Automation: Notify subscribers & VIPs
         try:
             from engine.whatsapp_client import WhatsAppClient
             wa = WhatsAppClient(project["account_id"])
-            post_url = pub_result.get("pr_url") or f"https://github.com/{project['github_repo']}/blob/{project['github_branch']}/{target_path}"
+            post_url = pub_result.get("pr_url") or (
+                f"https://github.com/{project['github_repo']}/blob/{project['github_branch']}/{target_path}" if use_git
+                else site_publish.post_url(project["account_id"], project_id, article["slug"],
+                                           os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")))
             wa.trigger_blog_publish_alert(article["title"], post_url)
         except Exception:
             pass
