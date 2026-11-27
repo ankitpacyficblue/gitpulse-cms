@@ -1,26 +1,24 @@
-# Showing published posts on a website
+# How a published post reaches a website
 
-Publishing in GitPulse makes the post public at once. There is no commit, release, secret or webhook.
+Publishing makes the post public in GitPulse at once. Nothing is committed to any repository.
 
-## Any website: one line
-
-    <script src="https://gitpulsecms.vercel.app/api/public/projects/PROJECT_ID/embed.js" async></script>
-
-Replace PROJECT_ID with the blog project's number. It lists the posts where the script sits (or inside an element
-with the `data-gitpulse` attribute) and opens one at `#post=<slug>`. It uses the site's own styles.
-
-Limits: posts are drawn in the browser, so they have no page of their own, title tag or sitemap entry for search
-engines, and only basic Markdown (headings, lists, links, bold, images) is formatted. A site with a strict
-Content-Security-Policy must allow the GitPulse address in `script-src` and `connect-src`.
-
-## Sites that need search indexing: the public API
-
-Fetch on the server and cache for about 60 seconds. No key is needed.
+The website reads the posts on its server and shows each at `<website>/blog/<slug>`:
 
     GET /api/public/projects/PROJECT_ID/posts           list
     GET /api/public/projects/PROJECT_ID/posts/<slug>    one post (body is Markdown)
+    GET /api/public/media/<token>                       a file of a published post
 
-## Committing to a repository (older path)
+Readers must never see the GitPulse address: the website serves media through its own route.
 
-Off by default. Set `PUBLISH_VIA_GIT=1` on the server to commit each post to the project's repository instead. It
-applies to every account on that server.
+Save the website address under Settings. Post links ("View post", WhatsApp announcements) use it. Without it a post
+still publishes, but has no link and is not announced.
+
+## Search fields
+
+| Field (writer and editor API) | Use | When empty |
+|---|---|---|
+| `seo_title` | page title and social title | the post title |
+| `meta_description` | description | the first lines of the text |
+| `keyword` | focus phrase; separate several with commas | no keywords |
+| `images[].og` | the social sharing image (not shown in the article) | the cover |
+| `images[].alt` | image alt text | the post title for the social image |

@@ -636,6 +636,10 @@ def increment_post_views(post_id: int, ip_hash: str = ""):
 def update_post_content(post_id: int, title: str, excerpt: str, content_markdown: str, frontmatter_yaml: str, tags: list):
     with get_connection() as conn:
         cursor = conn.cursor()
+        row = cursor.execute("SELECT meta_seo FROM posts WHERE id = ?", (post_id,)).fetchone()
+        meta = json.loads((row and row["meta_seo"]) or "{}")
+        meta["updated_at"] = datetime.utcnow().isoformat()      # the website's "last modified"
+        cursor.execute("UPDATE posts SET meta_seo = ? WHERE id = ?", (json.dumps(meta), post_id))
         cursor.execute("""
             UPDATE posts SET
                 title = ?,

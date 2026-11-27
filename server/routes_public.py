@@ -8,14 +8,14 @@ import json
 import re
 from typing import Dict, Any, Tuple, Optional
 from database import get_project, list_posts, list_published_posts, get_post_by_slug, increment_post_views
+from crm_store import get_account
 from engine import media
 from engine.image_generator import generate_hero_svg
-from server import embed
 
 _IMAGE = re.compile(r"!\[([^\]]*)\]\((https?://[^)\s]+)\)")
 
 
-def _summary(project_id: int, p: Dict[str, Any]) -> Dict[str, Any]:
+def _summary(project_id: int, p: Dict[str, Any], author: str = "") -> Dict[str, Any]:
     tags = json.loads(p["tags"]) if isinstance(p.get("tags"), str) else (p.get("tags") or [])
     meta = json.loads(p["meta_seo"]) if isinstance(p.get("meta_seo"), str) else (p.get("meta_seo") or {})
     cover = meta.get("cover")
@@ -23,8 +23,10 @@ def _summary(project_id: int, p: Dict[str, Any]) -> Dict[str, Any]:
         found = _IMAGE.search(p.get("content_markdown") or "")
         cover = {"url": found.group(2), "alt": found.group(1)} if found else None
     return {"id": p["id"], "title": p["title"], "slug": p["slug"], "excerpt": p["excerpt"], "tags": tags,
+            "updated_at": meta.get("updated_at") or p["published_at"], "og_image": meta.get("og_image"), "author": author,
             "reading_time": meta.get("reading_time", 5), "published_at": p["published_at"], "cover_image": cover,
-            "seo": {"title": p["title"], "description": meta.get("description") or p["excerpt"]},
+            "seo": {"title": meta.get("title") or p["title"], "description": meta.get("description") or p["excerpt"],
+                    "keywords": meta.get("keywords") or tags},
             "og_image_url": f"/api/public/projects/{project_id}/posts/{p['slug']}/og-image.svg"}
 
 
@@ -64,7 +66,7 @@ def handle_public_request(path: str, query: Dict[str, str], client_ip: str = "")
         for p in list_published_posts(project_id):
             newest.setdefault(p["slug"], p)      # a republished title replaces the earlier post
         return 200, "application/json", json.dumps(
-            {"project": project["name"], "posts": [_summary(project_id, p) for p in newest.values()]})
+            {"project": project["name"], "posts": [_summary(project_id, p, project.get("author_name", "")) for p in newest.values()]})
 
     # 2. GET /api/public/projects/<id>/posts/<slug>
     if sub_path == "posts" and len(parts) == 6:
@@ -78,7 +80,7 @@ def handle_public_request(path: str, query: Dict[str, str], client_ip: str = "")
 
         meta = json.loads(post["meta_seo"]) if isinstance(post.get("meta_seo"), str) else (post.get("meta_seo") or {})
         return 200, "application/json", json.dumps(dict(
-            _summary(project_id, post), content_markdown=post["content_markdown"], body_format="markdown",
+            _summary(project_id, post, project.get("author_name", "")), content_markdown=post["content_markdown"], body_format="markdown",
             meta_seo=meta, github_pr_url=post.get("github_pr_url"), github_commit_sha=post.get("github_commit_sha")))
 
     # 3. GET /api/public/projects/<id>/posts/<slug>/og-image.svg
@@ -90,34 +92,26 @@ def handle_public_request(path: str, query: Dict[str, str], client_ip: str = "")
         svg = generate_hero_svg(title=title, category=project.get("name", "Engineering"), author=author)
         return 200, "image/svg+xml; charset=utf-8", svg
 
-    # 4. GET /api/public/projects/<id>/embed.js, and .../posts/<slug>/view (a page a person can read)
-    if sub_path == "embed.js" and len(parts) == 5:
-        return 200, "application/javascript; charset=utf-8", embed.SCRIPT
-    if sub_path == "posts" and len(parts) == 7 and parts[6] == "view":
-        post = get_post_by_slug(project_id, parts[5])
-        if not post or post.get("status") != "published":
-            return 404, "text/plain; charset=utf-8", "Article not found."
-        return 200, "text/html; charset=utf-8", embed.post_page(post["title"], post["excerpt"], post["slug"])
-
-    # 5. GET /api/public/projects/<id>/rss.xml
+    # 4. GET /api/public/projects/<id>/rss.xml
     if sub_path == "rss.xml":
         all_posts = list_posts(project_id=project_id, limit=25)
         published = [p for p in all_posts if p.get("status") == "published"]
         items_xml = ""
+        site = (get_account(project.get("account_id") or "") or {}).get("website_url", "")
         for p in published:
             items_xml += f"""
     <item>
       <title>{p['title']}</title>
-      <link>/blog/{p['slug']}</link>
+      <link>{site}/blog/{p['slug']}</link>
       <description><![CDATA[{p['excerpt']}]]></description>
       <pubDate>{p['published_at'] or ''}</pubDate>
-      <guid>/blog/{p['slug']}</guid>
+      <guid>{site}/blog/{p['slug']}</guid>
     </item>"""
         rss_xml = f"""<?xml version="1.0" encoding="UTF-8" ?>
 <rss version="2.0">
   <channel>
     <title>{project['name']} Blog</title>
-    <link>https://github.com/{project['github_repo']}</link>
+    <link>{site}/blog</link>
     <description>Daily technical insights and engineering updates from {project['name']}.</description>
     {items_xml}
   </channel>

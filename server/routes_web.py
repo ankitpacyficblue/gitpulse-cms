@@ -613,7 +613,7 @@ def render_dashboard_html() -> str:
             <div class="flex justify-between items-center mb-4">
                 <div>
                     <h2 class="text-lg font-semibold text-white">Editorial Staging & Review Queue</h2>
-                    <p class="text-sm text-slate-400">Review, edit, and approve AI-generated drafts with live SEO pre-flight scoring before publishing to GitHub.</p>
+                    <p class="text-sm text-slate-400">Review, edit, and approve AI-generated drafts with live SEO pre-flight scoring before publishing.</p>
                 </div>
                 <button onclick="loadStagingPosts()" class="btn-secondary text-xs">Refresh Queue</button>
             </div>
@@ -1201,6 +1201,8 @@ def render_dashboard_html() -> str:
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div><label for="plan-topic" class="block text-xs text-slate-400 mb-1">Topic</label><input id="plan-topic" class="input-text text-sm w-full" maxlength="300"></div>
                         <div><label for="plan-keyword" class="block text-xs text-slate-400 mb-1">Target keyword</label><input id="plan-keyword" class="input-text text-sm w-full" maxlength="100"></div>
+                        <div><label for="plan-seo-title" class="block text-xs text-slate-400 mb-1">Search title (empty: the title)</label><input id="plan-seo-title" class="input-text text-sm w-full" maxlength="120"></div>
+                        <div><label for="plan-meta" class="block text-xs text-slate-400 mb-1">Meta description</label><input id="plan-meta" class="input-text text-sm w-full" maxlength="300"></div>
                         <div><label for="plan-when" class="block text-xs text-slate-400 mb-1">Publish date and time (India time)</label><input id="plan-when" class="input-text text-sm w-full" type="datetime-local" required></div>
                         <div><label for="plan-project" class="block text-xs text-slate-400 mb-1">Blog project</label><select id="plan-project" class="input-select text-sm w-full" required></select></div>
                         <div><label for="plan-assignee" class="block text-xs text-slate-400 mb-1">Assignee</label><select id="plan-assignee" class="input-select text-sm w-full" ></select></div>
@@ -1313,6 +1315,11 @@ def render_dashboard_html() -> str:
                             <label for="set-ai-provider" class="block text-xs font-medium text-slate-300 mb-1">AI provider</label>
                             <select id="set-ai-provider" class="input-text text-xs"><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="mock">Built-in template (no key)</option></select>
                             <p id="set-ai-source" class="text-[11px] text-slate-500 mt-1"></p>
+                        </div>
+                        <div>
+                            <label for="set-website" class="block text-xs font-medium text-slate-300 mb-1">Website address</label>
+                            <input id="set-website" type="url" class="input-text text-xs w-full" placeholder="https://www.example.com" maxlength="200">
+                            <p class="text-[11px] text-slate-500 mt-1">Post links open here, at /blog/&lt;post&gt;.</p>
                         </div>
                         <div>
                             <label for="set-currency" class="block text-xs font-medium text-slate-300 mb-1">Default deal currency</label>
@@ -1638,7 +1645,7 @@ def render_dashboard_html() -> str:
                 <button type="button" onclick="closeStagingEditor()" class="btn-secondary text-xs">Close</button>
                 <div class="flex gap-2">
                     <button type="button" onclick="saveStagedDraft()" class="btn-secondary text-xs">Save Changes</button>
-                    <button type="button" onclick="approveAndPublishStagedPost()" id="btn-approve-post" class="btn-primary text-xs">Approve & Publish to GitHub 🚀</button>
+                    <button type="button" onclick="approveAndPublishStagedPost()" id="btn-approve-post" class="btn-primary text-xs">Approve & Publish 🚀</button>
                 </div>
             </div>
         </div>

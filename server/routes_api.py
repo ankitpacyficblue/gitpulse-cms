@@ -315,16 +315,18 @@ def accounts_create(ctx, m, q, body):
 @route("GET", r"/api/accounts/(?P<aid>[0-9a-f]{32})", "member")
 def account_get(ctx, m, q, body):
     a = cs.get_account(ctx.account_id)
-    return 200, {"id": a["id"], "name": a["name"], "default_currency": a.get("default_currency", "INR"), "role": ctx.role, "permissions": sorted(permissions_for(ctx.role))}
+    return 200, {"id": a["id"], "name": a["name"], "default_currency": a.get("default_currency", "INR"), "website_url": a.get("website_url", ""), "role": ctx.role, "permissions": sorted(permissions_for(ctx.role))}
 
 
 @route("PATCH", r"/api/accounts/(?P<aid>[0-9a-f]{32})", "path:account.manage")
 def account_rename(ctx, m, q, body):
     ok = False
     try:
+        if "website_url" in body:
+            ok = cs.set_website_url(ctx.account_id, site_publish.clean_website(body["website_url"]))
         if "default_currency" in body:
             ok = cs.set_default_currency(ctx.account_id, body["default_currency"])
-        if "name" in body or "default_currency" not in body:
+        if "name" in body or not {"default_currency", "website_url"} & set(body):
             ok = cs.rename_account(ctx.account_id, body.get("name", ""))
     except ValueError as e:
         return 400, {"error": "invalid_input", "message": str(e)}
@@ -578,14 +580,19 @@ def project_install_blog(ctx, m, q, body):
 
 @route("GET", r"/api/posts", "acct:content.read")
 def posts_list(ctx, m, q, body):
-    return 200, {"posts": db.list_posts_for_account(ctx.account_id, project_id=_int(q.get("project_id")),
-                                                    limit=_int(q.get("limit"), 50))}
+    posts = db.list_posts_for_account(ctx.account_id, project_id=_int(q.get("project_id")), limit=_int(q.get("limit"), 50))
+    return 200, {"posts": [_with_url(ctx.account_id, p) for p in posts]}
+
+
+def _with_url(account_id: str, post):
+    """`url`: the post on the account's website, once it is published."""
+    return dict(post, url=site_publish.post_url(account_id, post["slug"]) if post.get("status") == "published" else "")
 
 
 @route("GET", r"/api/posts/(?P<id>\d+)", "acct:content.read")
 def post_get(ctx, m, q, body):
     post = db.get_post_for_account(ctx.account_id, int(m.group("id")))
-    return (200, post) if post else (404, {"error": "Post not found."})
+    return (200, _with_url(ctx.account_id, post)) if post else (404, {"error": "Post not found."})
 
 
 @route("PUT", r"/api/posts/(?P<id>\d+)", "acct:content.publish")
@@ -612,27 +619,9 @@ def _publish_post(ctx, post_id: int, approve: bool) -> Response:
     post = db.get_post_for_account(ctx.account_id, post_id)
     if not post:
         return 404, {"error": "Post not found."}
-    project = _own_project(ctx, post["project_id"])
-    from engine.formatters import assemble_post_document
-    if not site_publish.git_enabled():
-        db.update_post_status(post_id=post_id, status="published")
-        return 200, {"success": True, "message": "Article published.",
-                     "pub_result": {"success": True, "mode": "live", "commit_sha": None, "pr_url": None}}
-    res = GitHubClient(token=_gh_token(ctx, project)).publish_post(
-        repo=project["github_repo"], branch=project["github_branch"], target_path=post["target_path"],
-        file_content=assemble_post_document(post["frontmatter_yaml"], post["content_markdown"]),
-        post_title=post["title"], post_excerpt=post["excerpt"],
-        post_tags=json.loads(post["tags"]) if isinstance(post["tags"], str) else [],
-        mode=project.get("publishing_mode", "pr"))
-    if res.get("success"):
-        db.update_post_status(post_id=post_id, status="published", commit_sha=res.get("commit_sha"),
-                              pr_url=res.get("pr_url"), pr_number=res.get("pr_number"))
-        out = {"success": True, "pub_result": res}
-        if approve:
-            out["message"] = "Article approved and published to GitHub!"
-        return 200, out
-    db.update_post_status(post_id=post_id, status="failed", error=res.get("error"))
-    return 500, {"success": False, "error": res.get("error")}
+    db.update_post_status(post_id=post_id, status="published")
+    return 200, {"success": True, "message": "Article published.",
+                 "pub_result": {"success": True, "mode": "live", "url": site_publish.post_url(ctx.account_id, post["slug"])}}
 
 
 @route("POST", r"/api/posts/(?P<id>\d+)/approve", "acct:content.publish")
