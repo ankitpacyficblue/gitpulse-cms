@@ -380,6 +380,9 @@ def render_dashboard_html() -> str:
                         <span>💬</span>
                         <span>WhatsApp CRM & Automation</span>
                     </div>
+                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-dashboard')">
+                        <span class="flex items-center gap-2"><span aria-hidden="true">📊</span><span>CRM Dashboard</span></span>
+                    </a>
                     <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('wa-inbox')">
                         <span class="flex items-center gap-2">
                             <span>📥</span>
@@ -529,6 +532,17 @@ def render_dashboard_html() -> str:
                 <button type="button" id="dashboard-new" class="btn-primary text-xs rd-push hidden" onclick="newPost('dashboard')">+ New post</button>
             </div>
             <div id="dashboard-body"><p class="rd-empty" role="status">Loading…</p></div>
+        </div>
+
+        <div id="tab-wa-dashboard" class="tab-content hidden">
+            <div class="rd-toolbar">
+                <div><label for="wa-dashboard-account">Account</label><select id="wa-dashboard-account" class="input-select text-sm" onchange="wmAccountChanged()"></select></div>
+            </div>
+            <div id="wa-dashboard-body"><p class="rd-empty" role="status">Loading…</p></div>
+        </div>
+
+        <div id="tab-none" class="tab-content hidden">
+            <p class="rd-empty" role="status">You have no sections in this account. Ask an account owner to give you access.</p>
         </div>
 
         <div id="tab-posts" class="tab-content hidden">
@@ -696,7 +710,7 @@ def render_dashboard_html() -> str:
                         <option value="human">Needs human</option>
                     </select>
                     <button onclick="loadWhatsAppInbox()" class="btn-secondary text-xs">🔄 Refresh Chats</button>
-                    <button data-requires="crm.write" onclick="openAddContactModal()" class="btn-primary text-xs">+ New Lead</button>
+                    <button data-requires="contacts:manage" onclick="openAddContactModal()" class="btn-primary text-xs">+ New Lead</button>
                 </div>
             </div>
 
@@ -733,8 +747,8 @@ def render_dashboard_html() -> str:
 
                             <div class="flex flex-wrap items-center gap-2">
                                 <label class="sr-only" for="wa-assign-select">Assign conversation</label>
-                                <select id="wa-assign-select" data-requires="crm.write" class="input-select text-xs py-1 min-w-[9rem]" onchange="assignConversation(this.value)"></select>
-                                <button data-requires="crm.write" onclick="openAddDealModal(activeConversationId)" class="btn-secondary text-xs py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
+                                <select id="wa-assign-select" data-requires="inbox:manage" class="input-select text-xs py-1 min-w-[9rem]" onchange="assignConversation(this.value)"></select>
+                                <button data-requires="pipeline:manage" onclick="openAddDealModal(activeConversationId)" class="btn-secondary text-xs py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
                                     💰 + Create Deal
                                 </button>
                             </div>
@@ -743,7 +757,7 @@ def render_dashboard_html() -> str:
                         <!-- Chat Messages Scroll Feed -->
                         <div id="wa-needs-human" class="hidden flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs text-amber-200 bg-amber-500/10 border-b border-amber-500/30" role="status">
                             <span id="wa-needs-human-text"></span>
-                            <button type="button" id="wa-ai-btn" data-requires="crm.write" class="btn-secondary text-xs" onclick="toggleConversationAi()">Resume AI</button>
+                            <button type="button" id="wa-ai-btn" data-requires="inbox:manage" class="btn-secondary text-xs" onclick="toggleConversationAi()">Resume AI</button>
                         </div>
                         <div id="wa-messages-container" class="chat-messages-scroll">
                             <!-- Populated dynamically -->
@@ -763,11 +777,11 @@ def render_dashboard_html() -> str:
                             </div>
                             <button type="submit" class="btn-primary text-xs">Send template</button>
                         </form>
-                        <div data-requires="crm.write" class="px-3 pt-2 flex flex-wrap items-center gap-2 text-xs text-slate-300 bg-slate-950">
+                        <div data-requires="inbox:manage" class="px-3 pt-2 flex flex-wrap items-center gap-2 text-xs text-slate-300 bg-slate-950">
                             <button type="button" class="btn-secondary text-xs" onclick="attachMedia('chat')">Attach file</button>
                             <span id="chat-media-name" class="break-all" aria-live="polite"></span><button type="button" id="chat-media-clear" class="hidden underline" onclick="clearMedia('chat')">Remove</button>
                         </div>
-                        <form onsubmit="sendWhatsAppReply(event)" data-requires="crm.write" class="p-3 border-t border-slate-800 bg-slate-950 flex items-center gap-2">
+                        <form onsubmit="sendWhatsAppReply(event)" data-requires="inbox:manage" class="p-3 border-t border-slate-800 bg-slate-950 flex items-center gap-2">
                             <input type="text" id="wa-message-input" placeholder="Type WhatsApp message (Enter to send)..." class="input-text text-xs flex-1 py-2">
                             <button type="submit" class="btn-primary text-xs py-2 px-4 flex items-center gap-1.5 shadow-indigo-500/30">
                                 <span>Send</span>
@@ -797,7 +811,7 @@ def render_dashboard_html() -> str:
                     <h2 class="text-lg font-semibold text-white">Contacts & Audience CRM</h2>
                     <p class="text-sm text-slate-400">Manage customer audience, customer data platform (CDP) tags, and launch instant 1-click WhatsApp conversations.</p>
                 </div>
-                <button data-requires="crm.write" onclick="openAddContactModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-emerald-500/20">
+                <button data-requires="contacts:manage" onclick="openAddContactModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-emerald-500/20">
                     <span>+ Add New Lead</span>
                 </button>
             </div>
@@ -818,7 +832,7 @@ def render_dashboard_html() -> str:
             </div>
 
             <div id="cf-filters" class="hidden flex flex-wrap items-end gap-2 mb-3"></div>
-            <details id="cf-settings" data-requires="automations.manage" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4">
+            <details id="cf-settings" data-requires="contacts:full" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4">
                 <summary class="text-sm font-semibold text-white cursor-pointer">Custom fields</summary>
                 <div id="cf-list" class="mt-3 space-y-2"></div>
                 <form onsubmit="saveContactField(event)" class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
@@ -862,7 +876,7 @@ def render_dashboard_html() -> str:
                 </div>
                 <div class="flex items-center gap-2">
                     <button onclick="loadWhatsAppDeals()" class="btn-secondary text-xs">🔄 Refresh</button>
-                    <button data-requires="crm.write" onclick="openAddDealModal()" class="btn-primary text-xs">+ Add Sales Deal</button>
+                    <button data-requires="pipeline:manage" onclick="openAddDealModal()" class="btn-primary text-xs">+ Add Sales Deal</button>
                 </div>
             </div>
 
@@ -923,7 +937,7 @@ def render_dashboard_html() -> str:
                     <h2 class="text-lg font-semibold text-white">Broadcast Campaigns</h2>
                     <p class="text-sm text-slate-400">Dispatch mass WhatsApp announcements, product updates, and newsletters targeted by audience tags.</p>
                 </div>
-                <button data-requires="broadcasts.run" onclick="openAddBroadcastModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
+                <button data-requires="broadcasts:manage" onclick="openAddBroadcastModal()" class="btn-primary text-xs flex items-center gap-1.5 shadow-indigo-500/25">
                     <span>+ New Broadcast Campaign</span>
                 </button>
             </div>
@@ -978,7 +992,7 @@ def render_dashboard_html() -> str:
                 <button type="submit" class="btn-primary text-xs">Save</button>
               </fieldset>
             </form>
-            <form onsubmit="testQuestion(event)" data-requires="ai.manage" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mt-4 space-y-3">
+            <form onsubmit="testQuestion(event)" data-requires="ai_assistant:manage" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mt-4 space-y-3">
                 <h2 class="text-sm font-semibold text-white">Test a question</h2>
                 <p class="text-[11px] text-slate-500">Uses the saved settings. Nothing is sent to any customer.</p>
                 <div><label for="kb-test-q" class="block text-xs text-slate-400 mb-1">Customer question</label><input id="kb-test-q" class="input-text text-sm w-full" required></div>
@@ -990,14 +1004,14 @@ def render_dashboard_html() -> str:
         <div id="tab-wa-templates" class="tab-content hidden">
             <div class="flex flex-wrap justify-between items-center gap-3 mb-4">
                 <p class="text-xs text-slate-400">Create templates in Meta's WhatsApp Manager, then sync them here. Only approved ones can be sent.</p>
-                <button type="button" data-requires="automations.manage" class="btn-primary text-xs" onclick="syncTemplates(this)">Sync from Meta</button>
+                <button type="button" data-requires="templates:manage" class="btn-primary text-xs" onclick="syncTemplates(this)">Sync from Meta</button>
             </div>
             <div id="tpl-list" class="space-y-3"></div>
         </div>
 
         <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
         <div id="tab-wa-entry" class="tab-content hidden">
-            <form data-requires="automations.manage" onsubmit="saveEntryLink(event)" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4 space-y-3">
+            <form data-requires="entry_links:manage" onsubmit="saveEntryLink(event)" class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4 space-y-3">
                 <h2 class="text-sm font-semibold text-white">New entry link</h2>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div><label for="entry-source" class="block text-xs text-slate-400 mb-1">Source</label>
@@ -1030,7 +1044,7 @@ def render_dashboard_html() -> str:
         <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
         <div id="tab-users" class="tab-content hidden">
             <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                <section class="xl:col-span-2 bg-slate-900 border border-slate-800 rounded-xl shadow-xl" aria-labelledby="users-h">
+                <section class="xl:col-span-2 min-w-0 bg-slate-900 border border-slate-800 rounded-xl shadow-xl" aria-labelledby="users-h">
                     <div class="p-5 border-b border-slate-800 flex flex-wrap justify-between items-center gap-2">
                         <h2 id="users-h" class="text-base font-semibold text-white">People with access to <span id="users-account-name">this account</span></h2>
                         <span id="users-role-note" class="text-[11px] text-slate-400"></span>
@@ -1044,6 +1058,27 @@ def render_dashboard_html() -> str:
                         </table>
                     </div>
                     <div id="users-empty"></div>
+                </section>
+                <section id="users-invite-card" class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-4" aria-labelledby="invite-h" data-requires="users.manage">
+                    <h2 id="invite-h" class="text-base font-semibold text-white">Add a person</h2>
+                    <form onsubmit="submitInviteUser(event)" class="space-y-3">
+                        <div>
+                            <label for="invite-username" class="block text-xs font-medium text-slate-300 mb-1">Username or email *</label>
+                            <input type="text" id="invite-username" required class="input-text text-xs" autocomplete="off">
+                        </div>
+                        <div>
+                            <label for="invite-role" class="block text-xs font-medium text-slate-300 mb-1">Role</label>
+                            <select id="invite-role" class="input-text text-xs"></select>
+                            <p id="invite-role-help" class="text-[11px] text-slate-500 mt-1"></p>
+                        </div>
+                        <button type="submit" class="btn-primary text-xs py-2 px-3 w-full">Add to account</button>
+                        <p id="invite-result" class="text-[11px] text-slate-300" role="status" aria-live="polite"></p>
+                    </form>
+                </section>
+                <section id="roles-card" tabindex="-1" class="hidden xl:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-3 min-w-0" aria-labelledby="roles-h">
+                    <h2 id="roles-h" class="text-base font-semibold text-white">What each role can do</h2>
+                    <p id="roles-note" class="text-xs text-slate-400"></p>
+                    <div class="rd-grid-scroll" role="region" aria-label="Role permissions" tabindex="0"><table id="roles-grid" class="rd-grid"></table></div>
                 </section>
                 <section id="account-manage-card" class="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-3" aria-labelledby="acct-h" data-requires="account.manage">
                     <h2 id="acct-h" class="text-base font-semibold text-white">Account settings</h2>
@@ -1097,22 +1132,6 @@ def render_dashboard_html() -> str:
                         </div>
                         <div class="md:col-span-2 flex flex-wrap gap-2"><button type="submit" class="btn-primary text-xs py-2 px-3">Save settings</button>
                             <button type="button" id="remove-gh-account" class="hidden btn-secondary text-xs py-2 px-3 text-red-300" onclick="removeGithubToken('account')">Remove saved GitHub token</button></div>
-                    </form>
-                </section>
-                <section id="users-invite-card" class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-4" aria-labelledby="invite-h" data-requires="users.manage">
-                    <h2 id="invite-h" class="text-base font-semibold text-white">Add a person</h2>
-                    <form onsubmit="submitInviteUser(event)" class="space-y-3">
-                        <div>
-                            <label for="invite-username" class="block text-xs font-medium text-slate-300 mb-1">Username or email *</label>
-                            <input type="text" id="invite-username" required class="input-text text-xs" autocomplete="off">
-                        </div>
-                        <div>
-                            <label for="invite-role" class="block text-xs font-medium text-slate-300 mb-1">Role</label>
-                            <select id="invite-role" class="input-text text-xs"></select>
-                            <p id="invite-role-help" class="text-[11px] text-slate-500 mt-1"></p>
-                        </div>
-                        <button type="submit" class="btn-primary text-xs py-2 px-3 w-full">Add to account</button>
-                        <p id="invite-result" class="text-[11px] text-slate-300" role="status" aria-live="polite"></p>
                     </form>
                 </section>
             </div>
@@ -1242,7 +1261,7 @@ def render_dashboard_html() -> str:
                     </div>
 
                     <!-- Interactive Live WhatsApp Message Simulator -->
-                    <div id="wa-sim-card" data-requires="wa.config" class="hidden bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+                    <div id="wa-sim-card" data-requires="wa_setup:manage" class="hidden bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
                         <div class="flex justify-between items-center">
                             <h2 class="text-base font-semibold text-white flex items-center gap-2">
                                 <span>🧪 Inbound WhatsApp Simulator</span>
@@ -1650,9 +1669,19 @@ def render_dashboard_html() -> str:
         </div>
     </div>
 
+    <dialog id="modal-access" class="rd-dialog" aria-labelledby="access-h">
+        <form id="access-form" class="space-y-3">
+            <h2 id="access-h" class="text-base font-semibold text-white"></h2>
+            <p id="access-note" class="text-xs text-slate-400"></p>
+            <div id="access-rows"></div>
+            <div class="rd-actions justify-end"><button type="button" class="btn-secondary text-xs" onclick="el('modal-access').close()">Cancel</button><button type="submit" class="btn-primary text-xs">Save access</button></div>
+        </form>
+    </dialog>
+
     <script src="/static/js/app.js"></script>
     <script src="/static/js/phase1b.js"></script>
     <script src="/static/js/redesign.js"></script>
+    <script src="/static/js/crm.js"></script>
     <script>
         // Automatic runtime fallback if external script failed to load
         if (typeof initApp !== 'function') {

@@ -35,7 +35,7 @@ window.addEventListener('popstate', () => { if (currentUser) routeFromHash(); })
 // Called by switchTab: keeps the address in step with the screen.
 function enterView(tabName) {
     const { view, params } = readHash();
-    const listed = tabName === 'dashboard' || tabName === 'posts';
+    const listed = tabName === 'dashboard' || tabName === 'posts' || tabName === 'wa-dashboard';
     el('account-switch').classList.toggle('hidden', listed);
     document.querySelectorAll('[data-tabs]').forEach(b => { b.style.display = b.dataset.tabs.split(' ').includes(tabName) ? '' : 'none'; });
     if (view !== tabName) history.replaceState(null, '', `#${tabName}${listed && params.get('account') ? query({ account: params.get('account') }) : ''}`);
@@ -44,9 +44,14 @@ function enterView(tabName) {
 
 async function renderView() {
     const { view, params } = readHash();
-    if ((view !== 'dashboard' && view !== 'posts') || !currentUser) return;
+    if (!['dashboard', 'posts', 'wa-dashboard'].includes(view) || view !== currentTab || !currentUser) return;
     const seq = ++viewSeq, account = params.get('account') || 'all';
     el(`tab-${view}`).setAttribute('aria-busy', 'true');
+    if (view === 'wa-dashboard') {
+        await renderCrmDashboard(account, seq);
+        if (seq === viewSeq) el(`tab-${view}`).removeAttribute('aria-busy');
+        return;
+    }
     viewOptions = await apiCall('GET', `/api/content/options${query({ account: 'all' })}`, undefined, { quiet: true });
     if (seq !== viewSeq) return;
     fillAccountSwitch(view, account);

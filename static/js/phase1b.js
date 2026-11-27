@@ -88,7 +88,7 @@ async function loadMedia() {
     if (acct !== getActiveAccountId()) return;
     const grid = el('media-grid');
     el('media-not-ready').classList.toggle('hidden', !data || data.configured !== false);
-    el('media-upload').classList.toggle('hidden', !data || data.configured === false || !can('content.write'));
+    el('media-upload').classList.toggle('hidden', !data || data.configured === false || !has('media', 'manage'));
     if (!data) { grid.innerHTML = emptyStateHtml('Could not load the library', 'Try again in a moment.'); return; }
     mediaItems = data.items;
     grid.innerHTML = mediaItems.length ? mediaItems.map(m => `<article class="${cardClass} min-w-0">
@@ -98,7 +98,7 @@ async function loadMedia() {
         <div class="flex flex-wrap gap-2 mt-2">
             ${safeUrl(m.preview_url) ? `<a class="btn-secondary text-xs" href="${escapeHtml(m.preview_url)}" target="_blank" rel="noopener">Open</a>` : ''}
             ${m.blog_url && isImage(m) ? `<button type="button" class="btn-secondary text-xs" data-copy="${escapeHtml(String(m.id))}">Copy for blog</button>` : ''}
-            ${can('content.publish') ? `<button type="button" class="btn-secondary text-xs text-red-300" data-delete="${escapeHtml(String(m.id))}">Delete</button>` : ''}
+            ${has('media', 'full') ? `<button type="button" class="btn-secondary text-xs text-red-300" data-delete="${escapeHtml(String(m.id))}">Delete</button>` : ''}
         </div></article>`).join('') : emptyStateHtml(el('media-search').value ? 'No files match' : 'No files yet', 'Images, PDFs and videos you upload appear here.');
     grid.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copyForBlog(mediaItems.find(m => String(m.id) === b.dataset.copy)));
     grid.querySelectorAll('[data-delete]').forEach(b => b.onclick = () => deleteMedia(mediaItems.find(m => String(m.id) === b.dataset.delete)));
@@ -141,7 +141,7 @@ async function loadPicker() {
     const box = el('picker-grid');
     const data = await fetchMedia(el('picker-search').value.trim());
     const ready = !!data && data.configured !== false;
-    el('picker-upload').classList.toggle('hidden', !ready || !can('content.write'));
+    el('picker-upload').classList.toggle('hidden', !ready || !(has('media', 'manage') || has('posts', 'manage') || has('inbox', 'manage')));
     if (!ready) { box.innerHTML = emptyStateHtml(data ? 'The media library is not set up yet' : 'Could not load the library', data ? 'File storage has to be configured on the server first.' : 'Close and try again.'); return; }
     const items = data.items.filter(pickerFilter);
     box.innerHTML = items.length ? items.map((m, i) => `<button type="button" class="${cardClass} text-left min-w-0" data-i="${i}">${thumbHtml(m, 'w-full h-20')}<span class="block text-[11px] text-slate-200 mt-1 break-words">${escapeHtml(m.name)}</span></button>`).join('')
