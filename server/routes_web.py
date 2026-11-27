@@ -56,6 +56,9 @@ def render_login_html() -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="/static/img/favicon-32.png" type="image/png" sizes="32x32">
+    <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
     <title>Sign In - GitPulse CMS</title>
     <!-- Tailwind CSS Framework CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -285,6 +288,9 @@ def render_dashboard_html() -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="/static/img/favicon-32.png" type="image/png" sizes="32x32">
+    <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
     <title>GitPulse CMS - Dashboard</title>
     <!-- Tailwind CSS Framework CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
