@@ -138,7 +138,7 @@ function switchTab(tabName) {
         'blog-status': { title: 'Blog Status', sub: 'Review queue and where every post stands' },
         'wa-config': { title: 'WhatsApp API & Webhook Setup', sub: 'Four steps: credentials, webhook, test, done' },
         'supabase': { title: 'Supabase Cloud Database', sub: 'PostgreSQL multi-tenant persistence and cloud backup status' },
-        'logs': { title: 'System & Generation Logs', sub: 'Real-time audit log of AI generation, GitHub commits, and webhooks' },
+        'logs': { title: 'System & Generation Logs', sub: 'Real-time audit log of AI generation, publishing and webhooks' },
         'settings': { title: 'Platform Settings & Security', sub: 'Global API tokens, AI provider keys, TOTP 2FA, and password management' }
     };
 
@@ -443,11 +443,8 @@ async function loadProjects() {
         return;
     }
 
-    // Drafts waiting and the last failure per project. Quiet: the cards still show if either call fails.
-    const [postData, alertData] = await Promise.all([
-        apiCall('GET', '/api/posts?limit=50', undefined, { quiet: true }),
-        can('crm.read') ? apiCall('GET', '/api/alerts', undefined, { quiet: true }) : null
-    ]);
+    // The last failure per website. Quiet: the cards still show if the call fails.
+    const alertData = can('crm.read') ? await apiCall('GET', '/api/alerts', undefined, { quiet: true }) : null;
     const focused = grid.contains(document.activeElement) ? document.activeElement.id : '';
     grid.innerHTML = '';
 
@@ -476,11 +473,7 @@ async function loadProjects() {
                 </a>
                 <p class="text-xs text-slate-400 mt-2 line-clamp-2"><strong>Niche:</strong> ${escapeHtml(p.topic)}</p>
                 
-                ${projectRunHtml(p, postData, alertData)}
-                <div class="mt-3 py-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
-                    <span>Directory: <code>${escapeHtml(p.content_dir)}</code></span>
-                    <span>Mode: <strong class="text-slate-200 uppercase">${p.publishing_mode}</strong></span>
-                </div>
+                ${projectRunHtml(p, alertData)}
             </div>
 
             <div class="mt-4 pt-3 border-t border-slate-800 space-y-2">
@@ -505,7 +498,7 @@ async function loadProjects() {
 }
 
 // The scheduler works in India time: it runs a project once a day, at or after its publish time.
-function projectRunHtml(p, postData, alertData) {
+function projectRunHtml(p, alertData) {
     const ist = d => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(d)
         .reduce((o, x) => (o[x.type] = x.value, o), {});
     const last = p.last_run_at ? new Date(/Z|[+-]\d\d:?\d\d$/.test(p.last_run_at) ? p.last_run_at : p.last_run_at.replace(' ', 'T') + 'Z') : null;
@@ -515,12 +508,11 @@ function projectRunHtml(p, postData, alertData) {
     const time = String(p.publish_time || '09:00').padStart(5, '0');
     const next = ranToday ? `tomorrow ${time}` : `${now.hour}:${now.minute}` >= time ? `due now (${time})` : `today ${time}`;
     const failure = ((alertData && alertData.alerts) || []).find(a => !a.resolved_at && a.link === `project:${p.id}`);
-    const drafts = postData && postData.posts ? postData.posts.filter(x => x.project_id === p.id && (x.status === 'in_review' || x.status === 'draft')).length : null;
     const lastText = last ? last.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'never';
     return `<dl class="mt-3 text-xs text-slate-400 space-y-0.5">
         <div><dt class="inline">Next run: </dt><dd class="inline text-slate-200">${escapeHtml(next)} India time</dd></div>
         <div><dt class="inline">Last run: </dt><dd class="inline text-slate-200">${escapeHtml(lastText)}</dd>${failure ? ` <span class="text-red-300">Problem: ${escapeHtml(failure.message)}</span>` : ''}</div>
-        ${drafts === null ? '' : `<div><dt class="inline">Drafts waiting: </dt><dd class="inline text-slate-200">${drafts}</dd>${drafts ? ` <button type="button" class="underline text-cyan-400" onclick="switchTab('staging')">Review</button>` : ''}</div>`}
+        <div><button type="button" class="underline text-cyan-400" onclick="showWebsitePosts(${Number(p.id)})">View posts</button></div>
     </dl>`;
 }
 
