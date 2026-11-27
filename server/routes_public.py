@@ -87,7 +87,7 @@ def handle_public_request(path: str, query: Dict[str, str], client_ip: str = "")
     if sub_path == "posts" and len(parts) == 7 and parts[6] == "og-image.svg":
         slug = parts[5]
         post = get_post_by_slug(project_id, slug)
-        title = post["title"] if post else "Technical Deep Dive"
+        title = post["title"] if post and post.get("status") == "published" else "Technical Deep Dive"
         author = project.get("author_name", "Editorial Team")
         svg = generate_hero_svg(title=title, category=project.get("name", "Engineering"), author=author)
         return 200, "image/svg+xml; charset=utf-8", svg

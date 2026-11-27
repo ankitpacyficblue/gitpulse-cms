@@ -149,7 +149,9 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
         "status": initial_status
     })
 
+    from engine import blog_plan
     if not should_publish_now:
+        blog_plan.mirror(post_id)
         log_event(f"Post #{post_id} entered Editorial Staging queue ('in_review'). Awaiting human approval.", "INFO", project_id=project_id, post_id=post_id)
         update_project_last_run(project_id)
         return {
@@ -165,6 +167,7 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
 
     # 8. Make it live: the website reads published posts from GitPulse
     update_post_status(post_id=post_id, status="published")
+    blog_plan.mirror(post_id)
     update_project_last_run(project_id)
     log_event(f"Published post #{post_id}.", "INFO", project_id=project_id, post_id=post_id)
 

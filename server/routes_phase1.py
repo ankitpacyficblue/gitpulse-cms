@@ -10,7 +10,7 @@ import urllib.parse
 import crm_store as cs
 import database as db
 import dbcompat
-from engine import alerts, assistant, blog_plan, contact_fields, jobs, media, messaging, writer_tokens
+from engine import alerts, assistant, blog_plan, contact_fields, content, jobs, media, messaging, writer_tokens
 from engine.whatsapp_client import WhatsAppClient
 from engine.permissions import has_permission
 from server.routes_api import route
@@ -231,6 +231,10 @@ def fields_delete(ctx, m, q, body):
 
 # ------------------------------------------------------------------ blog plan
 
+def _forbidden_publish():
+    return 403, {"error": "forbidden", "required": "content.publish"}
+
+
 def _plan(fn, status: int = 200):
     try:
         return status, {"success": True, "item": fn()}
@@ -249,7 +253,7 @@ def plan_list(ctx, m, q, body):
 @route("POST", r"/api/blog/plan", "acct:content.write")
 def plan_create(ctx, m, q, body):
     if body.get("writer_token_id") and not has_permission(ctx.role, "content.publish"):
-        return 403, {"error": "forbidden", "required": "content.publish"}
+        return _forbidden_publish()
     return _plan(lambda: blog_plan.create(ctx.account_id, body), 201)
 
 
@@ -257,7 +261,14 @@ def plan_create(ctx, m, q, body):
 def plan_update(ctx, m, q, body):
     if "writer_token_id" in body and not has_permission(ctx.role, "content.publish"):
         return 403, {"error": "forbidden", "required": "content.publish"}
-    return _plan(lambda: blog_plan.update(ctx.account_id, int(m.group("id")), body))
+    item_id, publisher = int(m.group("id")), has_permission(ctx.role, "content.publish")
+    if not publisher:
+        try:
+            if blog_plan.get_item(ctx.account_id, item_id)["state"] == "published":
+                return _forbidden_publish()
+        except blog_plan.PlanError:
+            pass      # update() reports it
+    return _plan(lambda: blog_plan.update(ctx.account_id, item_id, body, can_publish=publisher))
 
 
 @route("DELETE", r"/api/blog/plan/(?P<id>\d+)", "acct:content.write")
@@ -298,7 +309,18 @@ def plan_approve(ctx, m, q, body):
 
 @route("POST", r"/api/blog/plan/(?P<id>\d+)/publish-now", "acct:content.publish")
 def plan_publish_now(ctx, m, q, body):
-    res = _plan(lambda: blog_plan.publish_now(ctx.account_id, int(m.group("id"))))
+    item_id = int(m.group("id"))
+    try:
+        before = blog_plan.get_item(ctx.account_id, item_id)["state"]
+    except blog_plan.PlanError:
+        before = ""
+    res = _plan(lambda: blog_plan.publish_now(ctx.account_id, item_id, ctx.host))
+    # Approved here as part of publishing: the checks passed even if the publish itself then failed.
+    if before in ("in_review", "failed") and (res[0] == 200 or res[1].get("error") in ("publish_failed", "not_published")):
+        if before == "failed":
+            db.log_event(f"Planned post #{item_id} publish retried by {ctx.user['username']}.", "INFO",
+                         account_id=ctx.account_id)
+        db.log_event(f"Planned post #{item_id} approved by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
     if res[0] == 200:
         db.log_event(f"Planned post #{m.group('id')} published now by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
     return res
@@ -400,3 +422,41 @@ def writer_revise(ctx, m, q, body):
 @route("POST", r"/api/writer/posts/(?P<id>\d+)/submit", "writer")
 def writer_submit(ctx, m, q, body):
     return _writer(lambda: {"item": writer_tokens.submit(ctx.writer, int(m.group("id")))})
+
+
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/unpublish", "acct:content.publish")
+def plan_unpublish(ctx, m, q, body):
+    res = _plan(lambda: blog_plan.unpublish(ctx.account_id, int(m.group("id"))))
+    if res[0] == 200:
+        db.log_event(f"Planned post #{m.group('id')} unpublished by {ctx.user['username']}.", "INFO", account_id=ctx.account_id)
+    return res
+
+
+# ------------------------------------------------------------------ dashboard and posts list
+
+def _content(ctx, q, build):
+    try:
+        return 200, build(content.accounts_for(ctx.user, q.get("account", "all")))
+    except blog_plan.PlanError as e:
+        return e.status, {"success": False, "error": e.code, "message": e.message}
+
+
+@route("GET", r"/api/dashboard", "session")
+def dashboard_get(ctx, m, q, body):
+    jobs.maybe_tick()
+    return _content(ctx, q, lambda accounts: content.dashboard(accounts, ctx.host))
+
+
+@route("GET", r"/api/content/posts", "session")
+def content_list(ctx, m, q, body):
+    return _content(ctx, q, lambda accounts: content.listing(accounts, q, ctx.host))
+
+
+@route("GET", r"/api/content/options", "session")
+def content_options(ctx, m, q, body):
+    return _content(ctx, q, content.options)
+
+
+@route("GET", r"/api/content/posts/(?P<id>\d+)", "session")
+def content_post(ctx, m, q, body):
+    return _content(ctx, {}, lambda accounts: {"item": content.detail(accounts, int(m.group("id")), ctx.host)})

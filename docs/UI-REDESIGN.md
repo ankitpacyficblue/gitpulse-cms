@@ -41,6 +41,7 @@ and blog work is split over four screens and two data models.
 - **Unpublish** (needs `content.publish`) takes a post off the website and makes it Draft. The `posts` row is kept
   and reused on the next publish. Older published copies with the same website address (slug) come off too, so
   none resurfaces. Files already made public keep their links.
+- "Publish now" also retries a Failed post (same checks; the retry is logged). `can.publish_now` is true for it.
 - "Publish now" works from In review: it approves, then publishes. Same checks as approval, and it records the
   approver and time as Approve does.
 
@@ -156,5 +157,8 @@ rather than reading the older response shape.
 
 Rules the UI must show: editing a scheduled post sends it back to In review; editing a failed post makes it
 Draft.
+Editing a published post goes live at once, keeps its web address, and accepts only `title`, `body`, `keyword`,
+`images`, `seo_title`, `meta_description`, `assignee_id`, `writer_token_id`: send only changed fields. Anything
+else returns 409 `published`.
 
 The old `/api/posts*` and `GET /api/blog/plan` routes stay until the new screens ship, then are removed.

@@ -524,7 +524,7 @@ class BlogPlanTests(Base):
         self.assertIn("Visits are on weekends.", pub.call_args.args[0]["content_markdown"])
         self.assertEqual([self.item(i)["status"] for i in (due, later, unapproved)], ["published", "approved", "needs_approval"])
         self.assertEqual(self.item(due)["post_url"], "https://www.example.com/blog/visiting-the-plots")
-        self.assertEqual(self.writer("PATCH", f"/api/blog/plan/{due}", {"title": "z"})[0], 409)
+        self.assertEqual(self.writer("PATCH", f"/api/blog/plan/{due}", {"title": "z"})[0], 403)      # live: publishers only
 
     def test_failure_raises_alert_and_does_not_repeat(self):
         item = self.new()
@@ -595,7 +595,7 @@ class PublishNowTests(Base):
         self.assertEqual(publish.call_count, 1)
 
     def test_refuses_unapproved_and_reports_a_failure(self):
-        waiting = self.post_waiting(status="needs_approval")
+        waiting = self.api("POST", "/api/blog/plan", {"title": "Draft"})[1]["item"]["id"]      # not in review yet
         self.assertEqual(self.api("POST", f"/api/blog/plan/{waiting}/publish-now")[1]["error"], "wrong_status")
         item = self.post_waiting()
         with mock.patch.object(blog_plan, "publish", return_value={"success": False, "error": "no access"}):
