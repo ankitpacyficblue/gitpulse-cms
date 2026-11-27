@@ -97,7 +97,7 @@ def handle_public_request(path: str, query: Dict[str, str], client_ip: str = "")
         all_posts = list_posts(project_id=project_id, limit=25)
         published = [p for p in all_posts if p.get("status") == "published"]
         items_xml = ""
-        site = (get_account(project.get("account_id") or "") or {}).get("website_url", "")
+        site = project.get("website_url") or (get_account(project.get("account_id") or "") or {}).get("website_url", "")
         for p in published:
             items_xml += f"""
     <item>

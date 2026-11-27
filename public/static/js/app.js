@@ -462,6 +462,7 @@ async function loadProjects() {
                     </span>
                 </div>
                 <h3 class="font-bold text-white text-base">${escapeHtml(p.name)}</h3>
+                ${safeUrl(p.website_url) ? `<a href="${escapeHtml(p.website_url)}" target="_blank" rel="noopener" class="block text-xs text-cyan-400 hover:underline break-all mt-0.5">${escapeHtml(p.website_url)}</a>` : '<p class="text-xs text-slate-500 mt-0.5">Uses the account address</p>'}
                 ${p.topic ? `<p class="text-xs text-slate-400 mt-2 line-clamp-2"><strong>Niche:</strong> ${escapeHtml(p.topic)}</p>` : ''}
                 
                 ${projectRunHtml(p, alertData)}
@@ -666,7 +667,7 @@ async function openAddProjectModal() {
 function closeAddProjectModal() {
     el('modal-add-project').classList.add('hidden');
 }
-// The address already saved for the chosen account, so it is not typed twice.
+// Starts from the account's address, which most websites use.
 async function fillProjectAddress() {
     const account = el('project-account').value;
     const info = account && await apiCall('GET', `/api/accounts/${encodeURIComponent(account)}`, undefined, { quiet: true, account });

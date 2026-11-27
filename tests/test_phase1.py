@@ -11,6 +11,7 @@ from unittest import mock
 import tests._env  # noqa: F401
 from tests.apihelpers import Caller, new_user, new_account, join, setup_db
 import crm_store as cs
+from engine import site_publish
 import database as db
 from engine import assistant, blog_plan, jobs, llm, media, messaging, writer_tokens
 from engine.whatsapp_client import WhatsAppClient
@@ -757,12 +758,33 @@ class ConnectWebsiteTests(Base):
         self.assertEqual(code, 201, out)
         project = db.get_project(out["id"])
         self.assertEqual((project["github_repo"], project["topic"]), ("", ""))
-        self.assertEqual(cs.get_account(self.a)["website_url"], "https://www.example.com")
-        self.assertEqual(self.connect()[0], 201)      # the saved address is enough
-        self.assertEqual(self.connect(website_url="https://other.example.com")[0], 409)
-        self.assertEqual(cs.get_account(self.a)["website_url"], "https://www.example.com")
+        self.assertEqual(project["website_url"], "https://www.example.com")
+        self.assertEqual(cs.get_account(self.a)["website_url"], "")      # kept on the website, not the account
 
-    def test_only_an_owner_saves_the_address(self):
+    def test_each_website_has_its_own_address_with_the_account_as_fallback(self):
+        website(self, self.a)
+        account = cs.get_account(self.a)["website_url"]
+        own = self.connect(website_url="https://own.example.org")[1]["id"]
+        plain = self.connect()[1]["id"]
+        self.assertEqual(site_publish.post_url(self.a, "s", own), "https://own.example.org/blog/s")
+        self.assertEqual(site_publish.post_url(self.a, "s", plain), account + "/blog/s")
+        self.assertEqual(site_publish.post_url(self.b, "s", own), "")      # another account never gets it
+
+    def test_migration_copies_the_address_onto_villa_rows_only(self):
+        for account, name in ((self.a, "The Villa Projekt"), (self.b, "Other Homes")):
+            with db.get_connection() as conn:
+                conn.execute("UPDATE accounts SET name = ?, website_url = 'https://www.example.com' WHERE id = ?", (name, account))
+                conn.commit()
+        villa = db.create_project({"name": "v"}, self.a)
+        other = db.create_project({"name": "o"}, self.b)
+        with db.get_connection() as conn:
+            conn.execute("ALTER TABLE projects DROP COLUMN website_url")      # a database from before this change
+            conn.commit()
+        db.init_db()
+        self.assertEqual(db.get_project(villa)["website_url"], "https://www.example.com")
+        self.assertEqual(db.get_project(other)["website_url"], "")
+
+    def test_only_an_owner_picks_a_different_address(self):
         admin = new_user("adm")
         join(self.a, admin, "admin")
         api = Caller(admin, self.a)

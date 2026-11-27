@@ -112,7 +112,7 @@ def _present(accounts: List[Dict[str, Any]], rows: List[Dict[str, Any]], host: s
                 "project_id": row["project_id"], "project_name": names.get(row["project_id"]),
                 "title": row["title"], "state": state, "publish_at": v["publish_at"], "published_at": v["published_at"],
                 "updated_at": _z(row["updated_at"]),
-                "url": (row["post_url"] or site_publish.post_url(row["account_id"], slug)) if state == "published" else "",
+                "url": (row["post_url"] or site_publish.post_url(row["account_id"], slug, row["project_id"])) if state == "published" else "",
                 "error": row["error"], "rejected_note": v["rejected_note"], "writer_id": row["writer_token_id"],
                 "writer": v["writer"], "assignee_id": row["assignee_id"], "assignee_name": v["assignee_name"],
                 "cover": _cover(v, post), "missing": missing, "can": _can(account["role"], state, missing)}

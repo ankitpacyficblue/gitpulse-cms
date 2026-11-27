@@ -1338,7 +1338,7 @@ def render_dashboard_html() -> str:
                 <div><label for="project-account" class="block text-xs text-slate-400 mb-1">Account</label><select id="project-account" class="input-select text-sm" required onchange="fillProjectAddress()"></select></div>
                 <div><label for="project-name" class="block text-xs text-slate-400 mb-1">Website name</label><input id="project-name" class="input-text text-sm" required maxlength="100" placeholder="Villa blog"></div>
                 <div><label for="project-url" class="block text-xs text-slate-400 mb-1">Website address</label><input id="project-url" type="url" class="input-text text-sm" required maxlength="200" placeholder="https://www.example.com">
-                    <p class="text-[11px] text-slate-500 mt-1">Posts open at /blog/&lt;post&gt; on this address. An account has one address.</p></div>
+                    <p class="text-[11px] text-slate-500 mt-1">This website's posts open at /blog/&lt;post&gt; on this address.</p></div>
                 <div class="flex flex-wrap justify-end gap-2 pt-1">
                     <button type="button" class="btn-secondary text-xs" onclick="closeAddProjectModal()">Cancel</button>
                     <button type="submit" id="project-save" class="btn-primary text-xs">Connect website</button>

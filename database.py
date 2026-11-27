@@ -242,6 +242,12 @@ def _apply_schema(conn):
     if "account_id" not in project_cols:
         # Nullable only for pre-account rows; those stay invisible to every account until assigned.
         cursor.execute("ALTER TABLE projects ADD COLUMN account_id TEXT REFERENCES accounts(id)")
+    if "website_url" not in project_cols:
+        # Each website has its own address; an empty one falls back to the account's.
+        cursor.execute("ALTER TABLE projects ADD COLUMN website_url TEXT NOT NULL DEFAULT ''")
+        # Once, for The Villa Projekt only: other accounts' rows are left as they are.
+        cursor.execute("UPDATE projects SET website_url = (SELECT a.website_url FROM accounts a WHERE a.id = projects.account_id) "
+                       "WHERE website_url = '' AND account_id IN (SELECT id FROM accounts WHERE LOWER(name) LIKE '%villa projekt%')")
     log_cols = [c[1] for c in cursor.execute("PRAGMA table_info(system_logs)").fetchall()]
     if "account_id" not in log_cols:
         cursor.execute("ALTER TABLE system_logs ADD COLUMN account_id TEXT")
@@ -430,8 +436,8 @@ def create_project(data: Dict[str, Any], account_id: str) -> int:
                 frontmatter_template, topic, target_audience, tone,
                 keywords, author_name, publishing_mode, publish_time,
                 is_active, auto_publish, forbidden_words, webhook_secret,
-                zero_redeploy_enabled, blog_page_path, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                zero_redeploy_enabled, blog_page_path, created_at, updated_at, website_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             account_id,
             data.get("name", "New Project"),
@@ -456,7 +462,8 @@ def create_project(data: Dict[str, Any], account_id: str) -> int:
             1 if data.get("zero_redeploy_enabled", True) else 0,
             data.get("blog_page_path", "public/blog/index.html").strip(),
             now,
-            now
+            now,
+            data.get("website_url", "")      # already checked by the route
         ))
         conn.commit()
         project_id = cursor.lastrowid
