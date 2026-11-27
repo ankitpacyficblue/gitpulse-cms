@@ -408,9 +408,11 @@ class WhatsAppClient:
             text = text.replace("{{phone}}", contact.get("phone", ""))
             try:
                 messaging.send(self.account_id, contact, text, sent_by="automation")
-            except messaging.Blocked:
+            except messaging.Blocked as e:
+                cs.record_automation_run(self.account_id, auto["id"], False, str(e))
                 continue
             answered = answered or trigger == "keyword"
+            cs.record_automation_run(self.account_id, auto["id"])
             cs.increment_automation_execution(self.account_id, auto["id"])
             db.log_event(f"Triggered WhatsApp automation '{auto['name']}'", "INFO", account_id=self.account_id)
         return answered
@@ -427,6 +429,7 @@ class WhatsAppClient:
                    if any(t.lower() in ("vip", "customer", "all") for t in c.get("tags", []))]
         queued = 0
         for rule in rules:
+            before, blocked = queued, 0
             for c in targets:
                 values = {"title": post_title, "url": post_url, "name": c.get("name", "there"), "phone": c.get("phone", "")}
                 try:
@@ -435,8 +438,11 @@ class WhatsAppClient:
                                          params=self._fill(json.loads(rule.get("template_params") or "[]"), values))
                     queued += 1
                 except messaging.Blocked:
+                    blocked += 1
                     continue
             cs.increment_automation_execution(self.account_id, rule["id"])
+            failed = bool(blocked) and queued == before      # nobody could be sent to
+            cs.record_automation_run(self.account_id, rule["id"], not failed, "every recipient was blocked" if failed else "")
             db.log_event(f"Blog publish alert queued for {queued} contacts via rule '{rule['name']}'.", "INFO",
                          account_id=self.account_id)
         return queued

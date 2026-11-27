@@ -35,7 +35,7 @@ window.addEventListener('popstate', () => { if (currentUser) routeFromHash(); })
 // Called by switchTab: keeps the address in step with the screen.
 function enterView(tabName) {
     const { view, params } = readHash();
-    const listed = tabName === 'dashboard' || tabName === 'posts';
+    const listed = tabName === 'dashboard' || tabName === 'posts' || tabName === 'wa-dashboard';
     el('account-switch').classList.toggle('hidden', listed);
     document.querySelectorAll('[data-tabs]').forEach(b => { b.style.display = b.dataset.tabs.split(' ').includes(tabName) ? '' : 'none'; });
     if (view !== tabName) history.replaceState(null, '', `#${tabName}${listed && params.get('account') ? query({ account: params.get('account') }) : ''}`);
@@ -44,9 +44,14 @@ function enterView(tabName) {
 
 async function renderView() {
     const { view, params } = readHash();
-    if ((view !== 'dashboard' && view !== 'posts') || !currentUser) return;
+    if (!['dashboard', 'posts', 'wa-dashboard'].includes(view) || view !== currentTab || !currentUser) return;
     const seq = ++viewSeq, account = params.get('account') || 'all';
     el(`tab-${view}`).setAttribute('aria-busy', 'true');
+    if (view === 'wa-dashboard') {
+        await renderCrmDashboard(account, seq);
+        if (seq === viewSeq) el(`tab-${view}`).removeAttribute('aria-busy');
+        return;
+    }
     viewOptions = await apiCall('GET', `/api/content/options${query({ account: 'all' })}`, undefined, { quiet: true });
     if (seq !== viewSeq) return;
     fillAccountSwitch(view, account);
@@ -125,7 +130,7 @@ async function renderDashboard(account, seq) {
     const recent = list(data.recent, 'Nothing published yet.', p => `<li><div class="rd-grow">${titleButton(p)}<p class="rd-meta">${meta([name(p), fmtIst(p.published_at)])}</p></div>${webLink(p.url)}</li>`);
     const alerts = list(data.alerts, 'No problems.', a => `<li><div class="rd-grow"><p class="rd-alert-${a.severity === 'error' ? 'error' : 'warn'}">${escapeHtml(a.message)}${a.count > 1 ? ` (${Number(a.count)} times)` : ''}</p><p class="rd-meta">${meta([a.account_name, fmtIst(a.last_seen)])}</p></div>
         <div class="rd-actions">${/^(blog|conversation|project):\d+$|^messages$/.test(a.link || '') ? `<button type="button" class="btn-secondary text-xs" data-link="${escapeHtml(a.link)}" data-account="${escapeHtml(a.account_id || '')}">Open</button>` : ''}
-        ${a.id ? `<button type="button" class="btn-secondary text-xs" data-dismiss="${Number(a.id)}" data-account="${escapeHtml(a.account_id || '')}">Dismiss</button>` : ''}</div></li>`);
+        ${a.id && canDismiss(a) ? `<button type="button" class="btn-secondary text-xs" data-dismiss="${Number(a.id)}" data-account="${escapeHtml(a.account_id || '')}">Dismiss</button>` : ''}</div></li>`);
     box.innerHTML = `<div class="rd-cards">
         ${card('In review', c.in_review, { tab: 'in_review' }, 'rd-tone-warn')}
         ${card('Scheduled, next 7 days', c.scheduled_7d, { tab: 'scheduled', from: now, to: week })}

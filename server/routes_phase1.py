@@ -12,7 +12,8 @@ import database as db
 import dbcompat
 from engine import alerts, assistant, blog_plan, contact_fields, content, jobs, media, messaging, writer_tokens
 from engine.whatsapp_client import WhatsAppClient
-from engine.permissions import has_permission
+from engine import access
+from engine import crm_dashboard
 from server.routes_api import route
 
 
@@ -31,12 +32,12 @@ def internal_tick(ctx, m, q, body):
 
 # ------------------------------------------------------------------ assistant
 
-@route("GET", r"/api/ai/knowledge", "acct:crm.read")
+@route("GET", r"/api/ai/knowledge", "acct:ai_assistant:view")
 def knowledge_get(ctx, m, q, body):
     return 200, {"knowledge": assistant.get_knowledge(ctx.account_id)}
 
 
-@route("PUT", r"/api/ai/knowledge", "acct:ai.manage")
+@route("PUT", r"/api/ai/knowledge", "acct:ai_assistant:manage")
 def knowledge_put(ctx, m, q, body):
     try:
         data = assistant.save_knowledge(ctx.account_id, body)
@@ -46,7 +47,7 @@ def knowledge_put(ctx, m, q, body):
     return 200, {"success": True, "knowledge": data}
 
 
-@route("POST", r"/api/ai/test", "acct:ai.manage")
+@route("POST", r"/api/ai/test", "acct:ai_assistant:manage")
 def knowledge_test(ctx, m, q, body):
     question = str(body.get("question") or "").strip()[:1000]
     if not question:
@@ -55,7 +56,7 @@ def knowledge_test(ctx, m, q, body):
     return 200, {"reply": out["reply"], "handoff": out["handoff"], "reason": out["reason"], "sent": False}
 
 
-@route("POST", r"/api/whatsapp/conversations/(?P<id>\d+)/ai", "acct:crm.write")
+@route("POST", r"/api/whatsapp/conversations/(?P<id>\d+)/ai", "acct:inbox:manage")
 def conversation_ai(ctx, m, q, body):
     mode = body.get("mode")
     if mode not in ("on", "off"):
@@ -66,7 +67,7 @@ def conversation_ai(ctx, m, q, body):
 
 # ------------------------------------------------------------------ templates
 
-@route("GET", r"/api/whatsapp/templates", "acct:crm.read")
+@route("GET", r"/api/whatsapp/templates", "acct:templates:view|inbox:view|broadcasts:view|automations:view")
 def templates_list(ctx, m, q, body):
     with db.get_connection() as conn:
         rows = conn.execute("SELECT name, language, category, status, body, variables, header_format, synced_at FROM wa_templates "
@@ -74,13 +75,13 @@ def templates_list(ctx, m, q, body):
     return 200, {"templates": [dict(r) for r in rows]}
 
 
-@route("POST", r"/api/whatsapp/templates/sync", "acct:automations.manage")
+@route("POST", r"/api/whatsapp/templates/sync", "acct:templates:manage")
 def templates_sync(ctx, m, q, body):
     res = WhatsAppClient(ctx.account_id).sync_templates()
     return (200 if res.get("ok") else 400), res
 
 
-@route("POST", r"/api/whatsapp/conversations/(?P<id>\d+)/template", "acct:crm.write")
+@route("POST", r"/api/whatsapp/conversations/(?P<id>\d+)/template", "acct:inbox:manage")
 def conversation_template(ctx, m, q, body):
     conv = cs.get_conversation(ctx.account_id, int(m.group("id")))
     if not conv:
@@ -100,7 +101,7 @@ def conversation_template(ctx, m, q, body):
 
 # ------------------------------------------------------------------ consent
 
-@route("PUT", r"/api/whatsapp/contacts/(?P<id>\d+)/consent", "acct:automations.manage")
+@route("PUT", r"/api/whatsapp/contacts/(?P<id>\d+)/consent", "acct:contacts:full")
 def contact_consent(ctx, m, q, body):
     status, source = str(body.get("status") or ""), str(body.get("source") or "").strip()
     if status not in ("unknown", "opted_in", "opted_out"):
@@ -116,15 +117,19 @@ def contact_consent(ctx, m, q, body):
 
 # ------------------------------------------------------------------ alerts
 
-@route("GET", r"/api/alerts", "acct:crm.read")
+@route("GET", r"/api/alerts", "acct:crm:view|posts:view|blog_dashboard:view")
 def alerts_list(ctx, m, q, body):
-    rows = alerts.list_alerts(ctx.account_id, include_resolved=q.get("all") in ("1", "true"))
+    rows = [r for r in alerts.list_alerts(ctx.account_id, include_resolved=q.get("all") in ("1", "true"))
+            if access.sees_alert(ctx.who, r)]
     return 200, {"alerts": rows, "open": sum(1 for r in rows if not r["resolved_at"] and r["severity"] != "info")}
 
 
-@route("POST", r"/api/alerts/(?P<id>\d+)/resolve", "acct:crm.write")
+@route("POST", r"/api/alerts/(?P<id>\d+)/resolve", "acct:inbox:manage|contacts:manage|pipeline:manage|posts:manage")
 def alerts_resolve(ctx, m, q, body):
-    ok = alerts.resolve(ctx.account_id, int(m.group("id")))
+    aid = int(m.group("id"))
+    need = {True: "posts:manage", False: "inbox:manage|contacts:manage|pipeline:manage"}
+    ok = any(a["id"] == aid and access.allows(ctx.who, need[a["type"] == "blog_failed"])
+             for a in alerts.list_alerts(ctx.account_id)) and alerts.resolve(ctx.account_id, aid)
     return (200, {"success": True}) if ok else (404, {"error": "Alert not found."})
 
 
@@ -143,7 +148,7 @@ def _wa_link(account_id: str, prefill: str) -> str:
 LINK_SOURCES = ("website", "ad", "social", "other")
 
 
-@route("GET", r"/api/entry-links", "acct:crm.read")
+@route("GET", r"/api/entry-links", "acct:entry_links:view")
 def entry_links_list(ctx, m, q, body):
     with db.get_connection() as conn:
         rows = [dict(r) for r in conn.execute("SELECT id, label, code, prefill, source, campaign FROM entry_links "
@@ -160,7 +165,7 @@ def entry_links_list(ctx, m, q, body):
     return 200, {"links": rows, "enquiries_by_source": by_source, "has_number": bool(_wa_link(ctx.account_id, "x"))}
 
 
-@route("POST", r"/api/entry-links", "acct:automations.manage")
+@route("POST", r"/api/entry-links", "acct:entry_links:manage")
 def entry_links_create(ctx, m, q, body):
     label = str(body.get("label") or "").strip()[:100]
     code = str(body.get("code") or "").strip().upper() or secrets.token_hex(3).upper()
@@ -184,7 +189,7 @@ def entry_links_create(ctx, m, q, body):
     return 201, {"success": True, "id": link_id, "code": code, "prefill": prefill, "url": _wa_link(ctx.account_id, prefill)}
 
 
-@route("DELETE", r"/api/entry-links/(?P<id>\d+)", "acct:automations.manage")
+@route("DELETE", r"/api/entry-links/(?P<id>\d+)", "acct:entry_links:manage")
 def entry_links_delete(ctx, m, q, body):
     with db.get_connection() as conn:
         ok = conn.execute("DELETE FROM entry_links WHERE id = ? AND account_id = ?",
@@ -199,12 +204,12 @@ def _field_error(e):
     return e.status, {"error": e.code, "message": e.message}
 
 
-@route("GET", r"/api/contact-fields", "acct:crm.read")
+@route("GET", r"/api/contact-fields", "acct:contacts:view|inbox:view")
 def fields_list(ctx, m, q, body):
     return 200, {"fields": contact_fields.list_fields(ctx.account_id)}
 
 
-@route("POST", r"/api/contact-fields", "acct:automations.manage")
+@route("POST", r"/api/contact-fields", "acct:contacts:full")
 def fields_create(ctx, m, q, body):
     try:
         return 201, {"success": True, "field": contact_fields.create(ctx.account_id, body)}
@@ -212,7 +217,7 @@ def fields_create(ctx, m, q, body):
         return _field_error(e)
 
 
-@route("PATCH", r"/api/contact-fields/(?P<id>\d+)", "acct:automations.manage")
+@route("PATCH", r"/api/contact-fields/(?P<id>\d+)", "acct:contacts:full")
 def fields_update(ctx, m, q, body):
     try:
         return 200, {"success": True, "field": contact_fields.update(ctx.account_id, int(m.group("id")), body)}
@@ -220,7 +225,7 @@ def fields_update(ctx, m, q, body):
         return _field_error(e)
 
 
-@route("DELETE", r"/api/contact-fields/(?P<id>\d+)", "acct:automations.manage")
+@route("DELETE", r"/api/contact-fields/(?P<id>\d+)", "acct:contacts:full")
 def fields_delete(ctx, m, q, body):
     try:
         contact_fields.archive(ctx.account_id, int(m.group("id")))
@@ -242,7 +247,7 @@ def _plan(fn, status: int = 200):
         return e.status, {"success": False, "error": e.code, "message": e.message}
 
 
-@route("GET", r"/api/blog/plan", "acct:content.read")
+@route("GET", r"/api/blog/plan", "acct:posts:view")
 def plan_list(ctx, m, q, body):
     assignee = q.get("assignee_id", "")
     return 200, {"items": blog_plan.list_items(ctx.account_id, status=q.get("status", ""),
@@ -250,18 +255,18 @@ def plan_list(ctx, m, q, body):
                                                host=ctx.host), "tick_hours": jobs.TICK_HOURS}
 
 
-@route("POST", r"/api/blog/plan", "acct:content.write")
+@route("POST", r"/api/blog/plan", "acct:posts:manage")
 def plan_create(ctx, m, q, body):
-    if body.get("writer_token_id") and not has_permission(ctx.role, "content.publish"):
+    if body.get("writer_token_id") and not access.allows(ctx.who, "posts:full"):
         return _forbidden_publish()
     return _plan(lambda: blog_plan.create(ctx.account_id, body), 201)
 
 
-@route("PATCH", r"/api/blog/plan/(?P<id>\d+)", "acct:content.write")
+@route("PATCH", r"/api/blog/plan/(?P<id>\d+)", "acct:posts:manage")
 def plan_update(ctx, m, q, body):
-    if "writer_token_id" in body and not has_permission(ctx.role, "content.publish"):
+    if "writer_token_id" in body and not access.allows(ctx.who, "posts:full"):
         return 403, {"error": "forbidden", "required": "content.publish"}
-    item_id, publisher = int(m.group("id")), has_permission(ctx.role, "content.publish")
+    item_id, publisher = int(m.group("id")), access.allows(ctx.who, "posts:full")
     if not publisher:
         try:
             if blog_plan.get_item(ctx.account_id, item_id)["state"] == "published":
@@ -271,7 +276,7 @@ def plan_update(ctx, m, q, body):
     return _plan(lambda: blog_plan.update(ctx.account_id, item_id, body, can_publish=publisher))
 
 
-@route("DELETE", r"/api/blog/plan/(?P<id>\d+)", "acct:content.write")
+@route("DELETE", r"/api/blog/plan/(?P<id>\d+)", "acct:posts:manage")
 def plan_delete(ctx, m, q, body):
     try:
         blog_plan.delete(ctx.account_id, int(m.group("id")))
@@ -280,17 +285,17 @@ def plan_delete(ctx, m, q, body):
     return 200, {"success": True}
 
 
-@route("POST", r"/api/blog/plan/(?P<id>\d+)/draft", "acct:content.write")
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/draft", "acct:posts:manage")
 def plan_draft(ctx, m, q, body):
     return _plan(lambda: blog_plan.draft(ctx.account_id, int(m.group("id"))))
 
 
-@route("POST", r"/api/blog/plan/(?P<id>\d+)/submit", "acct:content.write")
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/submit", "acct:posts:manage")
 def plan_submit(ctx, m, q, body):
     return _plan(lambda: blog_plan.submit(ctx.account_id, int(m.group("id"))))
 
 
-@route("POST", r"/api/blog/plan/(?P<id>\d+)/reject", "acct:content.publish")
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/reject", "acct:posts:full")
 def plan_reject(ctx, m, q, body):
     res = _plan(lambda: blog_plan.reject(ctx.account_id, int(m.group("id")), body.get("note"), ctx.user["id"]))
     if res[0] == 200:
@@ -299,7 +304,7 @@ def plan_reject(ctx, m, q, body):
     return res
 
 
-@route("POST", r"/api/blog/plan/(?P<id>\d+)/approve", "acct:content.publish")
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/approve", "acct:posts:full")
 def plan_approve(ctx, m, q, body):
     res = _plan(lambda: blog_plan.approve(ctx.account_id, int(m.group("id")), ctx.host))
     if res[0] == 200:
@@ -307,7 +312,7 @@ def plan_approve(ctx, m, q, body):
     return res
 
 
-@route("POST", r"/api/blog/plan/(?P<id>\d+)/publish-now", "acct:content.publish")
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/publish-now", "acct:posts:full")
 def plan_publish_now(ctx, m, q, body):
     item_id = int(m.group("id"))
     try:
@@ -335,24 +340,24 @@ def _media(action, code=200):
         return e.status, {"error": e.code, "message": e.message}
 
 
-@route("GET", r"/api/media", "acct:crm.read")
+@route("GET", r"/api/media", "acct:media:view|posts:view|inbox:view")
 def media_list(ctx, m, q, body):
     if not media.configured():
         return 200, {"configured": False, "items": []}
     return _media(lambda: {"configured": True, "items": media.list_items(ctx.account_id, q.get("q", ""), ctx.host)})
 
 
-@route("POST", r"/api/media/upload-url", "acct:content.write")
+@route("POST", r"/api/media/upload-url", "acct:media:manage|posts:manage|inbox:manage")
 def media_upload_url(ctx, m, q, body):
     return _media(lambda: media.create_upload(ctx.account_id, ctx.user["id"], body), 201)
 
 
-@route("POST", r"/api/media", "acct:content.write")
+@route("POST", r"/api/media", "acct:media:manage|posts:manage|inbox:manage")
 def media_confirm(ctx, m, q, body):
     return _media(lambda: {"item": media.confirm(ctx.account_id, body.get("media_id"), ctx.host)}, 201)
 
 
-@route("DELETE", r"/api/media/(?P<id>\d+)", "acct:content.publish")
+@route("DELETE", r"/api/media/(?P<id>\d+)", "acct:media:full")
 def media_delete(ctx, m, q, body):
     return _media(lambda: media.delete(ctx.account_id, m.group("id"), force=q.get("force") == "1") or {"success": True})
 
@@ -366,12 +371,12 @@ def _writer(action, code=200):
         return e.status, {"error": e.code, "message": e.message}
 
 
-@route("GET", r"/api/writer-tokens", "acct:users.manage")
+@route("GET", r"/api/writer-tokens", "acct:users:manage")
 def writer_token_list(ctx, m, q, body):
     return 200, {"tokens": writer_tokens.list_tokens(ctx.account_id)}
 
 
-@route("POST", r"/api/writer-tokens", "acct:users.manage")
+@route("POST", r"/api/writer-tokens", "acct:users:manage")
 def writer_token_create(ctx, m, q, body):
     res = _writer(lambda: writer_tokens.create(ctx.account_id, body.get("name"), ctx.user["id"], body.get("project_id")),
                   201)
@@ -380,7 +385,7 @@ def writer_token_create(ctx, m, q, body):
     return res
 
 
-@route("DELETE", r"/api/writer-tokens/(?P<id>\d+)", "acct:users.manage")
+@route("DELETE", r"/api/writer-tokens/(?P<id>\d+)", "acct:users:manage")
 def writer_token_revoke(ctx, m, q, body):
     res = _writer(lambda: writer_tokens.revoke(ctx.account_id, int(m.group("id"))) or {"success": True})
     if res[0] == 200:
@@ -424,7 +429,7 @@ def writer_submit(ctx, m, q, body):
     return _writer(lambda: {"item": writer_tokens.submit(ctx.writer, int(m.group("id")))})
 
 
-@route("POST", r"/api/blog/plan/(?P<id>\d+)/unpublish", "acct:content.publish")
+@route("POST", r"/api/blog/plan/(?P<id>\d+)/unpublish", "acct:posts:full")
 def plan_unpublish(ctx, m, q, body):
     res = _plan(lambda: blog_plan.unpublish(ctx.account_id, int(m.group("id"))))
     if res[0] == 200:
@@ -434,9 +439,9 @@ def plan_unpublish(ctx, m, q, body):
 
 # ------------------------------------------------------------------ dashboard and posts list
 
-def _content(ctx, q, build):
+def _content(ctx, q, need, build):
     try:
-        return 200, build(content.accounts_for(ctx.user, q.get("account", "all")))
+        return 200, build(content.accounts_for(ctx.user, q.get("account", "all"), need))
     except blog_plan.PlanError as e:
         return e.status, {"success": False, "error": e.code, "message": e.message}
 
@@ -444,19 +449,25 @@ def _content(ctx, q, build):
 @route("GET", r"/api/dashboard", "session")
 def dashboard_get(ctx, m, q, body):
     jobs.maybe_tick()
-    return _content(ctx, q, lambda accounts: content.dashboard(accounts, ctx.host))
+    return _content(ctx, q, "blog_dashboard:view", lambda accounts: content.dashboard(accounts, ctx.host))
 
 
 @route("GET", r"/api/content/posts", "session")
 def content_list(ctx, m, q, body):
-    return _content(ctx, q, lambda accounts: content.listing(accounts, q, ctx.host))
+    return _content(ctx, q, "posts:view", lambda accounts: content.listing(accounts, q, ctx.host))
 
 
 @route("GET", r"/api/content/options", "session")
 def content_options(ctx, m, q, body):
-    return _content(ctx, q, content.options)
+    return _content(ctx, q, "posts:view|blog_dashboard:view", content.options)
 
 
 @route("GET", r"/api/content/posts/(?P<id>\d+)", "session")
 def content_post(ctx, m, q, body):
-    return _content(ctx, {}, lambda accounts: {"item": content.detail(accounts, int(m.group("id")), ctx.host)})
+    return _content(ctx, {}, "posts:view", lambda accounts: {"item": content.detail(accounts, int(m.group("id")), ctx.host)})
+
+
+@route("GET", r"/api/crm/dashboard", "session")
+def crm_dashboard_get(ctx, m, q, body):
+    jobs.maybe_tick()
+    return _content(ctx, q, "crm_dashboard:view", crm_dashboard.build)

@@ -26,7 +26,8 @@ async function initApp() {
         return;
     }
     currentUser = authData.user;
-    try { window.__perms = authData.permissions || null; } catch (e) {}
+    window.__perms = authData.permissions || null;
+    window.__access = authData.access || {};
     const userEl = document.getElementById('header-username');
     if (userEl) userEl.innerText = currentUser.username;
     const avEl = document.getElementById('header-avatar');
@@ -77,15 +78,6 @@ async function initApp() {
 }
 
 // --- Tabs & Sidebar Navigation ---
-const TAB_GUARD = {
-    'users': () => can('users.manage'),
-    'wa-config': () => can('wa.config'),
-    'supabase': () => isPlatformAdmin(),
-    'settings': () => isPlatformAdmin(),
-    'logs': () => can('audit.read'),
-    'wa-broadcasts': () => can('crm.read')
-};
-
 // A platform admin with no client account still sees the whole menu; account screens explain what to do.
 const NO_ACCOUNT_OK = ['settings', 'supabase'];
 let currentTab = 'dashboard';
@@ -101,7 +93,7 @@ function showNoAccountPanel() {
 }
 
 function switchTab(tabName) {
-    if (TAB_GUARD[tabName] && currentUser && !needsFirstAccount() && !TAB_GUARD[tabName]()) tabName = 'dashboard';
+    if (currentUser && !needsFirstAccount() && !canTab(tabName)) tabName = firstTab();
     currentTab = tabName;
     if (window.innerWidth <= 900) toggleSidebar(false);
     toggleNewMenu(false);
@@ -113,13 +105,15 @@ function switchTab(tabName) {
     if (targetTab) targetTab.classList.remove('hidden');
 
     const clickedNav = Array.from(document.querySelectorAll('.sidebar-nav-item, .nav-tab')).filter(btn => 
-        btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(tabName)
+        btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(`'${tabName}'`)
     );
     clickedNav.forEach(el => el.classList.add('active'));
 
     // Dynamic header title update
     const titleMap = {
         'dashboard': { title: 'Dashboard', sub: 'What needs you, what goes live next, what just went live' },
+        'wa-dashboard': { title: 'CRM Dashboard', sub: 'Who is waiting, where deals stand, how messages performed' },
+        'none': { title: 'No access', sub: '' },
         'posts': { title: 'Posts', sub: 'Every blog post, from draft to live' },
         'repos': { title: 'Websites', sub: 'Where blog posts are published' },
         'wa-inbox': { title: 'Shared Team Inbox', sub: 'Two-way WhatsApp conversations for your team' },
@@ -349,8 +343,7 @@ function sumByCurrency(deals) {
 
 // --- Status & Metrics ---
 async function loadStatus() {
-    const status = await apiGet('/api/status');
-    if (!status) return;
+    const status = (hasAny('blog_dashboard', 'posts', 'websites') && await apiGet('/api/status')) || {};
 
     if (document.getElementById('stat-repos-count')) document.getElementById('stat-repos-count').innerText = status.projects_count || 0;
     if (document.getElementById('stat-posts-count')) document.getElementById('stat-posts-count').innerText = status.total_posts || 0;
@@ -373,10 +366,10 @@ async function loadStatus() {
         const cidParam = '';
 
         const [cntData, convData, dealData, autoData] = await Promise.all([
-            apiGet(`/api/whatsapp/contacts${cidParam}`),
-            apiGet(`/api/whatsapp/conversations${cidParam}`),
-            apiGet(`/api/whatsapp/deals${cidParam}`),
-            apiGet(`/api/whatsapp/automations${cidParam}`)
+            has('contacts') && apiGet(`/api/whatsapp/contacts${cidParam}`),
+            has('inbox') && apiGet(`/api/whatsapp/conversations${cidParam}`),
+            has('pipeline') && apiGet(`/api/whatsapp/deals${cidParam}`),
+            has('automations') && apiGet(`/api/whatsapp/automations${cidParam}`)
         ]);
 
         if (cntData && cntData.contacts) {
@@ -418,6 +411,7 @@ async function loadStatus() {
 
 // --- Projects Management ---
 async function loadProjects() {
+    if (!hasAny('websites', 'posts', 'blog_dashboard')) return;
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
     const url = '/api/projects';
     const data = await apiGet(url);
@@ -438,7 +432,7 @@ async function loadProjects() {
     }
 
     // The last failure per website. Quiet: the cards still show if the call fails.
-    const alertData = can('crm.read') ? await apiCall('GET', '/api/alerts', undefined, { quiet: true }) : null;
+    const alertData = (can('crm.read') || hasAny('posts', 'blog_dashboard')) ? await apiCall('GET', '/api/alerts', undefined, { quiet: true }) : null;
     const focused = grid.contains(document.activeElement) ? document.activeElement.id : '';
     grid.innerHTML = '';
 
@@ -472,7 +466,7 @@ async function loadProjects() {
             <div class="mt-4 pt-3 border-t border-slate-800 space-y-2">
                 <div class="flex justify-between items-center">
                     <div class="flex space-x-1.5">
-                        <button onclick="triggerProjectRun(${p.id}, this)" class="btn-primary text-xs py-1 px-2.5">
+                        <button data-run onclick="triggerProjectRun(${p.id}, this)" class="btn-primary text-xs py-1 px-2.5">
                             ✨ Write today's draft
                         </button>
                     </div>
@@ -482,6 +476,8 @@ async function loadProjects() {
                 </div>
             </div>
         `;
+        if (!has('posts', 'full')) card.querySelectorAll('[data-run]').forEach(b => b.remove());
+        if (!has('websites', 'manage')) card.querySelectorAll('.btn-danger').forEach(b => b.remove());
         grid.appendChild(card);
         if (focused === card.id) card.focus();
     });
@@ -570,6 +566,7 @@ async function onClientFilterChange() {
     updateAccountBanner();
     await refreshMe();
     applyRolePermissions();
+    if (!canTab(currentTab) || currentTab === 'none') switchTab(firstTab());
     reloadAccountData();
     reloadPhase1();
     if (!document.getElementById('tab-users').classList.contains('hidden')) loadUsersAndRoles();
@@ -581,6 +578,8 @@ async function refreshMe() {
     if (me && me.user) {
         currentUser = me.user;
         window.__perms = Array.isArray(me.permissions) ? me.permissions : null;
+        window.__access = me.access || {};
+        window.__roleName = me.role_name || '';
         window.__memberships = me.memberships || [];
         window.__platformAdmin = !!me.user.is_platform_admin;
         const acct = getActiveAccountId();
@@ -863,6 +862,7 @@ let currentConversationsList = [];
 // --- 1. Shared Team Inbox ---
 
 async function loadWhatsAppInbox(selectConvId = null) {
+    if (!has('inbox')) return;
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
     const af = document.getElementById('wa-assigned-filter');
     const url = '/api/whatsapp/conversations' + (af && af.value === 'me' ? '?assigned=me' : '');
@@ -935,7 +935,7 @@ async function selectConversation(convId, force = false) {
     if (idx !== -1 && allThreads[idx]) allThreads[idx].classList.add('active');
     
     // Mark as read
-    if (can('crm.write')) apiPost(`/api/whatsapp/conversations/${convId}/read`, {});
+    if (has('inbox', 'manage')) apiPost(`/api/whatsapp/conversations/${convId}/read`, {});
     
     const conv = currentConversationsList.find(c => c.id === convId);
     if (conv) {
@@ -1077,6 +1077,7 @@ function insertCannedReply(text) {
 // --- 2. Contacts CRM ---
 
 async function loadWhatsAppContacts() {
+    if (!has('contacts')) return;
     const search = document.getElementById('wa-contact-search') ? document.getElementById('wa-contact-search').value : '';
     const tag = document.getElementById('wa-contact-tag-filter') ? document.getElementById('wa-contact-tag-filter').value : '';
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
@@ -1135,14 +1136,14 @@ async function loadWhatsAppContacts() {
             </td>
             <td class="px-5 py-3 text-right">
                 <div class="flex items-center justify-end gap-1.5">
-                    ${contactFields.length && can('crm.write') ? `<button type="button" onclick="openContactFields(${Number(c.id)})" class="btn-secondary text-[11px] py-1 px-2.5">Fields</button>` : ''}
+                    ${contactFields.length && has('contacts', 'manage') ? `<button type="button" onclick="openContactFields(${Number(c.id)})" class="btn-secondary text-[11px] py-1 px-2.5">Fields</button>` : ''}
                     <button onclick="startChatWithContact(${c.id})" class="btn-secondary text-[11px] py-1 px-2.5 flex items-center gap-1 text-emerald-400 hover:text-emerald-300">
                         <span>💬 Chat</span>
                     </button>
-                    ${can('crm.write') ? `<button onclick="openAddDealModal(${c.id}, ${jsAttr(c.name)})" class="btn-secondary text-[11px] py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
+                    ${has('pipeline', 'manage') ? `<button onclick="openAddDealModal(${c.id}, ${jsAttr(c.name)})" class="btn-secondary text-[11px] py-1 px-2.5 text-indigo-400 hover:text-indigo-300">
                         <span>+ Deal</span>
                     </button>` : ''}
-                    ${can('crm.delete') ? `<button aria-label="Delete contact" onclick="deleteContactFromUI(${c.id}, ${jsAttr(c.name)})" class="text-slate-500 hover:text-red-400 p-1">🗑️</button>` : ''}
+                    ${has('contacts', 'full') ? `<button aria-label="Delete contact" onclick="deleteContactFromUI(${c.id}, ${jsAttr(c.name)})" class="text-slate-500 hover:text-red-400 p-1">🗑️</button>` : ''}
                 </div>
             </td>
         `;
@@ -1176,6 +1177,7 @@ async function deleteContactFromUI(id, name) {
 // --- 3. Sales Pipeline Kanban ---
 
 async function loadWhatsAppDeals() {
+    if (!has('pipeline')) return;
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
     const url = '/api/whatsapp/deals';
     
@@ -1212,14 +1214,14 @@ async function loadWhatsAppDeals() {
             const prevStage = stageIndex > 0 ? stages[stageIndex - 1] : null;
             const nextStage = stageIndex < stages.length - 1 ? stages[stageIndex + 1] : null;
             
-            const canMove = can('crm.write');
+            const canMove = has('pipeline', 'manage');
             const prevBtn = (canMove && prevStage) ? `<button onclick="updateDealStage(${deal.id}, '${prevStage}')" class="text-slate-500 hover:text-indigo-400 text-xs px-1" title="Move back to ${prevStage}">←</button>` : '';
             const nextBtn = (canMove && nextStage) ? `<button onclick="updateDealStage(${deal.id}, '${nextStage}')" class="text-slate-500 hover:text-emerald-400 text-xs px-1" title="Advance to ${nextStage}">→</button>` : '';
             
             card.innerHTML = `
                 <div class="flex justify-between items-start mb-1.5">
                     <h4 class="font-semibold text-xs text-white leading-snug">${escapeHtml(deal.title)}</h4>
-                    ${can('crm.delete') ? `<button aria-label="Delete deal" onclick="deleteDealFromUI(${deal.id})" class="text-slate-600 hover:text-red-400 text-xs ml-1">&times;</button>` : ''}
+                    ${has('pipeline', 'full') ? `<button aria-label="Delete deal" onclick="deleteDealFromUI(${deal.id})" class="text-slate-600 hover:text-red-400 text-xs ml-1">&times;</button>` : ''}
                 </div>
                 <div class="text-[11px] text-slate-400 mb-2">${escapeHtml(deal.contact_name || 'Unassigned Contact')}</div>
                 <div class="flex justify-between items-center pt-2 border-t border-slate-900 text-xs">
@@ -1258,6 +1260,7 @@ async function deleteDealFromUI(dealId) {
 // --- 4. Broadcast Campaigns ---
 
 async function loadWhatsAppBroadcasts() {
+    if (!has('broadcasts')) return;
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
     const url = '/api/whatsapp/broadcasts';
     
@@ -1358,6 +1361,7 @@ async function runBroadcastFromUI(broadcastId) {
 // --- 5. No-Code Automations Engine ---
 
 async function loadWhatsAppAutomations() {
+    if (!has('automations')) return;
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
     const url = '/api/whatsapp/automations';
     
@@ -1437,6 +1441,7 @@ async function deleteAutomationRule(id) {
 // --- 6. WhatsApp Configuration & Simulator ---
 
 async function loadWhatsAppConfig() {
+    if (!has('wa_setup')) return;
     const clientFilter = document.getElementById('client-select-filter') ? document.getElementById('client-select-filter').value : '';
     const url = '/api/whatsapp/config';
     
@@ -1459,7 +1464,7 @@ async function loadWhatsAppConfig() {
         mb.innerText = cfg.mock_mode ? 'Mock mode: messages are not sent' : 'Live';
     }
     const simCard = document.getElementById('wa-sim-card');
-    if (simCard) simCard.classList.toggle('hidden', !(cfg.mock_mode === true && can('wa.config')));
+    if (simCard) simCard.classList.toggle('hidden', !(cfg.mock_mode === true && has('wa_setup', 'manage')));
     const hint = document.getElementById('wa-webhook-url-display');
     if (hint) {
         const path = cfg.webhook_url || cfg.webhook_path || '';
@@ -1470,7 +1475,7 @@ async function loadWhatsAppConfig() {
     const st = document.getElementById('wa-cfg-status');
     if (st) st.innerText = !cfg.configured ? 'Not set up yet.' : (cfg.has_app_secret ? 'Connected. Webhook signatures are checked.' : 'Needs the app secret: Meta messages are rejected without it.');
     if (document.getElementById('wa-cfg-biz-name')) document.getElementById('wa-cfg-biz-name').value = cfg.business_name || '';
-    if (can('wa.config')) initWaWizard();
+    if (has('wa_setup', 'manage')) initWaWizard();
 }
 
 async function saveWhatsAppConfig(e) {
@@ -1722,15 +1727,9 @@ const ROLE_PERMISSIONS = {
     agent:  ['content.write', 'crm.read', 'crm.write', 'content.read'],
     viewer: ['crm.read', 'content.read']
 };
-const ROLE_HELP = {
-    owner: 'Full control, including users and billing.',
-    admin: 'Manage CRM, WhatsApp setup, publishing and users.',
-    agent: 'Work with contacts, chats and deals. No setup or user changes.',
-    viewer: 'Read only.'
-};
-
 function can(permission) {
     if (!currentUser) return false;
+    if (permission.includes(':')) return has(...permission.split(':'));
     const list = Array.isArray(window.__perms) ? window.__perms : (ROLE_PERMISSIONS[currentUser.role] || []);
     return list.includes(permission);
 }
@@ -1749,29 +1748,18 @@ function applyRolePermissions() {
         el.classList.toggle('hidden', !can(el.getAttribute('data-requires')));
     });
     document.querySelectorAll('[data-perm-disable]').forEach(el => { el.disabled = !can(el.getAttribute('data-perm-disable')); });
-    const nav = document.getElementById('nav-users');
-    if (nav) nav.classList.toggle('hidden', !can('users.manage'));
+    applySectionMenu();
     if (!getActiveAccountId() && !isPlatformAdmin()) {
         // No account chosen: CRM screens have nothing to show and every call would be rejected.
         document.querySelectorAll('.sidebar-nav-item[onclick*="switchTab(\'wa-"], #nav-users, #nav-blog-plan').forEach(n => n.classList.add('hidden'));
         document.querySelectorAll('header [onclick^="openAddContactModal"], header [onclick^="openAddDealModal"], header [onclick^="openAddBroadcastModal"]').forEach(n => n.classList.add('hidden'));
     }
-    const cfgNav = document.querySelector("[onclick*=\"switchTab('wa-config')\"]");
-    if (cfgNav) cfgNav.classList.toggle('hidden', !can('wa.config'));
-    const navGate = { logs: 'audit.read' };
-    Object.keys(navGate).forEach(t => {
-        const n = document.querySelector(`.sidebar-nav-item[onclick*="switchTab('${t}')"]`);
-        if (n) n.classList.toggle('hidden', !can(navGate[t]));
-    });
-    const ps = document.getElementById('nav-platform-section');
-    if (ps) ps.classList.toggle('hidden', ![...ps.querySelectorAll('.sidebar-nav-item')].some(n => !n.classList.contains('hidden')));
-    document.querySelectorAll('header [onclick^="openAddProjectModal"]').forEach(b => b.classList.toggle('hidden', !can('content.publish')));
+    document.querySelectorAll('header [onclick^="openAddProjectModal"]').forEach(b => b.classList.toggle('hidden', !has('websites', 'manage')));
     document.querySelectorAll('header [onclick^="openAddBroadcastModal"]').forEach(b => b.classList.toggle('hidden', !can('broadcasts.run')));
     const bcNote = document.getElementById('wa-bc-viewonly'); if (bcNote) bcNote.classList.toggle('hidden', can('broadcasts.run'));
     const auNote = document.getElementById('wa-auto-viewonly'); if (auNote) auNote.classList.toggle('hidden', can('automations.manage'));
-    const write = can('crm.write');
-    ['openAddContactModal', 'openAddDealModal'].forEach(fn => {
-        document.querySelectorAll(`header [onclick^="${fn}"]`).forEach(b => b.classList.toggle('hidden', !write));
+    [['openAddContactModal', 'contacts'], ['openAddDealModal', 'pipeline']].forEach(([fn, section]) => {
+        document.querySelectorAll(`header [onclick^="${fn}"]`).forEach(b => b.classList.toggle('hidden', !has(section, 'manage')));
     });
     const anyAction = [...document.querySelectorAll('#top-actions > *')].some(b => !b.classList.contains('hidden'));
     const nb = document.getElementById('new-menu-btn');
@@ -1783,60 +1771,11 @@ function applyRolePermissions() {
     }
     showNoAccountPanel();
     const roleEl = document.querySelector('.sidebar-footer .text-slate-400');
-    if (roleEl && currentUser) roleEl.innerText = isPlatformAdmin() ? 'Platform admin' : (currentUser.role ? currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1) : '');
+    if (roleEl && currentUser) roleEl.innerText = isPlatformAdmin() ? 'Platform admin' : (window.__roleName || '');
 }
 
 function navKey(ev, el) {
     if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); el.click(); }
-}
-
-async function loadUsersAndRoles() {
-    const acct = getActiveAccountId();
-    const body = document.getElementById('users-table-body');
-    const empty = document.getElementById('users-empty');
-    if (can('account.manage')) loadAccountSettings();
-    const an = document.getElementById('acct-name');
-    if (an) { const sl = document.getElementById('client-select-filter'); an.value = sl && sl.selectedOptions[0] ? sl.selectedOptions[0].text : ''; }
-    const nameEl = document.getElementById('users-account-name');
-    if (nameEl) {
-        const sel = document.getElementById('client-select-filter');
-        nameEl.innerText = sel && sel.selectedOptions[0] && acct ? sel.selectedOptions[0].text : 'this account';
-    }
-    if (!body) return;
-    body.innerHTML = '';
-    if (!acct) {
-        empty.innerHTML = emptyStateHtml('Choose a client account', 'Pick an account in the sidebar to see and manage its users.');
-        return;
-    }
-    const roles = can('account.manage') ? ['viewer', 'agent', 'admin', 'owner'] : ['viewer', 'agent', 'admin'];
-    const sel = document.getElementById('invite-role');
-    if (sel && !sel.options.length) {
-        roles.forEach(r => sel.add(new Option(r.charAt(0).toUpperCase() + r.slice(1), r)));
-        sel.onchange = () => { document.getElementById('invite-role-help').innerText = ROLE_HELP[sel.value] || ''; };
-        sel.onchange();
-    }
-    const data = await apiGet(`/api/accounts/${encodeURIComponent(acct)}/users`);
-    if (!data || !Array.isArray(data.users)) {
-        empty.innerHTML = emptyStateHtml('User management is not available yet', 'The server did not return a user list for this account.');
-        return;
-    }
-    empty.innerHTML = data.users.length ? '' : emptyStateHtml('No users in this account yet', 'Invite the first person with the form.');
-    const manage = can('users.manage');
-    data.users.forEach(u => {
-        const tr = document.createElement('tr');
-        const uid = u.user_id != null ? u.user_id : u.id;
-        const isSelf = currentUser && Number(uid) === Number(currentUser.id);
-        const locked = isSelf || (u.role === 'owner' && !can('account.manage'));
-        const opts = ['owner', 'admin', 'agent', 'viewer'].filter(r => r !== 'owner' || can('account.manage') || u.role === 'owner').map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r}</option>`).join('');
-        tr.innerHTML = `
-            <td class="px-3 sm:px-5 py-3 text-white break-all">${escapeHtml(u.username || u.email || '')}${u.email && u.username ? `<div class="text-[11px] text-slate-400">${escapeHtml(u.email)}</div>` : ''}${u.is_active === false ? '<span class="ml-2 text-[10px] text-amber-300">inactive</span>' : ''}</td>
-            <td class="px-5 py-3">${manage && !locked
-                ? `<select aria-label="Role for ${escapeHtml(u.username)}" class="input-text text-xs min-w-[6.5rem]" onchange="changeUserRole(${Number(uid)}, this.value)">${opts}</select>`
-                : `<span class="text-xs text-slate-300">${escapeHtml(u.role)}</span>`}</td>
-            <td class="px-5 py-3 text-right">${manage && !locked
-                ? `<button class="btn-secondary text-[11px] py-1 px-2.5 mr-1" onclick="resetUserPassword(${Number(uid)}, ${jsAttr(u.username)})">Reset password</button><button class="btn-secondary text-[11px] py-1 px-2.5 text-red-400" onclick="revokeUser(${Number(uid)}, ${jsAttr(u.username)})">Revoke access</button>` : ''}</td>`;
-        body.appendChild(tr);
-    });
 }
 
 async function submitInviteUser(e) {
@@ -2223,8 +2162,8 @@ function consentHtml(c) {
     const v = CONSENT_LABELS[c.consent_status] ? c.consent_status : 'unknown';
     const meta = [c.consent_source, fmtWhen(c.consent_at)].filter(Boolean).join(' · ');
     const when = meta ? `<div class="text-[10px] text-slate-500">${escapeHtml(meta)}</div>` : '';
-    const role = currentUser && currentUser.role;
-    if (!(role === 'owner' || role === 'admin' || isPlatformAdmin()) || !can('automations.manage')) return `<span class="text-xs ${v === 'opted_out' ? 'text-red-300 font-semibold' : 'text-slate-300'}">${CONSENT_LABELS[v]}</span>${when}`;
+    
+    if (!has('contacts', 'full')) return `<span class="text-xs ${v === 'opted_out' ? 'text-red-300 font-semibold' : 'text-slate-300'}">${CONSENT_LABELS[v]}</span>${when}`;
     const options = Object.keys(CONSENT_LABELS).map(k => `<option value="${k}" ${k === v ? 'selected' : ''}>${CONSENT_LABELS[k]}</option>`).join('');
     return `<select aria-label="Consent for ${escapeHtml(c.name)}" class="input-select text-xs py-1 min-w-[9rem] ${v === 'opted_out' ? 'text-red-300' : ''}" onchange="setConsent(${Number(c.id)}, this.value, '${v}', this)">${options}</select>${when}`;
 }
@@ -2467,7 +2406,7 @@ function renderWindow(conv) {
     const note = document.getElementById('wa-window-note');
     const closed = !!conv.id && conv.window_open === false;
     note.innerText = conv.id && conv.window_open && conv.window_expires_at ? `Free-text replies open until ${fmtWhen(conv.window_expires_at)}.` : '';
-    box.classList.toggle('hidden', !closed || !can('crm.write'));
+    box.classList.toggle('hidden', !closed || !has('inbox', 'manage'));
     const input = document.getElementById('wa-message-input');
     input.disabled = closed;
     if (closed && windowConversationId !== conv.id) fillTemplatePicker('chat');
@@ -2507,7 +2446,7 @@ async function loadEntryLinks() {
             ${l.url ? `<button type="button" class="btn-secondary text-xs" onclick="copyEntry(${Number(l.id)}, false)">Copy link</button>
             <button type="button" class="btn-secondary text-xs" onclick="copyEntry(${Number(l.id)}, true)">Copy website button</button>
             <button type="button" class="btn-secondary text-xs" aria-expanded="false" onclick="toggleQr(${Number(l.id)}, this)">QR code</button>` : ''}
-            ${can('automations.manage') ? `<button type="button" class="btn-secondary text-xs text-red-300" onclick="deleteEntryLink(${Number(l.id)})">Delete</button>` : ''}
+            ${has('entry_links', 'manage') ? `<button type="button" class="btn-secondary text-xs text-red-300" onclick="deleteEntryLink(${Number(l.id)})">Delete</button>` : ''}
         </div>
         <div id="qr-${Number(l.id)}" class="hidden mt-3"></div>
     </article>`).join('') : emptyStateHtml('No entry links yet', 'Create one for your website button and one for each ad.');
@@ -2674,6 +2613,7 @@ function toggleQr(id, btn) {
 // Custom contact fields (CF-4)
 let contactFields = [], cfAccount = null, shownContacts = [], editingContactId = null;
 async function loadContactFields(force = false) {
+    if (!hasAny('contacts', 'inbox')) return;
     const acct = getActiveAccountId();
     if (!acct || (!force && cfAccount === acct)) return;
     const data = await apiCall('GET', '/api/contact-fields', undefined, { quiet: true });

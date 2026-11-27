@@ -5,9 +5,8 @@ from typing import Any, Dict, List
 
 import crm_store as cs
 import database as db
-from engine import alerts, blog_plan, media, site_publish
+from engine import access, alerts, blog_plan, media, site_publish
 from engine.formatters import slugify
-from engine.permissions import has_permission
 
 TABS = {"all": "", "draft": "draft", "in_review": "needs_approval", "scheduled": "approved",
         "published": "published", "failed": "failed"}
@@ -18,15 +17,19 @@ def _bad(name: str) -> blog_plan.PlanError:
     return blog_plan.PlanError(400, "invalid_parameter", f"'{name}' has a value that is not allowed.")
 
 
-def accounts_for(user: Dict[str, Any], account: str = "all") -> List[Dict[str, Any]]:
-    """The accounts asked for, with the user's role in each. A foreign id is refused."""
+def accounts_for(user: Dict[str, Any], account: str = "all", need: str = "") -> List[Dict[str, Any]]:
+    """The accounts asked for in which the user has `need`, each with their access (`who`). Naming an account
+    that is foreign, or where they lack it, is refused."""
     mine = (cs.list_all_accounts(user["id"]) if user.get("is_platform_admin") else cs.list_accounts_for_user(user["id"]))
-    if account in ("", "all"):
-        return mine
-    picked = [a for a in mine if a["id"] == account]
-    if not picked:
-        raise blog_plan.PlanError(403, "forbidden", "You cannot see that account.")
-    return picked
+    if account not in ("", "all"):
+        mine = [a for a in mine if a["id"] == account]
+        if not mine:
+            raise blog_plan.PlanError(403, "forbidden", "You cannot see that account.")
+    out = [dict(a, who=access.of(a["id"], user)) for a in mine]
+    out = [a for a in out if a["who"] and (not need or access.allows(a["who"], need))]
+    if account not in ("", "all") and not out:
+        raise blog_plan.PlanError(403, "forbidden", "You do not have access to this section.")
+    return out
 
 
 def _where(accounts: List[Dict[str, Any]]):
@@ -77,8 +80,8 @@ def _cover(view: Dict[str, Any], post: Dict[str, Any]):
     return {"url": match.group(2), "alt": match.group(1)} if match else None
 
 
-def _can(role: str, state: str, missing: List[str]) -> Dict[str, bool]:
-    write, publish = has_permission(role, "content.write"), has_permission(role, "content.publish")
+def _can(who: Dict[str, Any], state: str, missing: List[str]) -> Dict[str, bool]:
+    write, publish = access.allows(who, "posts:manage"), access.allows(who, "posts:full")
     live = state == "published"
     return {"edit": publish if live else write,
             "approve": publish and state == "in_review" and not missing,
@@ -115,7 +118,7 @@ def _present(accounts: List[Dict[str, Any]], rows: List[Dict[str, Any]], host: s
                 "url": (row["post_url"] or site_publish.post_url(row["account_id"], slug, row["project_id"])) if state == "published" else "",
                 "error": row["error"], "rejected_note": v["rejected_note"], "writer_id": row["writer_token_id"],
                 "writer": v["writer"], "assignee_id": row["assignee_id"], "assignee_name": v["assignee_name"],
-                "cover": _cover(v, post), "missing": missing, "can": _can(account["role"], state, missing)}
+                "cover": _cover(v, post), "missing": missing, "can": _can(account["who"], state, missing)}
         if full:
             item.update({k: v[k] for k in ("topic", "keyword", "body", "seo_title", "meta_description",
                                            "rejected_by_name", "rejected_at", "images")}, slug=slug)
@@ -199,6 +202,8 @@ def dashboard(accounts: List[Dict[str, Any]], host: str = "") -> Dict[str, Any]:
     found: List[Dict[str, Any]] = []
     for account in accounts:
         for alert in alerts.list_alerts(account["id"]):
+            if not access.sees_alert(account["who"], alert):
+                continue
             system = alert["id"] is None
             if system and any(a["type"] == alert["type"] for a in found):
                 continue
@@ -221,8 +226,8 @@ def options(accounts: List[Dict[str, Any]]) -> Dict[str, Any]:
     for a in accounts:
         out["accounts"].append({"id": a["id"], "name": a["name"],
                                 "website_url": (cs.get_account(a["id"]) or {}).get("website_url", ""),
-                                "can_write": has_permission(a["role"], "content.write"),
-                                "can_publish": has_permission(a["role"], "content.publish")})
+                                "can_write": access.allows(a["who"], "posts:manage"),
+                                "can_publish": access.allows(a["who"], "posts:full")})
         out["projects"] += [{"id": p["id"], "name": p["name"], "account_id": a["id"]} for p in db.list_projects(a["id"])]
         with db.get_connection() as conn:
             out["writers"] += [{"id": w["id"], "name": w["name"], "account_id": a["id"]} for w in conn.execute(
