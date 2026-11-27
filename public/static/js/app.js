@@ -3,7 +3,6 @@
 let globalPresets = {};
 let accountsMode = false;
 let currentUser = null;
-let currentStagingPost = null;
 let generated2FASecret = "";
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -59,8 +58,9 @@ async function initApp() {
     // Role gating first, so buttons are right even if a later load fails.
     applyRolePermissions();
     const hasAccount = !!getActiveAccountId();
-    const loaders = hasAccount ? [loadStatus, loadProjects, loadStagingPosts, loadPosts, loadLogs] : [];
-    if (hasAccount) loaders.push(loadWhatsAppInbox, loadWhatsAppContacts, loadWhatsAppDeals, loadWhatsAppBroadcasts, loadWhatsAppAutomations, loadWhatsAppConfig, loadAlerts);
+    routeFromHash();
+    const loaders = hasAccount ? [loadStatus, loadProjects, loadLogs] : [];
+    if (hasAccount) loaders.push(loadWhatsAppInbox, loadWhatsAppContacts, loadWhatsAppDeals, loadWhatsAppBroadcasts, loadWhatsAppAutomations, loadWhatsAppConfig);
     if (isPlatformAdmin()) loaders.push(loadSettings, loadSupabaseStatus);
     // Run in parallel; one failing screen must not blank the rest.
     await Promise.allSettled(loaders.map(f => { try { return Promise.resolve(f()); } catch (e) { return Promise.reject(e); } }));
@@ -71,7 +71,6 @@ async function initApp() {
     setInterval(() => {
         if (!getActiveAccountId()) return;
         loadStatus();
-        loadStagingPosts();
         loadLogs();
         if (activeConversationId) {
             loadConversationMessages(activeConversationId, true);
@@ -91,7 +90,7 @@ const TAB_GUARD = {
 
 // A platform admin with no client account still sees the whole menu; account screens explain what to do.
 const NO_ACCOUNT_OK = ['settings', 'supabase'];
-let currentTab = 'repos';
+let currentTab = 'dashboard';
 function needsFirstAccount() { return isPlatformAdmin() && !getActiveAccountId(); }
 
 function showNoAccountPanel() {
@@ -101,15 +100,11 @@ function showNoAccountPanel() {
     panel.classList.toggle('hidden', !show);
     const tab = document.getElementById(`tab-${currentTab}`);
     if (tab) tab.classList.toggle('hidden', show);
-    const kpi = document.getElementById('kpi-cards');
-    if (kpi) kpi.classList.toggle('hidden', show || currentTab !== 'repos');
 }
 
 function switchTab(tabName) {
-    if (TAB_GUARD[tabName] && currentUser && !needsFirstAccount() && !TAB_GUARD[tabName]()) tabName = 'repos';
+    if (TAB_GUARD[tabName] && currentUser && !needsFirstAccount() && !TAB_GUARD[tabName]()) tabName = 'dashboard';
     currentTab = tabName;
-    const kpi = document.getElementById('kpi-cards');
-    if (kpi) kpi.classList.toggle('hidden', tabName !== 'repos');
     if (window.innerWidth <= 900) toggleSidebar(false);
     toggleNewMenu(false);
     document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
@@ -126,9 +121,9 @@ function switchTab(tabName) {
 
     // Dynamic header title update
     const titleMap = {
-        'repos': { title: 'Connected Projects', sub: 'Autonomous multi-repo daily blog publishing targets' },
-        'staging': { title: 'Editorial Staging & Review', sub: 'Review, edit, and approve AI-generated drafts with live SEO scoring' },
-        'posts': { title: 'Published Blog Articles', sub: 'Inspect published posts, live Markdown, and GitHub commits/PRs' },
+        'dashboard': { title: 'Dashboard', sub: 'What needs you, what goes live next, what just went live' },
+        'posts': { title: 'Posts', sub: 'Every blog post, from draft to live' },
+        'repos': { title: 'Websites', sub: 'Where blog posts are published' },
         'wa-inbox': { title: 'Shared Team Inbox', sub: 'Two-way WhatsApp conversations for your team' },
         'wa-contacts': { title: 'Contacts & Audience CRM', sub: 'Manage customer profiles, lead tags, and WhatsApp communication history' },
         'wa-deals': { title: 'Sales Pipeline (Kanban)', sub: 'Track and advance deals across qualification, proposals, and closed won' },
@@ -153,11 +148,10 @@ function switchTab(tabName) {
     if (headerSubEl && titleMap[tabName]) headerSubEl.innerText = titleMap[tabName].sub;
 
     showNoAccountPanel();
+    enterView(tabName);
     if (needsFirstAccount() && !NO_ACCOUNT_OK.includes(tabName)) return; // nothing to load yet
 
     if (tabName === 'repos') loadProjects();
-    if (tabName === 'staging') loadStagingPosts();
-    if (tabName === 'posts') loadPosts();
     if (tabName === 'wa-inbox') loadWhatsAppInbox();
     if (tabName === 'wa-contacts') loadWhatsAppContacts();
     if (tabName === 'wa-deals') loadWhatsAppDeals();
@@ -167,14 +161,9 @@ function switchTab(tabName) {
     if (tabName === 'users') loadUsersAndRoles();
     if (tabName === 'wa-knowledge') loadKnowledge();
     if (tabName === 'media') loadMedia();
-    if (tabName === 'blog-status') loadBlogStatus();
     if (tabName === 'users') { hideNewToken(); loadWriterTokens(); }
-    if (tabName === 'repos') loadAwaiting(); else el('awaiting-card').classList.add('hidden');
     if (tabName === 'wa-templates') loadTemplates();
-    if (tabName === 'blog-plan') loadPlan();
     if (tabName === 'wa-entry') loadEntryLinks();
-    updateAlertsVisibility(tabName);
-    if (tabName === 'repos') loadAlerts();
     if (tabName === 'supabase' && isPlatformAdmin()) loadSupabaseStatus();
     if (tabName === 'logs') loadLogs();
     if (tabName === 'settings' && isPlatformAdmin()) loadSettings();
@@ -308,13 +297,14 @@ function toastOnce(msg) {
     showToast(msg, 'error');
 }
 
+// opts.account sends the request as that client account instead of the one in the sidebar.
 async function apiCall(method, endpoint, data, opts = {}) {
     const hasBody = data !== undefined && method !== 'GET';
     let res;
     try {
         res = await fetch(method === 'GET' ? scopeUrl(endpoint) : endpoint, {
             method,
-            headers: hasBody ? getAuthHeaders({ 'Content-Type': 'application/json' }) : getAuthHeaders(),
+            headers: { ...getAuthHeaders(hasBody ? { 'Content-Type': 'application/json' } : {}), ...(opts.account ? { 'X-Account-Id': opts.account } : {}) },
             credentials: 'same-origin',
             ...(hasBody ? { body: JSON.stringify(method === 'DELETE' ? data : scopeBody(endpoint, data)) } : {})
         });
@@ -441,9 +431,6 @@ async function loadProjects() {
 
     const grid = document.getElementById('projects-grid');
 
-    const filterSelect = document.getElementById('post-filter-project');
-    if (filterSelect) filterSelect.innerHTML = '<option value="">All Repositories</option>';
-
     if (data.projects.length === 0) {
         grid.innerHTML = `
             <div class="col-span-full p-8 text-center bg-slate-900 border border-slate-800 rounded-xl">
@@ -465,14 +452,6 @@ async function loadProjects() {
     grid.innerHTML = '';
 
     data.projects.forEach(p => {
-        // Populate filters
-        if (filterSelect) {
-            const opt = document.createElement('option');
-            opt.value = p.id;
-            opt.innerText = `${p.name} (${p.github_repo})`;
-            filterSelect.appendChild(opt);
-        }
-
         // Render card
         const card = document.createElement('div');
         card.className = 'project-card';
@@ -558,8 +537,6 @@ async function triggerProjectRun(projectId, btn) {
         showToast(`Article '${res.title}' generated and published!`, 'success');
         loadStatus();
         loadProjects();
-        loadPosts();
-        loadStagingPosts();
         loadLogs();
     } else {
         showToast(res ? (res.error || 'Trigger failed') : 'Execution error', 'error');
@@ -593,231 +570,6 @@ async function deleteProject(projectId) {
 }
 
 // --- Editorial Staging Queue ---
-async function loadStagingPosts() {
-    const data = await apiGet('/api/posts?limit=50');
-    if (!data || !data.posts) return;
-
-    const stagingContainer = document.getElementById('staging-cards-container');
-    if (!stagingContainer) return;
-
-    const inReviewPosts = data.posts.filter(p => p.status === 'in_review' || p.status === 'draft');
-    const badgeCount = document.getElementById('badge-staging-count');
-    if (badgeCount) badgeCount.innerText = inReviewPosts.length;
-
-    stagingContainer.innerHTML = '';
-    if (inReviewPosts.length === 0) {
-        stagingContainer.innerHTML = `
-            <div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400">
-                <svg class="w-10 h-10 mx-auto mb-2 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                <div class="text-base font-semibold text-white">Staging Queue is Clear</div>
-                <div class="text-xs text-slate-500 mt-1">All generated articles have been reviewed and published. New scheduled articles requiring manual review will appear here.</div>
-            </div>
-        `;
-        return;
-    }
-
-    inReviewPosts.forEach(post => {
-        const card = document.createElement('div');
-        card.className = 'bg-slate-900 border border-slate-800 rounded-xl p-4 flex justify-between items-center hover:border-slate-700 transition-colors';
-        const seoScore = post.seo_score || 100;
-        const scoreClass = seoScore >= 80 ? 'text-emerald-400 border-emerald-500/30' : 'text-amber-400 border-amber-500/30';
-
-        card.innerHTML = `
-            <div>
-                <div class="flex items-center gap-2">
-                    <span class="font-bold text-white text-base">${escapeHtml(post.title)}</span>
-                    <span class="text-xs px-2 py-0.5 rounded-full font-mono bg-slate-950 border ${scoreClass}">SEO ${seoScore}/100</span>
-                    <span class="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/30 uppercase text-[10px] font-bold">Needs Review</span>
-                </div>
-                <div class="text-xs text-slate-400 mt-1">${escapeHtml(post.excerpt)}</div>
-                <div class="text-[11px] text-slate-500 font-mono mt-1">Target: ${escapeHtml(post.target_path)} • ${escapeHtml(post.project_name || 'Project')}</div>
-            </div>
-
-            <div class="flex items-center gap-2">
-                <button onclick="openStagingEditor(${post.id})" class="btn-primary text-xs py-1.5 px-3">
-                    Edit & Approve &rarr;
-                </button>
-            </div>
-        `;
-        stagingContainer.appendChild(card);
-    });
-}
-
-// --- Split Screen Editorial Editor ---
-async function openStagingEditor(postId) {
-    const post = await apiGet(`/api/posts/${postId}`);
-    if (!post) return;
-    currentStagingPost = post;
-
-    document.getElementById('edit-post-id').value = post.id;
-    document.getElementById('edit-post-title').value = post.title;
-    document.getElementById('edit-post-excerpt').value = post.excerpt;
-    document.getElementById('edit-post-markdown').value = post.content_markdown;
-
-    updateSplitPreview();
-    document.getElementById('modal-staging-editor').classList.remove('hidden');
-}
-
-function closeStagingEditor() {
-    document.getElementById('modal-staging-editor').classList.add('hidden');
-    currentStagingPost = null;
-}
-
-function updateSplitPreview() {
-    const md = document.getElementById('edit-post-markdown').value;
-    const title = document.getElementById('edit-post-title').value;
-    const excerpt = document.getElementById('edit-post-excerpt').value;
-
-    // Render markdown to preview pane
-    const previewEl = document.getElementById('editor-live-preview');
-    if (window.marked) {
-        previewEl.replaceChildren(sanitizeHtml(marked.parse(md)));
-    } else {
-        previewEl.innerText = md;
-    }
-
-    // Dynamic SEO Pre-Flight Check in UI
-    const titleLen = title.length;
-    const excerptLen = excerpt.length;
-    let score = 100;
-    const issues = [];
-
-    if (titleLen < 30) { score -= 15; issues.push(`Title is too short (${titleLen} chars). Optimal: 40-65 chars.`); }
-    if (excerptLen < 100) { score -= 15; issues.push(`Excerpt is too short (${excerptLen} chars). Optimal: 130-165 chars.`); }
-    if (!md.includes('## ')) { score -= 20; issues.push("Article has no H2 section headers."); }
-
-    const scoreBadge = document.getElementById('editor-seo-badge');
-    scoreBadge.innerText = `SEO: ${score}/100`;
-    scoreBadge.className = `text-xs px-2.5 py-0.5 rounded-full font-semibold ${score >= 80 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/10 text-amber-300 border border-amber-500/30'}`;
-
-    const issuesBox = document.getElementById('editor-issues-list');
-    issuesBox.innerHTML = issues.length ? issues.map(i => `<div class="text-amber-400">• ${i}</div>`).join('') : '<div class="text-emerald-400">✓ All SEO and formatting parameters verified.</div>';
-}
-
-async function saveStagedDraft() {
-    if (!currentStagingPost) return;
-    const postId = currentStagingPost.id;
-    const payload = {
-        title: document.getElementById('edit-post-title').value,
-        excerpt: document.getElementById('edit-post-excerpt').value,
-        content_markdown: document.getElementById('edit-post-markdown').value
-    };
-
-    const res = await apiPut(`/api/posts/${postId}`, payload);
-    if (res && res.message) {
-        showToast('Changes saved to staging draft.', 'success');
-        loadStagingPosts();
-    } else {
-        showToast(res ? res.error : 'Save failed', 'error');
-    }
-}
-
-async function approveAndPublishStagedPost() {
-    if (!currentStagingPost) return;
-    const postId = currentStagingPost.id;
-    const btn = document.getElementById('btn-approve-post');
-    btn.disabled = true;
-    btn.innerText = 'Publishing...';
-
-    // 1. Save any pending changes
-    await saveStagedDraft();
-
-    // 2. Approve and publish
-    const res = await apiPost(`/api/posts/${postId}/approve`, {});
-    btn.disabled = false;
-    btn.innerText = 'Approve & Publish 🚀';
-
-    if (res && res.success) {
-        showToast('Article approved and published.', 'success');
-        closeStagingEditor();
-        loadStagingPosts();
-        loadPosts();
-        loadStatus();
-    } else {
-        showToast(res ? res.error : 'Approval dispatch failed', 'error');
-    }
-}
-
-// --- Posts & Articles Table ---
-async function loadPosts() {
-    const projectId = document.getElementById('post-filter-project').value;
-    const url = projectId ? `/api/posts?project_id=${projectId}` : '/api/posts';
-    const data = await apiGet(url);
-    if (!data || !data.posts) return;
-
-    const tbody = document.getElementById('posts-table-body');
-    tbody.innerHTML = '';
-
-    if (data.posts.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="6" class="px-5 py-6 text-center text-slate-500">No blog posts found.</td></tr>`;
-        return;
-    }
-
-    data.posts.forEach(post => {
-        const tr = document.createElement('tr');
-        tr.className = 'hover:bg-slate-800/40 transition-colors';
-
-        let statusBadge = '<span class="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-400">Draft</span>';
-        if (post.status === 'published') {
-            statusBadge = '<span class="px-2 py-0.5 rounded text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">Published</span>';
-        } else if (post.status === 'in_review') {
-            statusBadge = '<span class="px-2 py-0.5 rounded text-xs bg-amber-500/10 text-amber-300 border border-amber-500/30">In Staging</span>';
-        } else if (post.status === 'failed') {
-            statusBadge = '<span class="px-2 py-0.5 rounded text-xs bg-red-500/10 text-red-400 border border-red-500/30">Failed</span>';
-        }
-
-        let githubDelivery = '<span class="text-slate-500 text-xs">Pending delivery</span>';
-        if (post.url) {
-            githubDelivery = `<a href="${escapeHtml(post.url)}" target="_blank" rel="noopener" class="text-cyan-400 hover:underline text-xs">View post ↗</a>`;
-        } else if (post.github_pr_url) {
-            githubDelivery = `<a href="${post.github_pr_url}" target="_blank" class="text-cyan-400 hover:underline text-xs flex items-center gap-1">PR #${post.github_pr_number || 'Link'} ↗</a>`;
-        } else if (post.github_commit_sha) {
-            githubDelivery = `<span class="text-slate-400 font-mono text-xs">Commit: ${post.github_commit_sha.substring(0, 7)}</span>`;
-        }
-
-        const seoScore = post.seo_score || 100;
-        const seoBadge = `<span class="text-xs font-mono ${seoScore >= 80 ? 'text-emerald-400' : 'text-amber-400'}">${seoScore}/100</span>`;
-
-        tr.innerHTML = `
-            <td class="px-5 py-3">
-                <div class="font-semibold text-white">${escapeHtml(post.title)}</div>
-                <div class="text-xs text-slate-400 font-mono mt-0.5">${escapeHtml(post.target_path)}</div>
-            </td>
-            <td class="px-5 py-3 text-xs text-slate-300">
-                ${escapeHtml(post.project_name || 'Repo')}
-            </td>
-            <td class="px-5 py-3">${seoBadge}</td>
-            <td class="px-5 py-3">${statusBadge}</td>
-            <td class="px-5 py-3">${githubDelivery}</td>
-            <td class="px-5 py-3 text-right">
-                <button onclick="viewPost(${post.id})" class="btn-secondary text-xs py-1 px-2.5">
-                    Inspect Markdown
-                </button>
-            </td>
-        `;
-        tbody.appendChild(tr);
-    });
-}
-
-async function viewPost(postId) {
-    const post = await apiGet(`/api/posts/${postId}`);
-    if (!post) return;
-
-    document.getElementById('modal-post-title').innerText = post.title;
-    document.getElementById('modal-post-frontmatter').innerText = post.frontmatter_yaml;
-    document.getElementById('modal-post-excerpt').innerText = post.excerpt;
-    document.getElementById('modal-post-image-prompt').innerText = post.image_prompt || 'N/A';
-    document.getElementById('modal-post-path').innerText = post.target_path;
-    document.getElementById('modal-post-content').value = post.content_markdown;
-
-    document.getElementById('modal-post').classList.remove('hidden');
-}
-
-function closePostModal() {
-    document.getElementById('modal-post').classList.add('hidden');
-}
-
-// --- Multi-Tenant Clients Management ---
 async function loadClients() {
     // Final contract: GET /api/accounts -> {accounts:[{id,name,role}]}. Falls back to the old /api/clients list.
     let data = await apiGet('/api/accounts');
@@ -894,7 +646,7 @@ async function refreshMe() {
 
 function reloadAccountData() {
     return Promise.all([
-        loadStatus(), loadProjects(), loadStagingPosts(), loadPosts(),
+        loadStatus(), loadProjects(),
         loadWhatsAppInbox(), loadWhatsAppContacts(), loadWhatsAppDeals(),
         loadWhatsAppBroadcasts(), loadWhatsAppAutomations(), loadWhatsAppConfig(),
         loadLogs()
@@ -2766,46 +2518,6 @@ async function syncTemplates(btn) {
     if (res && res.ok) { showToast(`${Number(res.count)} templates synced.`, 'success'); loadTemplates(); }
 }
 
-function updateAlertsVisibility(tab) {
-    const panel = document.getElementById('alerts-panel');
-    if (panel) panel.classList.toggle('hidden', tab !== 'repos' || !getActiveAccountId());
-    const admin = document.getElementById('admin-alert-counts');
-    if (admin && tab !== 'repos') admin.classList.add('hidden');
-}
-
-async function loadAlerts() {
-    loadAdminAlertCounts();
-    const onHome = !document.getElementById('tab-repos').classList.contains('hidden');
-    updateAlertsVisibility(onHome ? 'repos' : '');
-    const acct = getActiveAccountId();
-    if (!acct) return;
-    const data = await apiCall('GET', '/api/alerts', undefined, { quiet: true });
-    if (acct !== getActiveAccountId()) return;
-    const list = document.getElementById('alerts-list');
-    const badge = document.getElementById('alerts-count');
-    if (!data || !data.alerts) { badge.classList.add('hidden'); list.innerHTML = '<p class="text-xs text-amber-300">Alerts could not be loaded, so problems may be hidden.</p>'; return; }
-    const open = data.alerts.filter(a => !a.resolved_at);
-    const problems = open.filter(a => a.severity !== 'info').length;
-    badge.innerText = problems;
-    badge.classList.toggle('hidden', !problems);
-    list.innerHTML = open.length ? '<ul class="space-y-2">' + open.map(a => {
-        // Only same-app links: '#...' or '/...'.
-        const link = /^(#|\/(?!\/))/.test(a.link || '') ? `<a class="btn-secondary text-xs" href="${escapeHtml(a.link)}">Open</a>` : '';
-        const post = /^blog:(\d+)$/.exec(a.link || '');
-        const target = /^(conversation|project):(\d+)$/.exec(a.link || '');
-        const btn = (call, text) => `<button type="button" class="btn-secondary text-xs" onclick="${call}">${text}</button>`;
-        const opener = post ? btn(`openPlanFromAlert(${Number(post[1])})`, 'Open post')
-            : target ? btn(`open${target[1] === 'project' ? 'Project' : 'Chat'}FromAlert(${Number(target[2])})`, target[1] === 'project' ? 'Open project' : 'Open chat')
-            : a.link === 'messages' ? btn("switchTab('wa-inbox')", 'Open inbox') : link;
-        return `<li class="flex flex-wrap justify-between items-center gap-2 border-t border-slate-800 pt-2">
-            <div class="min-w-0 flex-1"><div class="text-xs ${a.severity === 'info' ? 'text-slate-300' : a.severity === 'warning' ? 'text-amber-300' : 'text-red-300'} break-words">${escapeHtml(a.message)}${a.count > 1 ? ` (${Number(a.count)} times)` : ''}</div>
-            <div class="text-[10px] text-slate-500">${escapeHtml([String(a.type || '').replace(/_/g, ' '), fmtWhen(a.last_seen || a.first_seen)].filter(Boolean).join(' · '))}</div></div>
-            ${opener}${a.id && a.severity !== 'info' && can('crm.write') ? `<button type="button" class="btn-secondary text-xs" onclick="resolveAlert(${Number(a.id)})">Resolve</button>` : ''}
-        </li>`;
-    }).join('') + '</ul>' : '<p class="text-xs text-slate-400">No problems.</p>';
-}
-setInterval(() => { if (typeof currentUser !== 'undefined' && currentUser && !document.hidden) loadAlerts(); }, 30000);
-
 async function openChatFromAlert(id) {
     switchTab('wa-inbox');
     await loadWhatsAppInbox();
@@ -2823,44 +2535,18 @@ async function openProjectFromAlert(id) {
     card.focus();
 }
 
-async function resolveAlert(id) {
-    const res = await apiPost(`/api/alerts/${id}/resolve`, {});
-    if (res && !res.error) loadAlerts();
-}
-
-async function loadAdminAlertCounts() {
-    const box = document.getElementById('admin-alert-counts');
-    if (!box) return;
-    const home = () => !document.getElementById('tab-repos').classList.contains('hidden');
-    if (!isPlatformAdmin() || !home()) { box.classList.add('hidden'); return; }
-    const data = await apiCall('GET', '/api/admin/alert-counts', undefined, { quiet: true });
-    const counts = (data && data.counts) || {};
-    const rows = (window.__accounts || []).filter(a => counts[a.id]);
-    box.classList.toggle('hidden', !rows.length || !home());
-    box.querySelector('ul').innerHTML = rows.map(a => `<li><button type="button" class="btn-secondary text-xs" data-account="${escapeHtml(String(a.id))}">${escapeHtml(a.name)}: ${Number(counts[a.id])}</button></li>`).join('');
-    box.querySelectorAll('button').forEach(b => b.onclick = () => {
-        document.getElementById('client-select-filter').value = b.dataset.account;
-        onClientFilterChange().then(loadAlerts);
-    });
-}
-
 function reloadPhase1() {
     ['chat', 'bc', 'tpl'].forEach(clearMedia);
     hideNewToken(); closePicker(null);
-    showAwaiting([]); loadAwaiting();
     if (!el('tab-media').classList.contains('hidden')) loadMedia();
-    if (!el('tab-blog-status').classList.contains('hidden')) loadBlogStatus();
     if (!el('tab-users').classList.contains('hidden')) loadWriterTokens();
     contactFields = []; cfAccount = null;
-    planItems = []; closePlanForm(); document.getElementById('plan-list').innerHTML = '';
-    if (!document.getElementById('tab-blog-plan').classList.contains('hidden')) loadPlan();
+    planItems = []; closePlanForm();
     approvedTemplates = [];
     fillKnowledge({});
     document.getElementById('kb-test-result').innerText = '';
     document.getElementById('tpl-list').innerHTML = '';
-    document.getElementById('alerts-list').innerHTML = '';
     renderNeedsHuman({});
-    loadAlerts();
     if (!document.getElementById('tab-wa-knowledge').classList.contains('hidden')) loadKnowledge();
     if (!document.getElementById('tab-wa-templates').classList.contains('hidden')) loadTemplates();
     document.getElementById('entry-list').innerHTML = '';
@@ -3002,70 +2688,8 @@ async function deleteEntryLink(id) {
 }
 
 // Blog schedule (BS-6). The server enforces every status change; buttons only reflect it.
-let planItems = [], planProjects = [], planView = 'list', planEditing = null, planMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+let planItems = [], planProjects = [], planEditing = null;
 
-async function loadPlan() {
-    const acct = getActiveAccountId();
-    const list = document.getElementById('plan-list');
-    if (!acct) { list.innerHTML = emptyStateHtml('Choose an account', 'The schedule belongs to one account.'); return; }
-    const [data, projects] = await Promise.all([apiGet('/api/blog/plan'), apiGet('/api/projects')]);
-    if (acct !== getActiveAccountId()) return;
-    planProjects = (projects && projects.projects) || [];
-    const items = data && (data.items || data.plan || data.posts);
-    if (!items) { list.innerHTML = emptyStateHtml('Could not load the schedule', 'Try again in a moment.'); return; }
-    planItems = items;
-    const filter = document.getElementById('plan-filter-assignee');
-    const prev = filter.value;
-    const people = new Map(planItems.filter(i => i.assignee_id).map(i => [String(i.assignee_id), i.assignee_name || `User ${i.assignee_id}`]));
-    filter.innerHTML = '';
-    filter.add(new Option('Anyone', ''));
-    people.forEach((name, id) => filter.add(new Option(name, id)));
-    if ([...filter.options].some(o => o.value === prev)) filter.value = prev;
-    renderPlan();
-}
-function setPlanView(view) {
-    planView = view;
-    ['list', 'month'].forEach(v => document.getElementById(`plan-view-${v}`).setAttribute('aria-pressed', String(v === view)));
-    renderPlan();
-}
-function shiftPlanMonth(n) { planMonth = new Date(planMonth.getFullYear(), planMonth.getMonth() + n, 1); renderPlan(); }
-function planButton(i, compact) {
-    const [label, colour] = POST_STATES[postState(i)] || [i.status, 'text-slate-300'];
-    if (compact) return `<button type="button" class="block w-full text-left text-[11px] truncate ${colour}" title="${escapeHtml(i.title)} (${escapeHtml(label)})" onclick="editPlan(${Number(i.id)})">${escapeHtml(i.title)}</button>`;
-    return `<article class="${cardClass}">
-        <div class="flex flex-wrap justify-between items-start gap-2">
-            <div class="min-w-0 flex-1">
-                <h3 class="text-sm font-semibold text-white break-words">${escapeHtml(i.title)}</h3>
-                <div class="text-[11px] text-slate-400">${escapeHtml([fmtIst(i.publish_at) || 'No date yet', i.keyword, i.writer ? `Writer ${i.writer}` : i.assignee_name].filter(Boolean).join(' · '))}</div>
-                <div class="text-xs font-semibold ${colour}">${escapeHtml(label)}${i.error ? ': ' + escapeHtml(i.error) : ''}</div>
-                ${/^https?:\/\//.test(i.post_url || '') ? `<a class="text-xs text-indigo-300 underline break-all" href="${escapeHtml(i.post_url)}" target="_blank" rel="noopener">View published post</a>` : ''}
-            </div>
-            <button type="button" class="btn-secondary text-xs" onclick="editPlan(${Number(i.id)})">Open</button>
-        </div></article>`;
-}
-function renderPlan() {
-    const status = document.getElementById('plan-filter-status').value;
-    const who = document.getElementById('plan-filter-assignee').value;
-    const items = planItems.filter(i => (!status || postState(i) === status) && (!who || String(i.assignee_id) === who))
-        .sort((a, b) => String(a.publish_at).localeCompare(String(b.publish_at)));
-    const list = document.getElementById('plan-list');
-    document.getElementById('plan-month-nav').classList.toggle('hidden', planView !== 'month');
-    if (planView === 'list') {
-        list.className = 'space-y-2';
-        list.innerHTML = items.length ? items.map(i => planButton(i)).join('') : emptyStateHtml('No planned posts', 'Plan a post, write or draft it, then get it approved.');
-        return;
-    }
-    document.getElementById('plan-month-title').innerText = planMonth.toLocaleDateString([], { month: 'long', year: 'numeric' });
-    const days = new Date(planMonth.getFullYear(), planMonth.getMonth() + 1, 0).getDate();
-    const lead = (planMonth.getDay() + 6) % 7;
-    let cells = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => `<div class="text-[10px] text-slate-500 text-center">${d}</div>`).join('') + '<div></div>'.repeat(lead);
-    for (let d = 1; d <= days; d++) {
-        const day = `${planMonth.getFullYear()}-${String(planMonth.getMonth() + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-        cells += `<div class="border border-slate-800 rounded p-1 min-h-[3.5rem] min-w-0"><div class="text-[10px] text-slate-400">${d}</div>${items.filter(i => i.publish_at && istDay(i.publish_at) === day).map(i => planButton(i, true)).join('')}</div>`;
-    }
-    list.className = 'grid grid-cols-7 gap-1';
-    list.innerHTML = cells;
-}
 function previewPlan() { document.getElementById('plan-preview').innerHTML = postPreviewHtml(document.getElementById('plan-body').value, planImages); }
 async function editPlan(id) {
     let item = id ? planItems.find(x => x.id === id) : null;
@@ -3077,6 +2701,7 @@ async function editPlan(id) {
     projects.innerHTML = '';
     projects.add(new Option(planProjects.length ? 'Choose a project' : 'No blog project yet. Connect one first.', ''));
     planProjects.forEach(p => projects.add(new Option(p.name || p.repo_name || `Project ${p.id}`, String(p.id))));
+    if (item && item.project_id && ![...projects.options].some(o => o.value === String(item.project_id))) projects.add(new Option(item.project_name || 'Current website', String(item.project_id)));
     const people = document.getElementById('plan-assignee');
     people.innerHTML = '';
     people.add(new Option('Nobody', ''));
@@ -3100,29 +2725,33 @@ async function editPlan(id) {
     rejected.innerText = item && item.rejected_note ? `Rejected${item.rejected_by_name ? ` by ${item.rejected_by_name}` : ''}: ${item.rejected_note}` : '';
     const st = item ? item.status : null;
     const published = st === 'published';
-    const write = can('content.write') && !published;
-    document.getElementById('plan-form-h').innerText = item ? 'Planned post' : 'Plan a post';
-    document.getElementById('plan-form-note').innerText = st === 'approved' ? 'Approved. Saving a change sends it back for approval.' : published ? 'Published. It can no longer be edited.' : '';
+    const may = (item && item.can) || {};
+    const write = item ? !!may.edit : can('content.write');
+    document.getElementById('plan-form-h').innerText = item ? `Post (${STATE_LABELS[item.state] || item.state})` : 'New post';
+    const NOTES = { approved: 'Saving a change sends it back to In review.', failed: 'Saving a change makes it a Draft.', published: write ? 'Published. Saving a change updates the website at once.' : 'Published.' };
+    document.getElementById('plan-form-note').innerText = item ? NOTES[st] || '' : `New post for ${((window.__accounts || []).find(x => String(x.id) === String(getActiveAccountId())) || {}).name || 'this account'}.`;
+    document.getElementById('plan-missing').innerText = item ? missingText(item) : '';
     document.getElementById('plan-fields').disabled = !write;
+    ['plan-topic', 'plan-when', 'plan-project'].forEach(k => { document.getElementById(k).disabled = published; });
     const show = (k, on) => document.getElementById(k).classList.toggle('hidden', !on);
     show('plan-save', write);
-    show('plan-draft', write && !!item);
-    show('plan-submit', write && !!item && (st === 'draft' || st === 'failed'));
-    show('plan-approve', !!item && st === 'needs_approval' && can('content.publish'));
-    show('plan-publish-now', st === 'approved' && can('content.publish'));
-    show('plan-reject', !!item && st === 'needs_approval' && can('content.publish'));
+    show('plan-draft', write && !!item && !published);
+    show('plan-submit', !!may.submit);
+    show('plan-approve', !!may.approve);
+    show('plan-publish-now', !!may.publish_now);
+    document.getElementById('plan-publish-now').innerText = st === 'failed' ? 'Retry' : 'Publish now';
+    show('plan-reject', !!may.reject);
     show('plan-add-image', write);
-    show('plan-delete', write && !!item);
+    show('plan-unpublish', !!may.unpublish);
+    show('plan-delete', !!may.delete && !published);
     previewPlan();
-    form.classList.remove('hidden');
-    form.scrollIntoView({ block: 'nearest' });
+    document.querySelector('#modal-post .rd-drawer').scrollTop = 0;
     (write ? document.getElementById('plan-title') : form.querySelector('button:not(.hidden)')).focus();
 }
-function closePlanForm() { planEditing = null; document.getElementById('plan-form').classList.add('hidden'); }
 function planBody() {
     const val = k => document.getElementById(k).value.trim();
     return { title: val('plan-title'), topic: val('plan-topic'), keyword: val('plan-keyword'), seo_title: val('plan-seo-title'), meta_description: val('plan-meta'), publish_at: istToIso(val('plan-when')),
-             project_id: Number(val('plan-project')) || val('plan-project'), assignee_id: val('plan-assignee') ? Number(val('plan-assignee')) : null, body: document.getElementById('plan-body').value, images: imagesPayload(planImages),
+             project_id: Number(val('plan-project')) || val('plan-project') || null, assignee_id: val('plan-assignee') ? Number(val('plan-assignee')) : null, body: document.getElementById('plan-body').value, images: imagesPayload(planImages),
              ...(writerChoice() === undefined ? {} : { writer_token_id: writerChoice() }) };
 }
 function planDirty() {
@@ -3135,8 +2764,11 @@ function planDirty() {
 }
 async function savePlan(e) {
     e.preventDefault();
-    const res = planEditing ? await apiCall('PATCH', `/api/blog/plan/${planEditing.id}`, planBody()) : await apiPost('/api/blog/plan', planBody());
-    if (res && !res.error) { showToast('Saved.', 'success'); closePlanForm(); loadPlan(); }
+    const body = planBody();
+    // A live post only accepts these; the rest would be refused.
+    if (planEditing && planEditing.status === 'published') ['topic', 'publish_at', 'project_id'].forEach(k => delete body[k]);
+    const res = planEditing ? await apiCall('PATCH', `/api/blog/plan/${planEditing.id}`, body) : await apiPost('/api/blog/plan', body);
+    if (res && !res.error) { showToast('Saved.', 'success'); closePlanForm(); renderView(); }
 }
 async function planAction(action) {
     const item = planEditing;
@@ -3145,23 +2777,24 @@ async function planAction(action) {
     if (planDirty()) { showToast('Save your changes first.', 'error'); return; }
     if (action === 'draft' && item.body && !confirm('Replace the article text with a new AI draft?')) return;
     if (action === 'publish-now' && !confirmPublishNow(item.title)) return;
+    if (action === 'unpublish' && !confirmUnpublish(item.title)) return;
     const btn = document.getElementById(`plan-${action}`);
     btn.disabled = true;
     const res = await apiPost(`/api/blog/plan/${item.id}/${action}`, {});
     btn.disabled = false;
     if (!res || res.error) {
-        if (action === 'publish-now') { await loadPlan(); if (planEditing && planEditing.id === item.id) editPlan(item.id); }   // it may now show as failed
+        if (action === 'publish-now') { await refreshAfterEdit(); if (planEditing && planEditing.id === item.id) editPlan(item.id); }   // it may now show as failed
         return;
     }
     if (res.item && res.item.error) showToast(res.item.error, 'error');
-    else showToast({ draft: 'Draft ready. Read it before submitting.', submit: 'Sent for approval.', approve: 'Approved. It publishes within 3 hours of the scheduled time.', 'publish-now': 'Published.' }[action], 'success');
-    await loadPlan();
+    else showToast({ draft: 'Draft ready. Read it before submitting.', submit: 'Sent for approval.', approve: 'Approved. It publishes within 3 hours of the scheduled time.', 'publish-now': 'Published.', unpublish: UNPUBLISHED }[action], 'success');
+    await refreshAfterEdit();
     if (planEditing && planEditing.id === item.id) editPlan(item.id);
 }
 async function deletePlan() {
     if (!planEditing || !confirm('Delete this planned post?')) return;
     const res = await apiDelete(`/api/blog/plan/${planEditing.id}`);
-    if (res && !res.error) { closePlanForm(); loadPlan(); }
+    if (res && !res.error) { closePlanForm(); renderView(); }
 }
 
 // QR code for an entry link, drawn in the browser by the vendored qrcode-generator (static/js/qrcode.js).
@@ -3297,8 +2930,3 @@ async function deleteContactField(id) {
     if (res && !res.error) { await loadContactFields(true); loadWhatsAppContacts(); }
 }
 
-async function openPlanFromAlert(id) {
-    switchTab('blog-plan');
-    await loadPlan();
-    editPlan(id);
-}
