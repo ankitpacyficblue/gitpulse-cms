@@ -71,6 +71,8 @@ const loadError = (box, what) => {
 };
 
 // --- Shared pieces ---
+const UNPUBLISHED = 'Taken off the website. It is a draft again.';
+const confirmUnpublish = title => confirm(`Take "${title}" off the website? It becomes a draft.`);
 const badge = s => `<span class="rd-badge rd-${escapeHtml(s)}">${escapeHtml(STATE_LABELS[s] || s)}</span>`;
 const webLink = url => /^https?:\/\//.test(url || '') ? `<a class="rd-link" href="${escapeHtml(url)}" target="_blank" rel="noopener">View on website</a>` : '';
 const titleButton = p => `<button type="button" class="rd-title" data-open="${Number(p.id)}" data-account="${escapeHtml(p.account_id)}">${escapeHtml(p.title || 'Untitled')}</button>`;
@@ -81,18 +83,20 @@ const MISSING = { body: 'article text', cover: 'cover image', website: 'website'
 const missingText = p => (p.missing || []).length && p.state !== 'published' ? `Missing: ${p.missing.map(m => MISSING[m] || m).join(', ')}` : '';
 function actionButtons(p) {
     const b = (act, text, cls) => `<button type="button" class="${cls} text-xs" data-act="${act}" data-id="${Number(p.id)}" data-account="${escapeHtml(p.account_id)}" data-title="${escapeHtml(p.title || '')}">${text}</button>`;
-    return [p.can && p.can.approve ? b('approve', 'Approve', 'btn-primary') : '', p.can && p.can.publish_now ? b('publish-now', 'Publish now', 'btn-secondary') : ''].join('');
+    return [p.can && p.can.approve ? b('approve', 'Approve', 'btn-primary') : '', p.can && p.can.publish_now ? b('publish-now', p.state === 'failed' ? 'Retry' : 'Publish now', 'btn-secondary') : '',
+        p.can && p.can.unpublish ? b('unpublish', 'Unpublish', 'btn-secondary') : ''].join('');
 }
 function wirePostControls(box) {
     box.querySelectorAll('[data-open]').forEach(b => b.onclick = () => openPost(Number(b.dataset.open), b.dataset.account));
     box.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
         if (b.dataset.act === 'publish-now' && !confirmPublishNow(b.dataset.title)) return;
+        if (b.dataset.act === 'unpublish' && !confirmUnpublish(b.dataset.title)) return;
         const row = box.querySelectorAll(`[data-act][data-id="${b.dataset.id}"]`);
         row.forEach(x => { x.disabled = true; });
         const res = await apiCall('POST', `/api/blog/plan/${b.dataset.id}/${b.dataset.act}`, {}, { account: b.dataset.account });
         if (res && !res.error) {
             if (res.item && res.item.error) showToast(res.item.error, 'error');
-            else showToast(b.dataset.act === 'approve' ? 'Approved. It publishes within 3 hours of the scheduled time.' : 'Published.', 'success');
+            else showToast({ approve: 'Approved. It publishes within 3 hours of the scheduled time.', 'publish-now': 'Published.', unpublish: UNPUBLISHED }[b.dataset.act], 'success');
         }
         renderView();
     });
@@ -215,7 +219,7 @@ async function renderPosts(params, account, seq) {
     body.innerHTML = data.items.map(p => `<tr>
         ${cell('Title', `${titleButton(p)}${p.error ? `<p class="rd-alert-error">${escapeHtml(p.error)}</p>` : ''}${missingText(p) ? `<p class="rd-warn">${escapeHtml(missingText(p))}</p>` : ''}`, 'rd-cell-title')}
         ${cell('Status', badge(p.state))}
-        ${cell('Website', `${escapeHtml(p.project_name || '')}<p class="rd-meta">${escapeHtml(p.account_name || '')}</p>`)}
+        ${cell('Website', p.project_name ? `<span title="Account: ${escapeHtml(p.account_name || '')}">${escapeHtml(p.project_name)}</span>` : '', 'rd-cell-site')}
         ${cell('Author', escapeHtml(who(p)))}
         ${cell('Scheduled', escapeHtml(fmtIst(p.publish_at)))}
         ${cell('Published', `${escapeHtml(fmtIst(p.published_at))}${p.url ? `<p>${webLink(p.url)}</p>` : ''}`)}

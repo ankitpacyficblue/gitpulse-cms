@@ -2738,6 +2738,7 @@ async function editPlan(id) {
     show('plan-submit', !!may.submit);
     show('plan-approve', !!may.approve);
     show('plan-publish-now', !!may.publish_now);
+    document.getElementById('plan-publish-now').innerText = st === 'failed' ? 'Retry' : 'Publish now';
     show('plan-reject', !!may.reject);
     show('plan-add-image', write);
     show('plan-unpublish', !!may.unpublish);
@@ -2772,7 +2773,7 @@ async function planAction(action) {
     if (planDirty()) { showToast('Save your changes first.', 'error'); return; }
     if (action === 'draft' && item.body && !confirm('Replace the article text with a new AI draft?')) return;
     if (action === 'publish-now' && !confirmPublishNow(item.title)) return;
-    if (action === 'unpublish' && !confirm(`Take "${item.title}" off the website? It becomes a draft.`)) return;
+    if (action === 'unpublish' && !confirmUnpublish(item.title)) return;
     const btn = document.getElementById(`plan-${action}`);
     btn.disabled = true;
     const res = await apiPost(`/api/blog/plan/${item.id}/${action}`, {});
@@ -2782,7 +2783,7 @@ async function planAction(action) {
         return;
     }
     if (res.item && res.item.error) showToast(res.item.error, 'error');
-    else showToast({ draft: 'Draft ready. Read it before submitting.', submit: 'Sent for approval.', approve: 'Approved. It publishes within 3 hours of the scheduled time.', 'publish-now': 'Published.', unpublish: 'Taken off the website. It is a draft again.' }[action], 'success');
+    else showToast({ draft: 'Draft ready. Read it before submitting.', submit: 'Sent for approval.', approve: 'Approved. It publishes within 3 hours of the scheduled time.', 'publish-now': 'Published.', unpublish: UNPUBLISHED }[action], 'success');
     await refreshAfterEdit();
     if (planEditing && planEditing.id === item.id) editPlan(item.id);
 }

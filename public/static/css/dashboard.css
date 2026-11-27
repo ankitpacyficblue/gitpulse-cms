@@ -990,6 +990,7 @@ input:checked + .slider:before {
 .rd-table th[aria-sort] { color: #f8fafc; }
 .rd-table td { padding: .625rem .5rem; border-bottom: 1px solid #1e293b; vertical-align: top; overflow-wrap: anywhere; }
 .rd-cell-title { min-width: 12rem; }
+.rd-table .rd-cell-site { min-width: 7rem; }
 .rd-pages { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .5rem; margin-top: .75rem; font-size: .75rem; color: #94a3b8; }
 .rd-pages div { display: flex; align-items: center; gap: .5rem; }
 .rd-pages button:disabled { opacity: .5; cursor: default; }
@@ -1013,3 +1014,4 @@ input:checked + .slider:before {
 }
 @media (max-width: 900px) { .rd-table button, .rd-toolbar input, .rd-tabs button, #modal-post button { min-height: 44px; } }
 .top-actions { flex-wrap: wrap; }
+.rd-table td button.btn-primary, .rd-table td button.btn-secondary { white-space: nowrap; }
