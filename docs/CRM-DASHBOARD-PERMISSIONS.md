@@ -44,7 +44,9 @@ already separate a stronger action:
 - One role per person per account, plus per-person overrides (any level, including `none`, per section).
 - The role grid is editable per account for every role but Owner (owner only). Only changes are stored, so
   "reset to default" removes them.
-- Nobody can give a level higher than their own, change their own access, or (unless owner) touch an owner.
+- Nobody can give more than their own access or change their own overrides. Only an owner can touch an owner,
+  or someone with access the actor lacks. Changing a role clears that person's overrides.
+- Alerts follow the sections: blog alerts need a blog section, the rest a CRM section.
 - Inbox users may also list and upload media (chat attachments) and read contacts and templates needed to
   reply, even with those sections hidden.
 

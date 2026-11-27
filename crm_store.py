@@ -228,7 +228,22 @@ def init_schema(conn) -> None:
         created_at TEXT NOT NULL, last_used_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT '',
         project_id INTEGER, window_start REAL NOT NULL DEFAULT 0, window_count INTEGER NOT NULL DEFAULT 0
     )""")
+    for stmt in (
+        f"""CREATE TABLE IF NOT EXISTS role_permissions (
+            {A}, role_key TEXT NOT NULL, section TEXT NOT NULL, level TEXT NOT NULL,
+            PRIMARY KEY (account_id, role_key, section))""",
+        f"""CREATE TABLE IF NOT EXISTS permission_overrides (
+            {A}, user_id INTEGER NOT NULL, section TEXT NOT NULL, level TEXT NOT NULL,
+            PRIMARY KEY (account_id, user_id, section))""",
+        f"""CREATE TABLE IF NOT EXISTS automation_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, {A},
+            automation_id INTEGER NOT NULL, ok INTEGER NOT NULL DEFAULT 1, error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL)""",
+        "CREATE INDEX IF NOT EXISTS idx_autoruns_acct ON automation_runs (account_id, created_at)",
+    ):
+        cur.execute(stmt)
     for table, columns in (
+        ("memberships", (("role_key", "TEXT"), ("role_key_base", "TEXT"))),
         ("media_files", (("writer_token_id", "INTEGER"),)),
         ("blog_plan", (("images", "TEXT NOT NULL DEFAULT '[]'"), ("rejected_note", "TEXT NOT NULL DEFAULT ''"),
                        ("rejected_by", "INTEGER"), ("rejected_at", "TEXT NOT NULL DEFAULT ''"),
@@ -378,6 +393,7 @@ def add_membership(account_id: str, user_id: int, role: str) -> None:
     if role not in ROLES:
         raise ValueError("Invalid role.")
     with get_connection() as conn:
+        conn.execute("DELETE FROM permission_overrides WHERE account_id = ? AND user_id = ?", (account_id, user_id))
         conn.execute("INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,?,?)",
                      (account_id, user_id, role, _now()))
         conn.commit()
@@ -958,6 +974,13 @@ def delete_automation(account_id: str, automation_id: int) -> bool:
         cur = conn.execute("DELETE FROM automations WHERE id = ? AND account_id = ?", (automation_id, account_id))
         conn.commit()
         return cur.rowcount > 0
+
+
+def record_automation_run(account_id: str, automation_id: int, ok: bool = True, error: str = "") -> None:
+    with get_connection() as conn:
+        conn.execute("INSERT INTO automation_runs (account_id, automation_id, ok, error, created_at) VALUES (?,?,?,?,?)",
+                     (account_id, automation_id, 1 if ok else 0, error[:200], _now()))
+        conn.commit()
 
 
 def increment_automation_execution(account_id: str, automation_id: int) -> bool:
