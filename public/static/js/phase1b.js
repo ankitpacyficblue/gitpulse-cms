@@ -307,9 +307,19 @@ function renderBlogStatus() {
                 ${cell('Last error or note', problem)}
             </dl>
             <button type="button" class="btn-secondary text-xs mt-2" onclick="openPlanFromAlert(${Number(i.id)})">Open</button>
+            ${i.status === 'approved' && can('content.publish') ? `<button type="button" class="btn-primary text-xs mt-2 ml-2" data-publish="${Number(i.id)}">Publish now</button>` : ''}
         </article>`;
     }).join('') : emptyStateHtml('No posts here', 'Plan a post under Blog Schedule.');
+    el('status-list').querySelectorAll('[data-publish]').forEach(b => b.onclick = async () => {
+        const item = statusItems.find(i => String(i.id) === b.dataset.publish);
+        if (!item || !confirmPublishNow(item.title)) return;
+        b.disabled = true;
+        const res = await apiPost(`/api/blog/plan/${item.id}/publish-now`, {});
+        if (res && !res.error) showToast('Published.', 'success');
+        loadBlogStatus();
+    });
 }
+function confirmPublishNow(title) { return confirm(`Publish "${title}" now? It goes live on the website at once.`); }
 
 // Assign a planned post to a writer token (admin only; the token list needs users.manage).
 async function fillWriterSelect(item) {

@@ -1225,6 +1225,7 @@ def render_dashboard_html() -> str:
                     <button type="button" id="plan-draft" class="btn-secondary text-xs" onclick="planAction('draft')">Draft with AI</button>
                     <button type="button" id="plan-submit" class="btn-secondary text-xs" onclick="planAction('submit')">Submit for approval</button>
                     <button type="button" id="plan-approve" class="btn-secondary text-xs text-emerald-300" onclick="planAction('approve')">Approve</button>
+                    <button type="button" id="plan-publish-now" class="btn-secondary text-xs text-emerald-300" onclick="planAction('publish-now')">Publish now</button>
                     <button type="button" id="plan-reject" class="btn-secondary text-xs text-red-300" onclick="toggleRejectBox()">Reject</button>
                     <button type="button" id="plan-delete" class="btn-secondary text-xs text-red-300" onclick="deletePlan()">Delete</button>
                     <button type="button" class="btn-secondary text-xs" onclick="closePlanForm()">Close</button>

@@ -268,6 +268,31 @@ def approve(account_id: str, item_id: int, host: str = "") -> Dict[str, Any]:
     return get_item(account_id, item_id)
 
 
+def publish_now(account_id: str, item_id: int) -> Dict[str, Any]:
+    """Run an approved post's publish job at once: the scheduler's own job, so only one of the two can publish it."""
+    row = _row(account_id, item_id)
+    if row["status"] != "approved":
+        raise PlanError(409, "wrong_status", "Only an approved post can be published.")
+    with db.get_connection() as conn:      # updated_at stays: it names the approved version and its job
+        moved = conn.execute("UPDATE blog_plan SET publish_at = ? WHERE id = ? AND account_id = ? AND status = 'approved' "
+                             "AND updated_at = ?", (_now(), item_id, account_id, row["updated_at"])).rowcount > 0
+        conn.commit()
+    if not moved:
+        raise PlanError(409, "wrong_status", "The post changed. Reload and try again.")
+    key = f"plan:{item_id}:{row['updated_at']}"
+    jobs.enqueue(account_id, "plan_publish", {"item_id": item_id, "version": row["updated_at"]}, dedupe_key=key)
+    with db.get_connection() as conn:
+        job_id = conn.execute("SELECT id FROM jobs WHERE dedupe_key = ?", (key,)).fetchone()["id"]
+    jobs.run_job(job_id)
+    item = get_item(account_id, item_id)
+    if item["status"] == "failed":
+        raise PlanError(502, "publish_failed", f"Not published: {item['error']}")
+    if item["status"] != "published":
+        raise PlanError(409, "not_published", "Not published yet. It may be publishing already: reload in a minute. "
+                                              "If it stays approved, edit and approve it again.")
+    return item
+
+
 def _post_files(account_id: str, row: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The attached images, after checking that every file the post shows or links to still exists."""
     images = json.loads(row["images"] or "[]")
