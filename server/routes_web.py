@@ -347,7 +347,7 @@ def render_dashboard_html() -> str:
                 </div>
 
                 <!-- Multi-Tenant Client Selector -->
-                <div class="bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
+                <div id="account-switch" class="bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
                     <div class="flex justify-between items-center mb-1">
                         <label for="client-select-filter" class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Client account</label>
                         <button data-platform-admin onclick="openAddClientModal()" class="hidden text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold">+ New account</button>
@@ -364,37 +364,13 @@ def render_dashboard_html() -> str:
                 <div class="sidebar-section">
                     <div class="sidebar-section-title">
                         <span>📰</span>
-                        <span>Blog & Content Engine</span>
+                        <span>Blog</span>
                     </div>
-                    <a class="sidebar-nav-item active" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('repos')">
-                        <span class="flex items-center gap-2">
-                            <span>📦</span>
-                            <span>Connected Repos</span>
-                        </span>
-                        <span id="sidebar-badge-repos" class="sidebar-badge bg-slate-800 text-slate-300">-</span>
-                    </a>
-                    <a class="sidebar-nav-item" id="nav-blog-plan" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('blog-plan')">
-                        <span class="flex items-center gap-2"><span aria-hidden="true">🗓️</span><span>Blog Schedule</span></span>
-                    </a>
-                    <a class="sidebar-nav-item" id="nav-blog-status" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('blog-status')">
-                        <span class="flex items-center gap-2"><span aria-hidden="true">🚦</span><span>Blog Status</span></span>
-                        <span id="badge-awaiting" class="hidden sidebar-badge bg-amber-500/20 text-amber-300 border border-amber-500/30" aria-label="posts awaiting approval">0</span>
-                    </a>
+                    <a class="sidebar-nav-item active" id="nav-dashboard" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('dashboard')"><span class="flex items-center gap-2"><span aria-hidden="true">🏠</span><span>Dashboard</span></span></a>
+                    <a class="sidebar-nav-item" id="nav-posts" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('posts')"><span class="flex items-center gap-2"><span aria-hidden="true">📝</span><span>Posts</span></span></a>
+                    <a class="sidebar-nav-item" id="nav-repos" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('repos')"><span class="flex items-center gap-2"><span aria-hidden="true">🌐</span><span>Websites</span></span></a>
                     <a class="sidebar-nav-item" id="nav-media" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('media')">
                         <span class="flex items-center gap-2"><span aria-hidden="true">🖼️</span><span>Media Library</span></span>
-                    </a>
-                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('staging')">
-                        <span class="flex items-center gap-2">
-                            <span>✍️</span>
-                            <span>Editorial Staging</span>
-                        </span>
-                        <span id="badge-staging-count" class="sidebar-badge bg-amber-500/20 text-amber-300 border border-amber-500/30">0</span>
-                    </a>
-                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('posts')">
-                        <span class="flex items-center gap-2">
-                            <span>📑</span>
-                            <span>Articles Feed</span>
-                        </span>
                     </a>
                 </div>
 
@@ -513,25 +489,15 @@ def render_dashboard_html() -> str:
             <header class="top-bar">
                 <button type="button" class="menu-toggle" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false" onclick="toggleSidebar()">☰</button>
                 <div class="min-w-0 flex-1">
-                    <h1 id="view-header-title" class="text-lg font-bold text-white tracking-tight">Connected Projects</h1>
-                    <p id="view-header-sub" class="text-xs text-slate-400">Autonomous multi-repo daily blog publishing targets</p>
+                    <h1 id="view-header-title" class="text-lg font-bold text-white tracking-tight">Dashboard</h1>
+                    <p id="view-header-sub" class="text-xs text-slate-400">What needs you, what goes live next, what just went live</p>
                 </div>
 
-                <button type="button" id="new-menu-btn" class="new-menu-btn btn-primary text-xs py-2 px-3" aria-haspopup="true" aria-expanded="false" onclick="toggleNewMenu()">New ▾</button>
-                <div id="top-actions" class="top-actions flex items-center space-x-2.5">
-                    <button onclick="openAddProjectModal()" class="btn-primary flex items-center space-x-1.5 text-xs py-2 px-3 shadow-indigo-500/25">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                        <span>Connect Website in 60s</span>
-                    </button>
-                    <button onclick="openAddContactModal()" class="btn-secondary text-xs py-2 px-3 flex items-center gap-1 text-emerald-400 hover:text-emerald-300">
-                        <span>💬 + New Lead</span>
-                    </button>
-                    <button onclick="openAddDealModal()" class="btn-secondary text-xs py-2 px-3 flex items-center gap-1 text-indigo-400 hover:text-indigo-300">
-                        <span>💰 + Deal</span>
-                    </button>
-                    <button onclick="openAddBroadcastModal()" class="btn-secondary text-xs py-2 px-3 flex items-center gap-1 text-cyan-400 hover:text-cyan-300">
-                        <span>📢 + Broadcast</span>
-                    </button>
+                <div id="top-actions" class="top-actions flex items-center gap-2">
+                    <button data-tabs="repos" onclick="openAddProjectModal()" class="btn-primary text-xs py-2 px-3">Connect website</button>
+                    <button data-tabs="wa-contacts" style="display:none" onclick="openAddContactModal()" class="btn-primary text-xs py-2 px-3">+ New lead</button>
+                    <button data-tabs="wa-deals" style="display:none" onclick="openAddDealModal()" class="btn-primary text-xs py-2 px-3">+ New deal</button>
+                    <button data-tabs="wa-broadcasts" style="display:none" onclick="openAddBroadcastModal()" class="btn-primary text-xs py-2 px-3">+ New broadcast</button>
                 </div>
             </header>
 
@@ -543,56 +509,12 @@ def render_dashboard_html() -> str:
                     <p class="text-sm text-slate-400 mt-2 mb-5">This screen shows one client's data, and there are no client accounts yet.</p>
                     <button type="button" class="btn-primary" onclick="openAddClientModal()">+ New account</button>
                 </section>
-                <!-- 5 Top Metric Stat Cards -->
-                <section id="admin-alert-counts" class="hidden mb-4 bg-slate-900 border border-slate-800 rounded-xl p-4" aria-labelledby="admin-alerts-h">
-                    <h2 id="admin-alerts-h" class="text-sm font-semibold text-white mb-2">Open problems by client</h2>
-                    <ul class="flex flex-wrap gap-2"></ul>
-                </section>
-                <div id="awaiting-card" class="hidden mb-4 flex flex-wrap items-center justify-between gap-2 bg-slate-900 border border-amber-500/30 rounded-xl p-4">
-                    <span id="awaiting-count" class="text-sm text-amber-200" role="status"></span>
-                    <button type="button" class="btn-secondary text-xs" onclick="switchTab('blog-status')">Review</button>
-                </div>
-                <section id="alerts-panel" class="hidden mb-4 bg-slate-900 border border-slate-800 rounded-xl p-4" aria-labelledby="alerts-h">
-                    <div class="flex justify-between items-center gap-3 mb-2">
-                        <h2 id="alerts-h" class="text-sm font-semibold text-white">Problems <span id="alerts-count" class="hidden ml-1 text-[10px] px-1.5 rounded-full bg-red-500 text-white"></span></h2>
-                        <button type="button" class="btn-secondary text-xs" onclick="loadAlerts()">Refresh</button>
-                    </div>
-                    <div id="alerts-list" aria-live="polite"></div>
-                </section>
-                <div id="kpi-cards" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-                    <div class="metric-card">
-                        <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">Connected Repos</div>
-                        <div class="text-xl font-bold mt-1 text-white" id="stat-repos-count">-</div>
-                        <div class="text-[10px] text-indigo-400 mt-0.5">Multi-framework targets</div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">Published Articles</div>
-                        <div class="text-xl font-bold mt-1 text-emerald-400" id="stat-published-count">-</div>
-                        <div class="text-[10px] text-emerald-400/80 mt-0.5">GitHub PRs & Commits</div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">CRM Contacts</div>
-                        <div class="text-xl font-bold mt-1 text-cyan-400" id="stat-contacts-count">-</div>
-                        <div class="text-[10px] text-slate-400 mt-0.5">Audience & Leads</div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">WhatsApp Chats</div>
-                        <div class="text-xl font-bold mt-1 text-indigo-400" id="stat-chats-count">-</div>
-                        <div class="text-[10px] text-slate-400 mt-0.5">2-way active threads</div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="text-slate-400 text-[11px] font-semibold uppercase tracking-wider">Pipeline Value</div>
-                        <div class="text-xl font-bold mt-1 text-amber-400" id="stat-pipeline-value">-</div>
-                        <div class="text-[10px] text-slate-400 mt-0.5">Active sales Kanban</div>
-                    </div>
-                </div>
-
                 <!-- TAB: REPOSITORIES -->
-                <div id="tab-repos" class="tab-content">
+                <div id="tab-repos" class="tab-content hidden">
             <div class="flex justify-between items-center mb-4">
                 <div>
-                    <h2 class="text-lg font-semibold text-white">Active GitHub Publishing Targets</h2>
-                    <p class="text-sm text-slate-400">Each project is scheduled for unique daily topic ideation, AI authoring, and automated commit/PR creation.</p>
+                    <h2 class="text-lg font-semibold text-white">Websites</h2>
+                    <p class="text-sm text-slate-400">The websites your blog posts are published to.</p>
                 </div>
             </div>
 
@@ -601,55 +523,36 @@ def render_dashboard_html() -> str:
             </div>
         </div>
 
-        <!-- TAB: EDITORIAL STAGING QUEUE -->
-        <div id="tab-staging" class="tab-content hidden">
-            <div class="flex justify-between items-center mb-4">
-                <div>
-                    <h2 class="text-lg font-semibold text-white">Editorial Staging & Review Queue</h2>
-                    <p class="text-sm text-slate-400">Review, edit, and approve AI-generated drafts with live SEO pre-flight scoring before publishing.</p>
-                </div>
-                <button onclick="loadStagingPosts()" class="btn-secondary text-xs">Refresh Queue</button>
+        <div id="tab-dashboard" class="tab-content">
+            <div class="rd-toolbar">
+                <div><label for="dashboard-account">Account</label><select id="dashboard-account" class="input-select text-sm" onchange="dashboardAccountChanged()"></select></div>
+                <button type="button" id="dashboard-new" class="btn-primary text-xs rd-push hidden" onclick="newPost('dashboard')">+ New post</button>
             </div>
-
-            <div id="staging-cards-container" class="space-y-4">
-                <!-- Dynamically populated -->
-            </div>
+            <div id="dashboard-body"><p class="rd-empty" role="status">Loading…</p></div>
         </div>
 
-        <!-- TAB: POSTS & ARTICLES -->
         <div id="tab-posts" class="tab-content hidden">
-            <div class="flex justify-between items-center mb-4">
-                <div>
-                    <h2 class="text-lg font-semibold text-white">Generated Blog Posts</h2>
-                    <p class="text-sm text-slate-400">Review published articles, inspect markdown, and follow GitHub Pull Requests.</p>
-                </div>
-                <div class="flex space-x-2">
-                    <select id="post-filter-project" onchange="loadPosts()" class="input-select text-xs">
-                        <option value="">All Repositories</option>
-                    </select>
-                </div>
+            <div class="rd-toolbar">
+                <div><label for="posts-account">Account</label><select id="posts-account" class="input-select text-sm" onchange="postsAccountChanged()"></select></div>
+                <div><label for="posts-project">Website</label><select id="posts-project" class="input-select text-sm" onchange="postsFilterChanged()"></select></div>
+                <div><label for="posts-author">Author or writer</label><select id="posts-author" class="input-select text-sm" onchange="postsFilterChanged()"></select></div>
+                <div><label for="posts-from">From</label><input id="posts-from" type="date" class="input-text text-sm" onchange="postsFilterChanged()"></div>
+                <div><label for="posts-to">To</label><input id="posts-to" type="date" class="input-text text-sm" onchange="postsFilterChanged()"></div>
+                <div><label for="posts-q">Search</label><input id="posts-q" type="search" class="input-text text-sm" placeholder="Title, topic or keyword" oninput="postsSearch()"></div>
+                <div class="rd-sort-small"><label for="posts-sort">Sort by</label><select id="posts-sort" class="input-select text-sm" onchange="sortSelected()"><option value="publish_at:asc">Scheduled, soonest first</option><option value="publish_at:desc">Scheduled, latest first</option><option value="published_at:asc">Published, oldest first</option><option value="published_at:desc">Published, newest first</option><option value="updated_at:asc">Updated, oldest first</option><option value="updated_at:desc">Updated, newest first</option><option value="title:asc">Title, A to Z</option><option value="title:desc">Title, Z to A</option></select></div>
+                <button type="button" id="posts-clear" class="btn-secondary text-xs hidden" onclick="clearPostFilters()">Clear filters</button>
+                <button type="button" id="posts-new" class="btn-primary text-xs rd-push hidden" onclick="newPost('posts')">+ New post</button>
             </div>
-
-            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto shadow-xl">
-                <table class="w-full text-left text-sm text-slate-300">
-                    <thead class="bg-slate-950/60 border-b border-slate-800 text-xs uppercase text-slate-400">
-                        <tr>
-                            <th class="px-5 py-3">Article Title & Target Path</th>
-                            <th class="px-5 py-3">Repository</th>
-                            <th class="px-5 py-3">SEO Score</th>
-                            <th class="px-5 py-3">Status</th>
-                            <th class="px-5 py-3">GitHub Delivery</th>
-                            <th class="px-5 py-3 text-right">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="posts-table-body" class="divide-y divide-slate-800">
-                        <!-- Dynamically populated -->
-                    </tbody>
-                </table>
-            </div>
+            <div id="posts-tabs" class="rd-tabs" role="group" aria-label="Status"></div>
+            <div id="posts-state"></div>
+            <table id="posts-table" class="rd-table hidden">
+                <caption class="sr-only">Posts</caption>
+                <thead><tr><th scope="col" data-sort="title"><button type="button" onclick="sortBy('title')">Title <span aria-hidden="true"></span></button></th><th scope="col">Status</th><th scope="col">Website</th><th scope="col">Author</th><th scope="col" data-sort="publish_at"><button type="button" onclick="sortBy('publish_at')">Scheduled <span aria-hidden="true"></span></button></th><th scope="col" data-sort="published_at"><button type="button" onclick="sortBy('published_at')">Published <span aria-hidden="true"></span></button></th><th scope="col" data-sort="updated_at"><button type="button" onclick="sortBy('updated_at')">Updated <span aria-hidden="true"></span></button></th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                <tbody id="posts-rows"></tbody>
+            </table>
+            <div id="posts-pages" class="rd-pages"></div>
         </div>
 
-        <!-- TAB: ACTIVITY LOGS -->
         <div id="tab-logs" class="tab-content hidden">
             <div class="flex justify-between items-center mb-4">
                 <div>
@@ -1115,80 +1018,6 @@ def render_dashboard_html() -> str:
         </div>
 
         <!-- TAB: WHATSAPP API & WEBHOOK SETUP -->
-        <div id="tab-blog-plan" class="tab-content hidden">
-            <div class="flex flex-wrap items-end gap-2 mb-4">
-                <div role="group" aria-label="View" class="flex gap-1">
-                    <button type="button" id="plan-view-list" class="btn-secondary text-xs" aria-pressed="true" onclick="setPlanView('list')">List</button>
-                    <button type="button" id="plan-view-month" class="btn-secondary text-xs" aria-pressed="false" onclick="setPlanView('month')">Month</button>
-                </div>
-                <label class="sr-only" for="plan-filter-status">Status</label>
-                <select id="plan-filter-status" class="input-select text-xs w-auto" onchange="renderPlan()"><option value="">All statuses</option><option value="draft">Draft</option><option value="needs_approval">In review</option><option value="rejected">Rejected</option><option value="approved">Approved</option><option value="published">Published</option><option value="failed">Failed</option></select>
-                <label class="sr-only" for="plan-filter-assignee">Assignee</label>
-                <select id="plan-filter-assignee" class="input-select text-xs w-auto" onchange="renderPlan()"><option value="">Anyone</option></select>
-                <button type="button" data-requires="content.write" class="btn-primary text-xs ml-auto" onclick="editPlan(null)">+ Plan a post</button>
-            </div>
-            <div id="plan-month-nav" class="hidden flex items-center justify-between mb-2">
-                <button type="button" class="btn-secondary text-xs" onclick="shiftPlanMonth(-1)">&larr; Previous</button>
-                <h2 id="plan-month-title" class="text-sm font-semibold text-white" aria-live="polite"></h2>
-                <button type="button" class="btn-secondary text-xs" onclick="shiftPlanMonth(1)">Next &rarr;</button>
-            </div>
-            <form id="plan-form" onsubmit="savePlan(event)" class="hidden bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4 space-y-3">
-                <h2 id="plan-form-h" class="text-sm font-semibold text-white">Plan a post</h2>
-                <p id="plan-form-note" class="text-xs text-amber-200"></p>
-                <p id="plan-rejected" class="hidden text-xs text-red-300 break-words"></p>
-                <fieldset id="plan-fields" class="space-y-3">
-                    <div><label for="plan-title" class="block text-xs text-slate-400 mb-1">Title</label><input id="plan-title" class="input-text text-sm w-full" required maxlength="200"></div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div><label for="plan-topic" class="block text-xs text-slate-400 mb-1">Topic</label><input id="plan-topic" class="input-text text-sm w-full" maxlength="300"></div>
-                        <div><label for="plan-keyword" class="block text-xs text-slate-400 mb-1">Target keyword</label><input id="plan-keyword" class="input-text text-sm w-full" maxlength="100"></div>
-                        <div><label for="plan-seo-title" class="block text-xs text-slate-400 mb-1">Search title (empty: the title)</label><input id="plan-seo-title" class="input-text text-sm w-full" maxlength="120"></div>
-                        <div><label for="plan-meta" class="block text-xs text-slate-400 mb-1">Meta description</label><input id="plan-meta" class="input-text text-sm w-full" maxlength="300"></div>
-                        <div><label for="plan-when" class="block text-xs text-slate-400 mb-1">Publish date and time (India time)</label><input id="plan-when" class="input-text text-sm w-full" type="datetime-local" required></div>
-                        <div><label for="plan-project" class="block text-xs text-slate-400 mb-1">Blog project</label><select id="plan-project" class="input-select text-sm w-full" required></select></div>
-                        <div><label for="plan-assignee" class="block text-xs text-slate-400 mb-1">Assignee</label><select id="plan-assignee" class="input-select text-sm w-full" ></select></div>
-                        <div id="plan-writer-wrap" class="hidden"><label for="plan-writer" class="block text-xs text-slate-400 mb-1">AI writer</label><select id="plan-writer" class="input-select text-sm w-full"></select></div>
-                    </div>
-                    <div><label for="plan-body" class="block text-xs text-slate-400 mb-1">Article (Markdown)</label><textarea id="plan-body" class="input-text text-sm w-full font-mono" rows="10" oninput="previewPlan()"></textarea></div>
-                    <div>
-                        <div class="flex justify-between items-center gap-2 mb-1"><h3 class="text-xs text-slate-400">Images</h3><button type="button" id="plan-add-image" class="btn-secondary text-xs" onclick="addPlanImage()">Add image</button></div>
-                        <ul id="plan-images" class="space-y-2"></ul>
-                        <p class="text-[11px] text-slate-500 mt-1">The cover goes at the top. Other images not linked in the text are added at the end.</p>
-                    </div>
-                </fieldset>
-                <details><summary class="text-xs text-indigo-300 cursor-pointer">Preview</summary><div id="plan-preview" class="text-sm text-slate-200 mt-2 break-words"></div></details>
-                <p class="text-[11px] text-slate-500">Approved posts publish within 3 hours of the scheduled time, directly to the website.</p>
-                <div id="plan-reject-box" class="hidden space-y-2">
-                    <label for="plan-reject-note" class="block text-xs text-slate-400">Why is it rejected?</label>
-                    <textarea id="plan-reject-note" class="input-text text-sm w-full" rows="2" maxlength="1000"></textarea>
-                    <button type="button" class="btn-secondary text-xs" onclick="rejectFromEditor()">Send back</button>
-                </div>
-                <div class="flex flex-wrap gap-2">
-                    <button type="submit" id="plan-save" class="btn-primary text-xs">Save</button>
-                    <button type="button" id="plan-draft" class="btn-secondary text-xs" onclick="planAction('draft')">Draft with AI</button>
-                    <button type="button" id="plan-submit" class="btn-secondary text-xs" onclick="planAction('submit')">Submit for approval</button>
-                    <button type="button" id="plan-approve" class="btn-secondary text-xs text-emerald-300" onclick="planAction('approve')">Approve</button>
-                    <button type="button" id="plan-publish-now" class="btn-secondary text-xs text-emerald-300" onclick="planAction('publish-now')">Publish now</button>
-                    <button type="button" id="plan-reject" class="btn-secondary text-xs text-red-300" onclick="toggleRejectBox()">Reject</button>
-                    <button type="button" id="plan-delete" class="btn-secondary text-xs text-red-300" onclick="deletePlan()">Delete</button>
-                    <button type="button" class="btn-secondary text-xs" onclick="closePlanForm()">Close</button>
-                </div>
-            </form>
-            <div id="plan-list" class="space-y-2"></div>
-        </div>
-
-        <div id="tab-blog-status" class="tab-content hidden">
-            <p class="text-xs text-slate-400 mb-4">Approved posts publish within 3 hours of the scheduled time.</p>
-            <section aria-labelledby="review-h" class="mb-6">
-                <h2 id="review-h" class="text-sm font-semibold text-white mb-2">Waiting for approval</h2>
-                <div id="review-queue" class="space-y-2" aria-live="polite"></div>
-            </section>
-            <section aria-labelledby="status-h">
-                <h2 id="status-h" class="text-sm font-semibold text-white mb-2">All posts</h2>
-                <div id="status-filters" role="group" aria-label="Filter by state" class="flex flex-wrap gap-2 mb-3"></div>
-                <div id="status-list" class="space-y-2"></div>
-            </section>
-        </div>
-
         <div id="tab-media" class="tab-content hidden">
             <p id="media-not-ready" class="hidden text-sm text-amber-200 mb-3" role="status">File storage is not set up on the server yet, so nothing can be uploaded.</p>
             <div class="flex flex-wrap items-end gap-3 mb-4">
@@ -1511,85 +1340,6 @@ def render_dashboard_html() -> str:
     </main>
     </div>
 </div>
-
-    <!-- Post Preview & Markdown Modal -->
-    <div id="modal-post" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-post-title">
-        <div class="modal-dialog max-w-4xl">
-            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <h3 class="text-lg font-bold text-white" id="modal-post-title">Article Preview</h3>
-                <button type="button" aria-label="Close" onclick="closePostModal()" class="text-slate-400 hover:text-white">&times;</button>
-            </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                    <label class="text-xs font-medium text-slate-400 uppercase">Frontmatter (YAML)</label>
-                    <pre class="bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs font-mono text-cyan-300 mt-1 overflow-x-auto max-h-48" id="modal-post-frontmatter"></pre>
-                    
-                    <label class="text-xs font-medium text-slate-400 uppercase mt-4 block">SEO & Image Prompt</label>
-                    <div class="bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs text-slate-300 mt-1 space-y-1">
-                        <div><strong>Excerpt:</strong> <span id="modal-post-excerpt"></span></div>
-                        <div><strong>Image Prompt:</strong> <span id="modal-post-image-prompt" class="italic text-indigo-300"></span></div>
-                        <div><strong>Target Path:</strong> <code id="modal-post-path" class="text-emerald-400"></code></div>
-                    </div>
-                </div>
-                <div>
-                    <label class="text-xs font-medium text-slate-400 uppercase">Article Markdown</label>
-                    <textarea id="modal-post-content" class="w-full bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs font-mono text-slate-200 mt-1 h-96 resize-none focus:outline-none" readonly></textarea>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Split Screen Editorial Staging Editor Modal -->
-    <div id="modal-staging-editor" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-staging-editor-heading">
-        <div class="modal-dialog max-w-6xl">
-            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <div class="flex items-center gap-3">
-                    <h3 id="modal-staging-editor-heading" class="text-lg font-bold text-white">Editorial Staging & Split Markdown Editor</h3>
-                    <span id="editor-seo-badge" class="text-xs px-2.5 py-0.5 rounded-full font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">SEO: 100/100</span>
-                </div>
-                <button onclick="closeStagingEditor()" class="text-slate-400 hover:text-white">&times;</button>
-            </div>
-            
-            <input type="hidden" id="edit-post-id">
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                <!-- Left: Markdown & Metadata Inputs -->
-                <div class="space-y-3">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Title</label>
-                        <input type="text" id="edit-post-title" class="input-text text-sm font-semibold" oninput="updateSplitPreview()">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Excerpt / Meta Description</label>
-                        <textarea id="edit-post-excerpt" rows="2" class="input-text text-xs resize-none" oninput="updateSplitPreview()"></textarea>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Content Markdown</label>
-                        <textarea id="edit-post-markdown" class="w-full bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs font-mono text-slate-200 h-96 resize-none focus:outline-none focus:border-indigo-500" oninput="updateSplitPreview()"></textarea>
-                    </div>
-                </div>
-
-                <!-- Right: Real-Time Rendered Preview & SEO Issues -->
-                <div class="flex flex-col space-y-3">
-                    <div id="editor-seo-issues-box" class="p-3 rounded-lg bg-slate-950 border border-slate-800 text-xs space-y-1 max-h-24 overflow-y-auto">
-                        <span class="text-slate-400 font-semibold">SEO & Brand Safety Guardrails:</span>
-                        <div id="editor-issues-list" class="text-[11px] text-slate-400">All checks passed.</div>
-                    </div>
-
-                    <div class="flex-1 bg-slate-950 p-4 rounded-lg border border-slate-800 overflow-y-auto max-h-[420px] text-slate-200 text-xs leading-relaxed" id="editor-live-preview">
-                        <!-- Rendered Markdown -->
-                    </div>
-                </div>
-            </div>
-
-            <div class="flex justify-between items-center pt-4 border-t border-slate-800 mt-4">
-                <button type="button" onclick="closeStagingEditor()" class="btn-secondary text-xs">Close</button>
-                <div class="flex gap-2">
-                    <button type="button" onclick="saveStagedDraft()" class="btn-secondary text-xs">Save Changes</button>
-                    <button type="button" onclick="approveAndPublishStagedPost()" id="btn-approve-post" class="btn-primary text-xs">Approve & Publish 🚀</button>
-                </div>
-            </div>
-        </div>
-    </div>
 
     <!-- Interactive 3-Step Website Connection Wizard (Built for Non-Technical Users) -->
     <div id="modal-add-project" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-project-heading">
@@ -2049,6 +1799,53 @@ def render_dashboard_html() -> str:
     <div id="toast" class="toast hidden"></div>
 
     <script src="/static/js/qrcode.js"></script>
+    <div id="modal-post" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="plan-form-h">
+        <div class="rd-drawer">
+            <form id="plan-form" onsubmit="savePlan(event)" class="p-4 space-y-3">
+                <h2 id="plan-form-h" class="text-sm font-semibold text-white">Plan a post</h2>
+                <p id="plan-form-note" class="text-xs text-amber-200"></p>
+                <p id="plan-missing" class="text-xs text-amber-200"></p>
+                <p id="plan-rejected" class="hidden text-xs text-red-300 break-words"></p>
+                <fieldset id="plan-fields" class="space-y-3">
+                    <div><label for="plan-title" class="block text-xs text-slate-400 mb-1">Title</label><input id="plan-title" class="input-text text-sm w-full" required maxlength="200"></div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div><label for="plan-topic" class="block text-xs text-slate-400 mb-1">Topic</label><input id="plan-topic" class="input-text text-sm w-full" maxlength="300"></div>
+                        <div><label for="plan-keyword" class="block text-xs text-slate-400 mb-1">Target keyword</label><input id="plan-keyword" class="input-text text-sm w-full" maxlength="100"></div>
+                        <div><label for="plan-seo-title" class="block text-xs text-slate-400 mb-1">Search title (empty: the title)</label><input id="plan-seo-title" class="input-text text-sm w-full" maxlength="120"></div>
+                        <div><label for="plan-meta" class="block text-xs text-slate-400 mb-1">Meta description</label><input id="plan-meta" class="input-text text-sm w-full" maxlength="300"></div>
+                        <div><label for="plan-when" class="block text-xs text-slate-400 mb-1">Publish date and time (India time)</label><input id="plan-when" class="input-text text-sm w-full" type="datetime-local"></div>
+                        <div><label for="plan-project" class="block text-xs text-slate-400 mb-1">Website</label><select id="plan-project" class="input-select text-sm w-full" required></select></div>
+                        <div><label for="plan-assignee" class="block text-xs text-slate-400 mb-1">Assignee</label><select id="plan-assignee" class="input-select text-sm w-full" ></select></div>
+                        <div id="plan-writer-wrap" class="hidden"><label for="plan-writer" class="block text-xs text-slate-400 mb-1">AI writer</label><select id="plan-writer" class="input-select text-sm w-full"></select></div>
+                    </div>
+                    <div><label for="plan-body" class="block text-xs text-slate-400 mb-1">Article (Markdown)</label><textarea id="plan-body" class="input-text text-sm w-full font-mono" rows="10" oninput="previewPlan()"></textarea></div>
+                    <div>
+                        <div class="flex justify-between items-center gap-2 mb-1"><h3 class="text-xs text-slate-400">Images</h3><button type="button" id="plan-add-image" class="btn-secondary text-xs" onclick="addPlanImage()">Add image</button></div>
+                        <ul id="plan-images" class="space-y-2"></ul>
+                        <p class="text-[11px] text-slate-500 mt-1">The cover goes at the top. Other images not linked in the text are added at the end.</p>
+                    </div>
+                </fieldset>
+                <details><summary class="text-xs text-indigo-300 cursor-pointer">Preview</summary><div id="plan-preview" class="text-sm text-slate-200 mt-2 break-words"></div></details>
+                <p class="text-[11px] text-slate-500">Approved posts publish within 3 hours of the scheduled time, directly to the website.</p>
+                <div id="plan-reject-box" class="hidden space-y-2">
+                    <label for="plan-reject-note" class="block text-xs text-slate-400">Why is it rejected?</label>
+                    <textarea id="plan-reject-note" class="input-text text-sm w-full" rows="2" maxlength="1000"></textarea>
+                    <button type="button" class="btn-secondary text-xs" onclick="rejectFromEditor()">Send back</button>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button type="submit" id="plan-save" class="btn-primary text-xs">Save</button>
+                    <button type="button" id="plan-draft" class="btn-secondary text-xs" onclick="planAction('draft')">Draft with AI</button>
+                    <button type="button" id="plan-submit" class="btn-secondary text-xs" onclick="planAction('submit')">Submit for approval</button>
+                    <button type="button" id="plan-approve" class="btn-secondary text-xs text-emerald-300" onclick="planAction('approve')">Approve</button>
+                    <button type="button" id="plan-publish-now" class="btn-secondary text-xs text-emerald-300" onclick="planAction('publish-now')">Publish now</button>
+                    <button type="button" id="plan-reject" class="btn-secondary text-xs text-red-300" onclick="toggleRejectBox()">Reject</button>
+                    <button type="button" id="plan-delete" class="btn-secondary text-xs text-red-300" onclick="deletePlan()">Delete</button>
+                    <button type="button" class="btn-secondary text-xs" onclick="askClosePost()">Close</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div id="modal-media" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-media-h">
         <div class="modal-dialog max-w-lg">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-3">
@@ -2068,6 +1865,7 @@ def render_dashboard_html() -> str:
 
     <script src="/static/js/app.js"></script>
     <script src="/static/js/phase1b.js"></script>
+    <script src="/static/js/redesign.js"></script>
     <script>
         // Automatic runtime fallback if external script failed to load
         if (typeof initApp !== 'function') {

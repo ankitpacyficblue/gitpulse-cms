@@ -206,7 +206,7 @@ async function rejectFromEditor() {
     if (!note) { showToast('Write why it is rejected.', 'error'); el('plan-reject-note').focus(); return; }
     if (!(await rejectPost(item.id, note))) return;
     showToast('Rejected. The writer sees your note.', 'success');
-    await loadPlan();
+    await refreshAfterEdit();
     editPlan(item.id);
 }
 
@@ -215,117 +215,6 @@ const STATE_NAMES = { in_review: 'needs_approval', scheduled: 'approved' };
 const postState = i => STATE_NAMES[i.state] || i.state || (i.status === 'draft' && i.rejected_note ? 'rejected' : i.status);
 const POST_STATES = { needs_approval: ['In review', 'text-amber-300'], approved: ['Scheduled', 'text-cyan-300'], published: ['Published', 'text-emerald-400'],
     failed: ['Failed', 'text-red-300'], rejected: ['Rejected', 'text-red-300'], draft: ['Draft', 'text-slate-300'] };
-let statusItems = [], statusFilter = '';
-async function fetchPlan() {
-    if (!getActiveAccountId() || !can('content.read')) return null;
-    const data = await apiCall('GET', '/api/blog/plan', undefined, { quiet: true });
-    return data && data.items ? data.items : null;
-}
-function showAwaiting(items) {
-    const n = (items || []).filter(i => i.status === 'needs_approval').length;
-    const badge = el('badge-awaiting');
-    badge.innerText = n; badge.classList.toggle('hidden', !n);
-    el('awaiting-card').classList.toggle('hidden', !n || el('tab-repos').classList.contains('hidden'));
-    el('awaiting-count').innerText = `${n} blog post${n === 1 ? '' : 's'} awaiting approval`;
-}
-async function loadAwaiting() {
-    const acct = getActiveAccountId();
-    const items = await fetchPlan();
-    if (acct === getActiveAccountId()) showAwaiting(items);
-}
-async function loadBlogStatus() {
-    const acct = getActiveAccountId();
-    const items = await fetchPlan();
-    if (acct !== getActiveAccountId()) return;
-    if (!items) { el('status-list').innerHTML = emptyStateHtml('Could not load the posts', 'Try again in a moment.'); el('review-queue').innerHTML = ''; return; }
-    statusItems = items;
-    showAwaiting(items);
-    renderReviewQueue();
-    renderBlogStatus();
-}
-// Published posts are left alone.
-const coverWarning = i => i.status !== 'published' && !(i.images || []).some(m => m.cover)
-    ? '<p class="text-xs text-amber-200 mt-1">No cover image. Add one before this post can be submitted, approved or published.</p>' : '';
-function renderReviewQueue() {
-    const waiting = statusItems.filter(i => i.status === 'needs_approval');
-    const box = el('review-queue');
-    box.innerHTML = waiting.length ? waiting.map(i => {
-        const id = Number(i.id), imgs = i.images || [];
-        return `<article class="${cardClass}">
-            <h3 class="text-sm font-semibold text-white break-words">${escapeHtml(i.title)}</h3>
-            <p class="text-[11px] text-slate-400">${escapeHtml([i.publish_at ? `Scheduled ${fmtIst(i.publish_at)}` : 'No date yet', i.writer ? `Writer ${i.writer}` : i.assignee_name, `${imgs.length} image${imgs.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '))}</p>
-            ${coverWarning(i)}
-            <div class="flex flex-wrap gap-2 mt-2">${imgs.map(m => thumbHtml({ ...m, mime: 'image/' }, 'w-16 h-16')).join('')}</div>
-            <details class="mt-2"><summary class="text-xs text-indigo-300 cursor-pointer">Read the post</summary><div class="text-sm text-slate-200 mt-2">${postPreviewHtml(i.body, imgs)}</div></details>
-            ${can('content.publish') ? `<div class="flex flex-wrap gap-2 mt-3">
-                <button type="button" class="btn-primary text-xs" data-approve="${id}">Approve</button>
-                <button type="button" class="btn-secondary text-xs text-red-300" data-reject="${id}" aria-expanded="false">Reject</button></div>
-            <form class="hidden mt-2 space-y-2" data-form="${id}">
-                <label for="reject-${id}" class="block text-xs text-slate-400">Why is it rejected?</label>
-                <textarea id="reject-${id}" class="input-text text-sm w-full" rows="2" required maxlength="1000"></textarea>
-                <button type="submit" class="btn-secondary text-xs">Send back</button></form>
-            <p class="text-[11px] text-slate-500 mt-2">After approval it publishes within 3 hours of the scheduled time.</p>` : ''}
-        </article>`;
-    }).join('') : '<p class="text-xs text-slate-400">Nothing is waiting for approval.</p>';
-    box.querySelectorAll('[data-approve]').forEach(b => b.onclick = async () => {
-        b.disabled = true;
-        const res = await apiPost(`/api/blog/plan/${b.dataset.approve}/approve`, {});
-        b.disabled = false;
-        if (res && !res.error) { showToast('Approved. It publishes within 3 hours of the scheduled time.', 'success'); loadBlogStatus(); }
-    });
-    box.querySelectorAll('[data-reject]').forEach(b => b.onclick = () => {
-        const form = box.querySelector(`[data-form="${b.dataset.reject}"]`);
-        const open = form.classList.toggle('hidden') === false;
-        b.setAttribute('aria-expanded', String(open));
-        if (open) form.querySelector('textarea').focus();
-    });
-    box.querySelectorAll('[data-form]').forEach(f => f.onsubmit = async e => {
-        e.preventDefault();
-        const note = f.querySelector('textarea').value.trim();
-        if (note && await rejectPost(f.dataset.form, note)) { showToast('Rejected. The writer sees your note.', 'success'); loadBlogStatus(); }
-    });
-}
-function setStatusFilter(state) { statusFilter = state; renderBlogStatus(); }
-function renderBlogStatus() {
-    const counts = {};
-    statusItems.forEach(i => { counts[postState(i)] = (counts[postState(i)] || 0) + 1; });
-    el('status-filters').innerHTML = [['', 'All', statusItems.length], ...Object.entries(POST_STATES).map(([k, v]) => [k, v[0], counts[k] || 0])]
-        .map(([k, label, n]) => `<button type="button" class="btn-secondary text-xs gap-1.5 ${statusFilter === k ? 'ring-2 ring-indigo-500' : ''}" aria-pressed="${statusFilter === k}" data-state="${k}">${label} <strong>${n}</strong></button>`).join('');
-    el('status-filters').querySelectorAll('button').forEach(b => b.onclick = () => { setStatusFilter(b.dataset.state); el('status-filters').querySelector(`[data-state="${b.dataset.state}"]`).focus(); });
-    const items = statusItems.filter(i => !statusFilter || postState(i) === statusFilter)
-        .sort((a, b) => String(b.publish_at || '').localeCompare(String(a.publish_at || '')));
-    el('status-list').innerHTML = items.length ? items.map(i => {
-        const [label, colour] = POST_STATES[postState(i)] || [i.status, 'text-slate-300'];
-        const link = /^https?:\/\//.test(i.post_url || '') ? `<a class="text-indigo-300 underline" href="${escapeHtml(i.post_url)}" target="_blank" rel="noopener">View post</a>` : '';
-        const cell = (name, html) => `<div class="min-w-0"><dt class="inline">${name}: </dt><dd class="inline text-slate-200 break-words">${html || '-'}</dd></div>`;
-        const problem = i.error ? `<span class="text-red-300">${escapeHtml(i.error)}</span>`
-            : i.rejected_note ? `<span class="text-amber-200">${i.rejected_by_name ? `${escapeHtml(i.rejected_by_name)}: ` : ''}${escapeHtml(i.rejected_note)}</span>` : '';
-        return `<article class="${cardClass}">
-            <div class="flex flex-wrap justify-between items-start gap-2">
-                <h3 class="text-sm font-semibold text-white break-words min-w-0 flex-1">${escapeHtml(i.title)}</h3>
-                <span class="text-xs font-semibold ${colour}">${escapeHtml(label)}${isLate(i) ? ' <span class="ml-1 px-1.5 rounded bg-red-500/20 text-red-300">Late</span>' : ''}</span>
-            </div>
-            ${coverWarning(i)}
-            <dl class="text-xs text-slate-400 mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5">
-                ${cell('Writer', escapeHtml(i.writer || i.assignee_name || ''))}
-                ${cell('Scheduled', escapeHtml(fmtIst(i.publish_at)))}
-                ${cell('Published', escapeHtml(fmtIst(i.published_at)))}
-                ${cell('Link', link)}
-                ${cell('Last error or note', problem)}
-            </dl>
-            <button type="button" class="btn-secondary text-xs mt-2" onclick="openPlanFromAlert(${Number(i.id)})">Open</button>
-            ${i.status === 'approved' && can('content.publish') ? `<button type="button" class="btn-primary text-xs mt-2 ml-2" data-publish="${Number(i.id)}">Publish now</button>` : ''}
-        </article>`;
-    }).join('') : emptyStateHtml('No posts here', 'Plan a post under Blog Schedule.');
-    el('status-list').querySelectorAll('[data-publish]').forEach(b => b.onclick = async () => {
-        const item = statusItems.find(i => String(i.id) === b.dataset.publish);
-        if (!item || !confirmPublishNow(item.title)) return;
-        b.disabled = true;
-        const res = await apiPost(`/api/blog/plan/${item.id}/publish-now`, {});
-        if (res && !res.error) showToast('Published.', 'success');
-        loadBlogStatus();
-    });
-}
 function confirmPublishNow(title) { return confirm(`Publish "${title}" now? It goes live on the website at once.`); }
 
 // Assign a planned post to a writer token (admin only; the token list needs users.manage).
