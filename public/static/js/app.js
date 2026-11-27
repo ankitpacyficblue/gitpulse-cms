@@ -775,18 +775,18 @@ async function approveAndPublishStagedPost() {
     const postId = currentStagingPost.id;
     const btn = document.getElementById('btn-approve-post');
     btn.disabled = true;
-    btn.innerText = 'Publishing to GitHub...';
+    btn.innerText = 'Publishing...';
 
     // 1. Save any pending changes
     await saveStagedDraft();
 
-    // 2. Approve and trigger GitHub publication
+    // 2. Approve and publish
     const res = await apiPost(`/api/posts/${postId}/approve`, {});
     btn.disabled = false;
-    btn.innerText = 'Approve & Publish to GitHub 🚀';
+    btn.innerText = 'Approve & Publish 🚀';
 
     if (res && res.success) {
-        showToast('Article approved and published to GitHub!', 'success');
+        showToast('Article approved and published.', 'success');
         closeStagingEditor();
         loadStagingPosts();
         loadPosts();
@@ -825,7 +825,9 @@ async function loadPosts() {
         }
 
         let githubDelivery = '<span class="text-slate-500 text-xs">Pending delivery</span>';
-        if (post.github_pr_url) {
+        if (post.url) {
+            githubDelivery = `<a href="${escapeHtml(post.url)}" target="_blank" rel="noopener" class="text-cyan-400 hover:underline text-xs">View post ↗</a>`;
+        } else if (post.github_pr_url) {
             githubDelivery = `<a href="${post.github_pr_url}" target="_blank" class="text-cyan-400 hover:underline text-xs flex items-center gap-1">PR #${post.github_pr_number || 'Link'} ↗</a>`;
         } else if (post.github_commit_sha) {
             githubDelivery = `<span class="text-slate-400 font-mono text-xs">Commit: ${post.github_commit_sha.substring(0, 7)}</span>`;
@@ -1847,7 +1849,7 @@ async function loadWhatsAppAutomations() {
             triggerLabel = 'First Inbound Message from New Contact';
         } else if (a.trigger_type === 'blog_publish') {
             icon = '📰';
-            triggerLabel = 'Autonomous Blog Published to GitHub';
+            triggerLabel = 'Autonomous Blog Published';
         }
         
         card.innerHTML = `
@@ -2534,6 +2536,8 @@ async function loadAccountSettings() {
     const src = document.getElementById('set-ai-source');
     if (src) src.innerText = cfg.ai_key_source === 'account' ? 'Using this account\'s own key.' : 'Using the platform key until you add one.';
     const acct = (window.__accounts || []).find(a => String(a.id) === String(getActiveAccountId()));
+    const info = await apiGet(`/api/accounts/${encodeURIComponent(getActiveAccountId())}`);
+    if (info && !info.error) set('set-website', info.website_url || '');
     if (window.__acctCurrency) { set('set-currency', window.__acctCurrency); set('new-deal-currency', window.__acctCurrency); }
 }
 
@@ -2546,7 +2550,7 @@ async function saveAccountSettings(e) {
     if ((document.getElementById('set-ai-clear') || {}).checked) body.clear_ai_key = true;
     if ((document.getElementById('set-gh-clear') || {}).checked) body.clear_github_token = true;
     const res = await apiPost('/api/account/settings', body);
-    const cur = await apiPatch(`/api/accounts/${encodeURIComponent(getActiveAccountId())}`, { default_currency: val('set-currency') });
+    const cur = await apiPatch(`/api/accounts/${encodeURIComponent(getActiveAccountId())}`, { default_currency: val('set-currency'), website_url: val('set-website').trim() });
     if (res && !res.error && cur && !cur.error) {
         showToast('Settings saved.', 'success');
         ['set-ai-clear', 'set-gh-clear'].forEach(i => { const c = document.getElementById(i); if (c) c.checked = false; });
@@ -3142,7 +3146,7 @@ async function editPlan(id) {
     if (item) {
         if (item.assignee_id && ![...people.options].some(o => o.value === String(item.assignee_id))) people.add(new Option(item.assignee_name || 'Teammate', String(item.assignee_id)));
         const set = (k, v) => { document.getElementById(k).value = v == null ? '' : v; };
-        set('plan-title', item.title); set('plan-topic', item.topic); set('plan-keyword', item.keyword);
+        set('plan-title', item.title); set('plan-topic', item.topic); set('plan-keyword', item.keyword); set('plan-seo-title', item.seo_title); set('plan-meta', item.meta_description);
         set('plan-when', istInput(item.publish_at)); set('plan-project', item.project_id); set('plan-assignee', item.assignee_id); set('plan-body', item.body);
     }
     setPlanImages(item && item.images);
@@ -3175,14 +3179,14 @@ async function editPlan(id) {
 function closePlanForm() { planEditing = null; document.getElementById('plan-form').classList.add('hidden'); }
 function planBody() {
     const val = k => document.getElementById(k).value.trim();
-    return { title: val('plan-title'), topic: val('plan-topic'), keyword: val('plan-keyword'), publish_at: istToIso(val('plan-when')),
+    return { title: val('plan-title'), topic: val('plan-topic'), keyword: val('plan-keyword'), seo_title: val('plan-seo-title'), meta_description: val('plan-meta'), publish_at: istToIso(val('plan-when')),
              project_id: Number(val('plan-project')) || val('plan-project'), assignee_id: val('plan-assignee') ? Number(val('plan-assignee')) : null, body: document.getElementById('plan-body').value, images: imagesPayload(planImages),
              ...(writerChoice() === undefined ? {} : { writer_token_id: writerChoice() }) };
 }
 function planDirty() {
     if (!planEditing) return false;
     const b = planBody();
-    return ['title', 'topic', 'keyword', 'body'].some(k => (planEditing[k] || '') !== b[k]) || istInput(planEditing.publish_at) !== document.getElementById('plan-when').value
+    return ['title', 'topic', 'keyword', 'seo_title', 'meta_description', 'body'].some(k => (planEditing[k] || '') !== b[k]) || istInput(planEditing.publish_at) !== document.getElementById('plan-when').value
         || JSON.stringify(imagesPayload(planEditing.images)) !== JSON.stringify(b.images)
         || (writerChoice() !== undefined && (planEditing.writer_token_id || null) !== writerChoice())
         || String(planEditing.project_id || '') !== String(b.project_id || '') || String(planEditing.assignee_id || '') !== String(b.assignee_id || '');

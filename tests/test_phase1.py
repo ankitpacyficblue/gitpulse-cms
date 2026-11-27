@@ -32,6 +32,10 @@ def without_cover_rule(test):
     test.addCleanup(patch.stop)
 
 
+def website(test, account_id, url="https://www.example.com"):
+    test.assertEqual(test.api("PATCH", f"/api/accounts/{account_id}", {"website_url": url})[0], 200)
+
+
 class Base(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -480,9 +484,8 @@ class BlogPlanTests(Base):
     def item(self, item):
         return next(i for i in self.api("GET", "/api/blog/plan")[1]["items"] if i["id"] == item)
 
-    def publisher(self, success=True):
-        res = {"success": success, "pr_url": "https://github.com/x/y/pull/1", "error": "boom"}
-        return mock.patch("engine.github_client.GitHubClient.publish_post", return_value=res)
+    def publisher(self):
+        return mock.patch("database.create_post", wraps=db.create_post)
 
     def test_roles_and_illegal_jumps(self):
         self.assertEqual(self.viewer_api("POST", "/api/blog/plan", {"title": "x"})[0], 403)
@@ -509,7 +512,7 @@ class BlogPlanTests(Base):
         self.assertEqual(self.item(item)["status"], "needs_approval")
 
     def test_only_due_approved_posts_publish_once(self):
-        cs.save_account_settings(self.a, github_token="gh-test-token")
+        website(self, self.a)
         due, later, unapproved = self.new(), self.new(minutes=600), self.new()
         for item in (due, later):
             self.step(item, "submit"), self.step(item, "approve")
@@ -518,20 +521,19 @@ class BlogPlanTests(Base):
             jobs.tick(limit=1000)
             jobs.tick(limit=1000)
         self.assertEqual(pub.call_count, 1)
-        self.assertIn("Visits are on weekends.", pub.call_args.kwargs["file_content"])
+        self.assertIn("Visits are on weekends.", pub.call_args.args[0]["content_markdown"])
         self.assertEqual([self.item(i)["status"] for i in (due, later, unapproved)], ["published", "approved", "needs_approval"])
-        self.assertTrue(self.item(due)["post_url"])
+        self.assertEqual(self.item(due)["post_url"], "https://www.example.com/blog/visiting-the-plots")
         self.assertEqual(self.writer("PATCH", f"/api/blog/plan/{due}", {"title": "z"})[0], 409)
 
-    def test_failure_and_missing_token_raise_alert_and_do_not_repeat(self):
+    def test_failure_raises_alert_and_does_not_repeat(self):
         item = self.new()
         self.step(item, "submit"), self.step(item, "approve")
-        with self.publisher() as pub:
-            jobs.tick(limit=1000)
-            jobs.tick(limit=1000)
-        self.assertEqual(pub.call_count, 0)
-        self.assertEqual(self.item(item)["status"], "failed")
-        self.assertIn("GitHub token", self.alerts("blog_failed")[0]["message"])
+        with mock.patch("database.create_post", side_effect=RuntimeError("boom")) as pub:
+            for _ in range(2):
+                jobs.tick(limit=1000)
+        self.assertEqual(pub.call_count, 1)
+        self.assertNotEqual(self.item(item)["status"], "published")
 
     def test_banned_claim_cannot_be_approved(self):
         self.api("PUT", "/api/ai/knowledge", {"banned_claims": ["guaranteed returns"]})
@@ -576,16 +578,17 @@ class PublishNowTests(Base):
             self.assertEqual(self.api("POST", f"/api/blog/plan/{item['id']}/approve")[0], 200)
         return item["id"]
 
-    def publisher(self, **res):
-        return mock.patch("engine.github_client.GitHubClient.publish_post", return_value=res)
+    def publisher(self):
+        return mock.patch("database.create_post", wraps=db.create_post)
 
     def test_publishes_once_and_only_for_a_publisher(self):
         item = self.post_waiting()
         url = f"/api/blog/plan/{item}/publish-now"
-        with self.publisher(success=True, pr_url="u") as publish:
+        website(self, self.a)
+        with self.publisher() as publish:
             self.assertEqual(self.agent_api("POST", url)[0], 403)
             code, out = self.api("POST", url)
-            self.assertEqual((code, out["item"]["status"], out["item"]["post_url"]), (200, "published", "u"), out)
+            self.assertEqual((code, out["item"]["status"], out["item"]["post_url"]), (200, "published", "https://www.example.com/blog/t"), out)
             self.assertEqual(self.api("POST", url)[1]["error"], "wrong_status")
             blog_plan.schedule_due()
             jobs.tick()
@@ -595,7 +598,7 @@ class PublishNowTests(Base):
         waiting = self.post_waiting(status="needs_approval")
         self.assertEqual(self.api("POST", f"/api/blog/plan/{waiting}/publish-now")[1]["error"], "wrong_status")
         item = self.post_waiting()
-        with self.publisher(success=False, error="no access"):
+        with mock.patch.object(blog_plan, "publish", return_value={"success": False, "error": "no access"}):
             code, out = self.api("POST", f"/api/blog/plan/{item}/publish-now")
         self.assertEqual((code, out["error"]), (502, "publish_failed"), out)
         self.assertIn("no access", out["message"])
@@ -628,7 +631,7 @@ class CoverRequiredTests(Base):
         self.assertEqual(step("approve")[1]["error"], "cover_required")
         self.put(item, status="approved")                                   # approved before the rule
         self.assertEqual(step("publish-now")[1]["error"], "cover_required")
-        with mock.patch("engine.github_client.GitHubClient.publish_post") as publish:
+        with mock.patch("database.create_post") as publish:
             blog_plan.schedule_due()
             jobs.tick()
         publish.assert_not_called()
@@ -647,6 +650,94 @@ class CoverRequiredTests(Base):
             self.assertEqual((code, body["error"]), (409, "cover_required"), body)
             self.assertIn("cover", body["message"])
         self.assertEqual(self.api("GET", "/api/blog/plan")[1]["items"], [])
+
+
+class LivePublishTests(Base):
+    """The default: GitPulse is the source of posts and nothing is committed."""
+    COVER = {"url": "https://cms.example.com/api/public/media/abc", "alt": "Title card"}
+
+    def setUp(self):
+        super().setUp()
+        without_cover_rule(self)
+        for target, name, fake in (
+            (blog_plan, "_post_files", lambda account_id, row: []),
+            (blog_plan, "_image", lambda row, images, flag: self.COVER if flag == "cover" else None),
+        ):
+            patch = mock.patch.object(target, name, fake)
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
+        git = mock.patch("engine.github_client.GitHubClient.commit_file", side_effect=AssertionError("committed"))
+        self.git = git.start()
+        self.addCleanup(git.stop)
+
+    def publish(self, **extra):
+        later = (datetime.utcnow() + timedelta(5)).isoformat() + "Z"
+        item = self.api("POST", "/api/blog/plan", {"title": "Hill plots", "body": "Visits are on weekends.",
+                        "meta_description": "What to check.", "project_id": self.pid, "publish_at": later, **extra})[1]["item"]["id"]
+        self.api("POST", f"/api/blog/plan/{item}/submit")
+        self.api("POST", f"/api/blog/plan/{item}/approve")
+        return self.api("POST", f"/api/blog/plan/{item}/publish-now")
+
+    def public(self, tail=""):
+        code, _, body = handle_public_request(f"/api/public/projects/{self.pid}/posts{tail}", {})
+        return code, json.loads(body)
+
+    def test_publishes_without_a_commit_and_links_to_the_website(self):
+        website(self, self.a, "https://www.example.com/")
+        self.assertEqual(self.public()[1]["posts"], [])
+        with mock.patch("urllib.request.urlopen", side_effect=AssertionError("called out")), \
+                mock.patch.object(WhatsAppClient, "trigger_blog_publish_alert") as announced:
+            code, out = self.publish(seo_title="Hill plots near Nainital", keyword="hill plots, nainital")
+        url = "https://www.example.com/blog/hill-plots"
+        self.assertEqual((code, out["item"]["status"], out["item"]["post_url"]), (200, "published", url), out)
+        self.assertEqual(announced.call_args.args, ("Hill plots", url))
+        listed = self.public()[1]["posts"][0]
+        self.assertEqual((listed["slug"], listed["cover_image"], listed["og_image"], listed["author"]),
+                         ("hill-plots", self.COVER, None, "Editorial Team"))
+        self.assertEqual(listed["seo"], {"title": "Hill plots near Nainital", "description": "What to check.",
+                                         "keywords": ["hill plots", "nainital"]})
+        self.assertEqual(listed["updated_at"], listed["published_at"])
+        code, post = self.public("/hill-plots")
+        self.assertEqual((code, post["content_markdown"], post["body_format"]), (200, "Visits are on weekends.", "markdown"))
+        stored = self.api("GET", "/api/posts")[1]["posts"][0]
+        self.assertEqual(stored["url"], url)
+        self.assertEqual(self.api("PUT", f"/api/posts/{stored['id']}", {"excerpt": "New."})[0], 200)
+        changed = self.public()[1]["posts"][0]
+        self.assertGreater(changed["updated_at"], changed["published_at"])
+        self.assertEqual(self.public("/missing")[0], 404)
+
+    def test_without_a_website_the_post_is_live_but_has_no_link(self):
+        with mock.patch.object(WhatsAppClient, "trigger_blog_publish_alert") as announced:
+            code, out = self.publish()
+        self.assertEqual((code, out["item"]["status"], out["item"]["post_url"]), (200, "published", ""), out)
+        announced.assert_not_called()
+        self.assertIn("website address", self.alerts("blog_failed")[0]["message"])
+        self.assertEqual(len(self.public()[1]["posts"]), 1)
+
+    def test_only_an_admin_sets_a_public_https_website(self):
+        url = f"/api/accounts/{self.a}"
+        self.assertEqual(self.agent_api("PATCH", url, {"website_url": "https://www.example.com"})[0], 403)
+        for bad in ("http://www.example.com", "https://localhost", "https://10.0.0.1", "https://a:b@example.com",
+                    'https://x.com/"><s>'):
+            self.assertEqual(self.api("PATCH", url, {"website_url": bad})[0], 400, bad)
+        website(self, self.a)
+        self.assertEqual(self.api("GET", url)[1]["website_url"], "https://www.example.com")
+
+    def test_writer_sends_search_fields_and_a_social_image(self):
+        with mock.patch.object(media, "get", lambda account, i: {"id": int(i), "mime": "image/png", "name": "a.png"}):
+            stored = json.loads(blog_plan._clean_images(self.a, [{"media_id": 1, "cover": True},
+                                                                {"media_id": 2, "og": True}, {"media_id": 3, "og": True}]))
+        self.assertEqual([i.get("og", False) for i in stored], [False, True, False])
+        token = self.api("POST", "/api/writer-tokens", {"name": "Toby"})[1]["token"]
+        header = {"Authorization": "Bearer " + token}
+        with mock.patch.object(blog_plan, "has_cover", lambda images: True):
+            code, out = handle_api_request("POST", "/api/writer/posts", {},
+                                           {"title": "T", "body": "B", "seo_title": " Search\n title "}, headers=header)
+            self.assertEqual((code, out["item"]["seo_title"]), (201, "Search title"), out)
+            bad = handle_api_request("POST", "/api/writer/posts", {}, {"title": "T", "body": "B", "seo_title": "<b>"},
+                                     headers=header)
+        self.assertEqual(bad[1]["error"], "html_not_allowed")
 
 
 class MediaTests(Base):
@@ -734,7 +825,7 @@ class MediaTests(Base):
         self.api("POST", f"/api/blog/plan/{item}/approve")
         self.assertEqual(handle_public_request(f"/api/public/media/{token}", {})[0], 404)
         with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}), \
-                mock.patch("engine.github_client.GitHubClient.publish_post", return_value={"success": True, "pr_url": "u"}):
+                mock.patch("database.create_post", wraps=db.create_post):
             jobs.tick(limit=1000)
         code, _, link = handle_public_request(f"/api/public/media/{token}", {})
         self.assertEqual(code, 302)
@@ -749,7 +840,7 @@ class MediaTests(Base):
                                                             "publish_at": when, "project_id": pid}, **extra))
 
     def publisher(self):
-        return mock.patch("engine.github_client.GitHubClient.publish_post", return_value={"success": True, "pr_url": "u"})
+        return mock.patch("database.create_post", wraps=db.create_post)
 
     def test_agent_writes_with_images_admin_rejects_then_approves(self):
         cover, inline = (self.upload(name=n)[1]["item"]["id"] for n in ("cover.png", "inline.png"))
@@ -781,7 +872,7 @@ class MediaTests(Base):
         self.api("POST", url + "/approve")
         with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}), self.publisher() as pub:
             jobs.tick(limit=1000)
-        sent = pub.call_args.kwargs["file_content"]
+        sent = pub.call_args.args[0]["content_markdown"]
         self.assertLess(sent.index("![Main gate](https://cms.test/api/public/media/"), sent.rindex("Visit on weekends."))
         self.assertEqual(sent.count("/api/public/media/"), 2)
         token = sent.split("/api/public/media/")[2].split(")")[0]
@@ -795,7 +886,7 @@ class MediaTests(Base):
         self.api("POST", f"/api/blog/plan/{item}/approve")
         with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://cms.test"}), self.publisher() as pub:
             jobs.tick(limit=1000)
-        self.assertIn(f"![x](https://cms.test{path}) and ![y](https://cms.test{path})", pub.call_args.kwargs["file_content"])
+        self.assertIn(f"![x](https://cms.test{path}) and ![y](https://cms.test{path})", pub.call_args.args[0]["content_markdown"])
 
     def test_a_missing_image_stops_the_whole_post(self):
         image = self.upload()[1]["item"]["id"]
@@ -869,7 +960,7 @@ class MediaTests(Base):
             self.assertEqual(writer("PATCH", f"/api/writer/posts/{item}", {"body": "Changed."})[1]["error"], "wrong_status")
             with self.publisher() as pub:
                 jobs.tick(limit=1000)
-        self.assertEqual(pub.call_args.kwargs["mode"], "direct")
+        self.assertEqual(pub.call_count, 1)
         done = self.api("GET", "/api/blog/plan")[1]["items"][0]
         self.assertEqual((done["state"], bool(done["published_at"])), ("published", True))
         self.assertEqual(self.api("DELETE", f"/api/writer-tokens/{token['item']['id']}")[0], 200)

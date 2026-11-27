@@ -153,6 +153,8 @@ def init_schema(conn) -> None:
     acct_cols = {r[1] for r in cur.execute("PRAGMA table_info(accounts)").fetchall()}
     if "default_currency" not in acct_cols:
         cur.execute("ALTER TABLE accounts ADD COLUMN default_currency TEXT NOT NULL DEFAULT 'INR'")
+    if "website_url" not in acct_cols:
+        cur.execute("ALTER TABLE accounts ADD COLUMN website_url TEXT NOT NULL DEFAULT ''")
     wa_cols = {r[1] for r in cur.execute("PRAGMA table_info(whatsapp_accounts)").fetchall()}
     for col, ddl in (("last_webhook_at", "TEXT NOT NULL DEFAULT ''"), ("last_test_at", "TEXT NOT NULL DEFAULT ''"),
                      ("last_test_ok", "INTEGER NOT NULL DEFAULT 0"), ("last_test_message", "TEXT NOT NULL DEFAULT ''")):
@@ -233,7 +235,8 @@ def init_schema(conn) -> None:
                        ("publish_origin", "TEXT NOT NULL DEFAULT ''"),
                        ("writer_token_id", "INTEGER"), ("published_at", "TEXT NOT NULL DEFAULT ''"),
                        ("external_id", "TEXT NOT NULL DEFAULT ''"),
-                       ("meta_description", "TEXT NOT NULL DEFAULT ''"))),
+                       ("meta_description", "TEXT NOT NULL DEFAULT ''"),
+                       ("seo_title", "TEXT NOT NULL DEFAULT ''"))),
         ("entry_links", (("source", "TEXT NOT NULL DEFAULT 'website'"), ("campaign", "TEXT NOT NULL DEFAULT ''"))),
         ("contacts", (("consent_status", "TEXT NOT NULL DEFAULT 'unknown'"), ("consent_source", "TEXT NOT NULL DEFAULT ''"),
                       ("consent_at", "TEXT NOT NULL DEFAULT ''"), ("consent_wording", "TEXT NOT NULL DEFAULT ''"),
@@ -296,6 +299,13 @@ def get_account(account_id: str) -> Optional[Dict[str, Any]]:
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM accounts WHERE id = ? AND status != 'deleted'", (account_id,)).fetchone()
         return dict(row) if row else None
+
+
+def set_website_url(account_id: str, url: str) -> bool:
+    with get_connection() as conn:
+        cur = conn.execute("UPDATE accounts SET website_url = ? WHERE id = ? AND status != 'deleted'", (url, account_id))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def set_default_currency(account_id: str, currency: str) -> bool:

@@ -158,7 +158,7 @@ document.addEventListener('keydown', e => {
 
 // --- Blog editor images ---
 let planImages = [];
-const imagesPayload = list => (list || []).map(i => ({ media_id: i.media_id, alt: i.alt || '', cover: !!i.cover }));
+const imagesPayload = list => (list || []).map(i => ({ media_id: i.media_id, alt: i.alt || '', cover: !!i.cover, og: !!i.og }));
 function setPlanImages(images) { planImages = (images || []).map(i => ({ ...i })); renderPlanImages(); }
 function renderPlanImages() {
     const box = el('plan-images');
@@ -167,10 +167,12 @@ function renderPlanImages() {
         <div class="flex-1 min-w-[10rem]"><label for="plan-alt-${i}" class="block text-[11px] text-slate-400 break-words">Alt text for ${escapeHtml(m.name || 'image')}</label>
             <input id="plan-alt-${i}" class="input-text text-sm w-full" maxlength="300" data-alt="${i}" value="${escapeHtml(m.alt || '')}"></div>
         <label class="text-xs text-slate-300 flex items-center gap-1"><input type="radio" name="plan-cover" data-cover="${i}" ${m.cover ? 'checked' : ''}> Cover</label>
+        <label class="text-xs text-slate-300 flex items-center gap-1"><input type="checkbox" data-og="${i}" ${m.og ? 'checked' : ''}> Social image</label>
         <button type="button" class="btn-secondary text-xs text-red-300" data-remove="${i}" aria-label="Remove ${escapeHtml(m.name || 'image')}">Remove</button></li>`).join('')
         : '<li class="text-xs text-slate-500">No images yet.</li>';
     box.querySelectorAll('[data-alt]').forEach(n => n.oninput = () => { planImages[n.dataset.alt].alt = n.value; previewPlan(); });
     box.querySelectorAll('[data-cover]').forEach(n => n.onchange = () => { planImages.forEach((m, i) => { m.cover = i === Number(n.dataset.cover); }); previewPlan(); });
+    box.querySelectorAll('[data-og]').forEach(n => n.onchange = () => { planImages.forEach((m, i) => { m.og = n.checked && i === Number(n.dataset.og); }); renderPlanImages(); });
     box.querySelectorAll('[data-remove]').forEach(n => n.onclick = () => { planImages.splice(Number(n.dataset.remove), 1); renderPlanImages(); previewPlan(); el('plan-add-image').focus(); });
 }
 async function addPlanImage() {
@@ -185,7 +187,7 @@ async function addPlanImage() {
 function postPreviewHtml(body, images) {
     const img = m => safeUrl(m.url) ? `<figure class="my-2"><img src="${escapeHtml(m.url)}" alt="${escapeHtml(m.alt || '')}" loading="lazy" class="max-w-full max-h-64 rounded">${m.alt ? `<figcaption class="text-[11px] text-slate-500">${escapeHtml(m.alt)}</figcaption>` : ''}</figure>` : `<p class="text-xs text-amber-300">Image "${escapeHtml(m.name || '')}" has no preview.</p>`;
     const list = images || [];
-    return list.filter(m => m.cover).map(img).join('') + `<div class="whitespace-pre-wrap break-words">${escapeHtml(body || 'Nothing written yet.')}</div>` + list.filter(m => !m.cover).map(img).join('');
+    return list.filter(m => m.cover).map(img).join('') + `<div class="whitespace-pre-wrap break-words">${escapeHtml(body || 'Nothing written yet.')}</div>` + list.filter(m => !m.cover && !m.og).map(img).join('');
 }
 
 // --- Reject with a note ---

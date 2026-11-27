@@ -7,6 +7,7 @@ SEO & brand safety linting, OpenGraph banner synthesis, and GitHub delivery.
 from datetime import datetime
 from typing import Dict, Any, Optional
 import json
+import os
 
 from database import (
     get_project,
@@ -29,7 +30,7 @@ from engine.formatters import (
     build_target_filepath,
     assemble_post_document
 )
-from engine.github_client import GitHubClient
+from engine import site_publish
 from engine.doc_ingestion import fetch_repo_readme, summarize_readme_context, get_internal_linking_suggestions
 from engine.seo_linter import lint_article
 from engine.image_generator import generate_hero_svg
@@ -37,7 +38,7 @@ from engine.image_generator import generate_hero_svg
 def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Dict[str, Any]:
     """
     Executes complete publication cycle with context ingestion, SEO linting,
-    hero image synthesis, and automated GitHub commit or editorial staging.
+    hero image synthesis, and publication or editorial staging.
     """
     project = get_project(project_id)
     if not project:
@@ -162,57 +163,25 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
             "message": "Article generated and held in Editorial Staging for review."
         }
 
-    # 8. GitHub Publication Dispatch
-    client = GitHubClient(token=github_token)
-    # Without a token the client only pretends to publish. That is for the explicit "mock" token, never a default.
-    pub_result = {"success": False, "error": "No GitHub token is set for this project or account."} if not github_token \
-        else client.publish_post(
-        repo=project["github_repo"],
-        branch=project["github_branch"],
-        target_path=target_path,
-        file_content=full_document,
-        post_title=article["title"],
-        post_excerpt=article["excerpt"],
-        post_tags=article["tags"],
-        mode=project.get("publishing_mode", "pr")
-    )
+    # 8. Make it live: the website reads published posts from GitPulse
+    update_post_status(post_id=post_id, status="published")
+    update_project_last_run(project_id)
+    log_event(f"Published post #{post_id}.", "INFO", project_id=project_id, post_id=post_id)
 
-    if pub_result.get("success"):
-        update_post_status(
-            post_id=post_id,
-            status="published",
-            commit_sha=pub_result.get("commit_sha"),
-            pr_url=pub_result.get("pr_url"),
-            pr_number=pub_result.get("pr_number")
-        )
-        update_project_last_run(project_id)
-        log_msg = f"Published post #{post_id} to {project['github_repo']}. {pub_result.get('message')}"
-        log_event(log_msg, "INFO", project_id=project_id, post_id=post_id, metadata=pub_result)
-
-        # Cross-Engine WhatsApp Automation: Notify subscribers & VIPs
-        try:
-            from engine.whatsapp_client import WhatsAppClient
-            wa = WhatsAppClient(project["account_id"])
-            post_url = pub_result.get("pr_url") or f"https://github.com/{project['github_repo']}/blob/{project['github_branch']}/{target_path}"
-            wa.trigger_blog_publish_alert(article["title"], post_url)
-        except Exception:
-            pass
-        return {
-            "success": True,
-            "post_id": post_id,
-            "title": article["title"],
-            "target_path": target_path,
-            "status": "published",
-            "seo_score": lint_results["score"],
-            "pub_result": pub_result
-        }
-    else:
-        err_msg = pub_result.get("error", "Unknown GitHub publishing error")
-        update_post_status(post_id=post_id, status="failed", error=err_msg)
-        log_event(f"Failed to publish post #{post_id}: {err_msg}", "ERROR", project_id=project_id, post_id=post_id)
-        return {
-            "success": False,
-            "post_id": post_id,
-            "title": article["title"],
-            "error": err_msg
-        }
+    # Cross-Engine WhatsApp Automation: Notify subscribers & VIPs
+    try:
+        from engine.whatsapp_client import WhatsAppClient
+        url = site_publish.post_url(project["account_id"], article["slug"])
+        if url:
+            WhatsAppClient(project["account_id"]).trigger_blog_publish_alert(article["title"], url)
+    except Exception:
+        pass
+    return {
+        "success": True,
+        "post_id": post_id,
+        "title": article["title"],
+        "target_path": target_path,
+        "status": "published",
+        "seo_score": lint_results["score"],
+        "pub_result": {"success": True, "mode": "live"}
+    }

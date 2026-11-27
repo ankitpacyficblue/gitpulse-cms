@@ -612,9 +612,17 @@ def get_post_by_slug(project_id: int, slug: str) -> Optional[Dict[str, Any]]:
             FROM posts p
             JOIN projects proj ON p.project_id = proj.id
             WHERE p.project_id = ? AND p.slug = ?
+            ORDER BY CASE WHEN p.status = 'published' THEN 0 ELSE 1 END, p.published_at DESC, p.id DESC
         """, (project_id, slug))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+def list_published_posts(project_id: int, limit: int = 500) -> List[Dict[str, Any]]:
+    """Newest first."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM posts WHERE project_id = ? AND status = 'published' "
+                            "ORDER BY published_at DESC, id DESC LIMIT ?", (project_id, limit)).fetchall()
+    return [dict(r) for r in rows]
 
 def increment_post_views(post_id: int, ip_hash: str = ""):
     now = datetime.utcnow().isoformat()
@@ -628,6 +636,10 @@ def increment_post_views(post_id: int, ip_hash: str = ""):
 def update_post_content(post_id: int, title: str, excerpt: str, content_markdown: str, frontmatter_yaml: str, tags: list):
     with get_connection() as conn:
         cursor = conn.cursor()
+        row = cursor.execute("SELECT meta_seo FROM posts WHERE id = ?", (post_id,)).fetchone()
+        meta = json.loads((row and row["meta_seo"]) or "{}")
+        meta["updated_at"] = datetime.utcnow().isoformat()      # the website's "last modified"
+        cursor.execute("UPDATE posts SET meta_seo = ? WHERE id = ?", (json.dumps(meta), post_id))
         cursor.execute("""
             UPDATE posts SET
                 title = ?,

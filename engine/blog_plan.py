@@ -11,11 +11,11 @@ from typing import Any, Dict, List, Optional
 
 import crm_store as cs
 import database as db
-from engine import alerts, assistant, jobs, llm, media
+from engine import alerts, assistant, jobs, llm, media, site_publish
 from engine.messaging import IST
 
 EDITABLE = ("title", "topic", "keyword", "publish_at", "project_id", "assignee_id", "body", "images", "writer_token_id",
-            "meta_description")
+            "meta_description", "seo_title")
 MAX_IMAGES = 20
 COVER_MESSAGE = "Add a cover image first: attach an image and mark it as the cover."
 
@@ -46,7 +46,7 @@ def _parse_time(value: Any) -> str:
 def _view(row: Dict[str, Any], names: Dict[int, str], files: Dict[int, Dict[str, Any]], links: Dict[str, str],
           host: str, writers: Dict[int, str]) -> Dict[str, Any]:
     d = {k: row[k] for k in ("id", "title", "topic", "keyword", "status", "body", "project_id", "assignee_id",
-                             "post_url", "error", "meta_description")}
+                             "post_url", "error", "meta_description", "seo_title")}
     d["publish_at"] = row["publish_at"] + "Z" if row["publish_at"] else None
     d["assignee_name"] = names.get(row["assignee_id"])
     d["state"] = ("rejected" if row["status"] == "draft" and row["rejected_note"]
@@ -129,7 +129,9 @@ def _clean_images(account_id: str, value: Any) -> str:
         if any(i["media_id"] == f["id"] for i in out):
             continue
         cover = bool(image.get("cover")) and not any(i["cover"] for i in out)
-        out.append({"media_id": f["id"], "alt": str(image.get("alt") or "").strip()[:200], "cover": cover})
+        og = bool(image.get("og")) and not any(i.get("og") for i in out)
+        out.append(dict({"media_id": f["id"], "alt": str(image.get("alt") or "").strip()[:200], "cover": cover},
+                        **({"og": True} if og else {})))
     return json.dumps(out)
 
 
@@ -151,8 +153,8 @@ def _clean(account_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
             if not token:
                 raise PlanError(404, "writer_not_found", "No active writer token with that id.")
             out[key] = token["id"]
-        elif key == "meta_description":      # one line; a backslash would break quoted frontmatter
-            out[key] = " ".join(str(value or "").replace("\\", " ").split())[:300]
+        elif key in ("meta_description", "seo_title"):      # one line; a backslash would break quoted frontmatter
+            out[key] = " ".join(str(value or "").replace("\\", " ").split())[:300 if key == "meta_description" else 120]
         elif key == "images":
             out[key] = _clean_images(account_id, value)
         elif key in ("project_id", "assignee_id"):
@@ -182,11 +184,11 @@ def create(account_id: str, data: Dict[str, Any], external_id: str = "") -> Dict
     now = _now()
     with db.get_connection() as conn:
         cur = conn.execute("""INSERT INTO blog_plan (account_id, project_id, title, topic, keyword, publish_at, status, body,
-                              assignee_id, created_at, updated_at, images, writer_token_id, external_id, meta_description)
-                              VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?,?,?,?)""",
+                              assignee_id, created_at, updated_at, images, writer_token_id, external_id, meta_description, seo_title)
+                              VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,?)""",
                            (account_id, f.get("project_id"), f["title"], f.get("topic", ""), f.get("keyword", ""),
                             f.get("publish_at", ""), f.get("body", ""), f.get("assignee_id"), now, now, f.get("images", "[]"),
-                            f.get("writer_token_id"), external_id, f.get("meta_description", "")))
+                            f.get("writer_token_id"), external_id, f.get("meta_description", ""), f.get("seo_title", "")))
         item_id = cur.lastrowid
         conn.commit()
     return get_item(account_id, item_id)
@@ -354,8 +356,8 @@ def _with_images(account_id: str, row: Dict[str, Any]) -> str:
             raise PlanError(409, "no_public_address", "Set PUBLIC_BASE_URL so images get a full address.")
         body = relative.sub(lambda _: origin + media.PUBLIC_PATH, body)
     for image in images:
-        if media.PUBLIC_PATH + image["token"] in body:
-            continue
+        if media.PUBLIC_PATH + image["token"] in body or (image.get("og") and not image["cover"]):
+            continue      # a social-only image is not part of the article
         if not origin:
             raise PlanError(409, "no_public_address", "Set PUBLIC_BASE_URL so images get a full address.")
         alt = image["alt"].replace("[", "(").replace("]", ")").replace("\n", " ")
@@ -366,7 +368,7 @@ def _with_images(account_id: str, row: Dict[str, Any]) -> str:
 def _guard(account_id: str, row: Dict[str, Any]) -> Optional[str]:
     """Banned claims always; the price rule only once the account has entered knowledge."""
     knowledge = assistant.get_knowledge(account_id)
-    text = f"{row['title']}\n{row['meta_description']}\n{row['body']}"
+    text = f"{row['title']}\n{row['seo_title']}\n{row['meta_description']}\n{row['body']}"
     if assistant.knowledge_text(knowledge):
         return assistant.guard(knowledge, text)
     low = text.lower()
@@ -476,51 +478,52 @@ def _publish_job(job: Dict[str, Any]) -> None:
          published_at=_now())
 
 
+def _image(row: Dict[str, Any], images: List[Dict[str, Any]], flag: str) -> Optional[Dict[str, str]]:
+    for image in images:
+        if image.get(flag):
+            return {"url": _public_origin(row) + media.PUBLIC_PATH + image["token"], "alt": image["alt"]}
+    return None
+
+
 def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
-    """Commit the approved text, unchanged, through the account's blog project."""
-    from engine.formatters import slugify, format_frontmatter, build_target_filepath, assemble_post_document
-    from engine.github_client import GitHubClient
+    """Make the approved text, unchanged, live in GitPulse's public API, which the website reads."""
+    from engine.formatters import slugify, format_frontmatter, build_target_filepath
     from engine.image_generator import generate_hero_svg
     project = db.get_project(row["project_id"]) if row["project_id"] else None
     if not project or project.get("account_id") != account_id:
         return {"success": False, "error": "The blog project no longer exists."}
     try:
         require_cover(row)      # also posts approved before the rule
-    except PlanError as e:
-        return {"success": False, "error": e.message}
-    token = project.get("github_token") or cs.get_account_github_token(account_id)
-    if not token:
-        return {"success": False, "error": "No GitHub token is set for this project or account."}
-    try:
         full = _with_images(account_id, row)
+        images = _post_files(account_id, row)
     except PlanError as e:
         return {"success": False, "error": e.message}
     title, body = row["title"], row["body"]
     slug = slugify(title)
     day = datetime.now(IST).strftime("%Y-%m-%d")
     excerpt = row["meta_description"] or " ".join(line for line in body.splitlines() if line and not line.startswith("#"))[:155]
-    tags = [row["keyword"]] if row["keyword"] else []
+    tags = [k.strip() for k in row["keyword"].split(",") if k.strip()]
     path = build_target_filepath(project, slug, day)
     front = format_frontmatter(project["frontmatter_template"], {
         "title": title, "excerpt": excerpt, "date": day, "date_iso": _now(), "slug": slug, "tags": tags,
         "author": project.get("author_name", "Editorial Team"), "reading_time": max(1, len(body.split()) // 200)})
+    og = _image(row, images, "og")
     post_id = db.create_post({
         "project_id": project["id"], "title": title, "slug": slug, "excerpt": excerpt, "content_markdown": full,
-        "frontmatter_yaml": front, "target_path": path, "tags": tags, "meta_seo": {"description": excerpt}, "image_prompt": "",
+        "frontmatter_yaml": front, "target_path": path, "tags": tags,
+        "meta_seo": {"title": row["seo_title"], "description": excerpt, "keywords": tags,
+                     "cover": _image(row, images, "cover"), "og_image": og},
+        "image_prompt": "",
         "og_image_svg": generate_hero_svg(title=title, category=project.get("name", "Blog"),
                                           author=project.get("author_name", "Editorial Team"), reading_time=5),
         "seo_score": 100, "seo_issues": [], "status": "publishing"})
-    res = GitHubClient(token=token).publish_post(
-        repo=project["github_repo"], branch=project["github_branch"], target_path=path,
-        file_content=assemble_post_document(front, full), post_title=title, post_excerpt=excerpt, post_tags=tags,
-        mode="direct")      # approval was the review: "published" must mean live, not waiting for a merge
-    if not res.get("success"):
-        db.update_post_status(post_id=post_id, status="failed", error=res.get("error", ""))
-        return {"success": False, "error": res.get("error", "publishing error")}
-    db.update_post_status(post_id=post_id, status="published", commit_sha=res.get("commit_sha"), pr_url=res.get("pr_url"),
-                          pr_number=res.get("pr_number"))
-    media.publish_linked(account_id, full)
-    url = res.get("pr_url") or f"https://github.com/{project['github_repo']}/blob/{project['github_branch']}/{path}"
+    media.publish_linked(account_id, f"{full}\n{og['url'] if og else ''}")      # before the post is visible
+    db.update_post_status(post_id=post_id, status="published")
+    url = site_publish.post_url(account_id, slug)
+    if not url:
+        alerts.raise_alert(account_id, "blog_failed", "The post is published, but it has no link and was not announced: "
+                           "save your website address under Settings.", link="blog")
+        return {"success": True, "url": "", "post_id": post_id}
     try:
         from engine.whatsapp_client import WhatsAppClient
         WhatsAppClient(account_id).trigger_blog_publish_alert(title, url)

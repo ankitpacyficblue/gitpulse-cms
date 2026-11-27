@@ -1,0 +1,2 @@
+ALTER TABLE blog_plan DROP COLUMN IF EXISTS seo_title;
+ALTER TABLE accounts DROP COLUMN IF EXISTS website_url;

@@ -14,7 +14,7 @@ from engine import blog_plan, media
 PREFIX = "gpw_"
 MAX_TOKENS = 20
 MAX_PER_HOUR = 100      # requests per token, so a looping agent cannot fill the shared database
-FIELDS = ("title", "topic", "keyword", "publish_at", "body", "images", "meta_description")
+FIELDS = ("title", "topic", "keyword", "publish_at", "body", "images", "meta_description", "seo_title")
 _RAW_HTML = re.compile(r"<[a-zA-Z/!?]|\]\(\s*<?\s*(?:javascript|data|vbscript):", re.I)
 
 
@@ -126,7 +126,7 @@ def confirm(writer: Dict[str, Any], media_id: Any, host: str) -> Dict[str, Any]:
 def _clean(writer: Dict[str, Any], data: Dict[str, Any], attached: List[int] = ()) -> Dict[str, Any]:
     """`attached`: images already on the post (an admin may have added them), which may be sent back."""
     out = {k: data[k] for k in FIELDS if k in data}
-    for key in ("title", "body", "meta_description"):
+    for key in ("title", "body", "meta_description", "seo_title", "keyword"):
         if _RAW_HTML.search(str(out.get(key) or "")):
             raise WriterError(400, "html_not_allowed", "Send plain Markdown: no HTML tags or script links.")
     images = out.get("images")
@@ -141,11 +141,11 @@ def _clean(writer: Dict[str, Any], data: Dict[str, Any], attached: List[int] = (
 
 def _view(item: Dict[str, Any]) -> Dict[str, Any]:
     keys = ("id", "title", "topic", "keyword", "publish_at", "body", "status", "state", "rejected_note",
-            "published_at", "post_url", "error", "meta_description")
+            "published_at", "post_url", "error", "meta_description", "seo_title")
     project = db.get_project(item["project_id"]) if item["project_id"] else None
     return dict({k: item[k] for k in keys},
                 project={"id": project["id"], "name": project["name"]} if project else None,
-                images=[{k: i[k] for k in ("media_id", "alt", "cover")} for i in item["images"]])
+                images=[dict({k: i[k] for k in ("media_id", "alt", "cover")}, og=bool(i.get("og"))) for i in item["images"]])
 
 
 def _ids(writer: Dict[str, Any]) -> List[int]:
