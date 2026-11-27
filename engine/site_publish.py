@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import crm_store as cs
+import database as db
 
 
 def clean_website(value: Any) -> str:
@@ -28,7 +29,15 @@ def clean_website(value: Any) -> str:
     return url
 
 
-def post_url(account_id: str, slug: str) -> str:
-    """The page on the account's website, or '' while no website address is saved."""
-    site = (cs.get_account(account_id) or {}).get("website_url") or ""
+def website_for(account_id: str, project_id=None) -> str:
+    """The website's own address, else the account's, else ''."""
+    project = db.get_project(int(project_id)) if project_id else None
+    if project and project.get("account_id") == account_id and project.get("website_url"):
+        return project["website_url"]
+    return (cs.get_account(account_id) or {}).get("website_url") or ""
+
+
+def post_url(account_id: str, slug: str, project_id=None) -> str:
+    """The post's page on its website, or '' while no address is saved."""
+    site = website_for(account_id, project_id)
     return f"{site}/blog/{slug}" if site else ""

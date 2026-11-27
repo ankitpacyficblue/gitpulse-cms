@@ -536,8 +536,8 @@ def projects_list(ctx, m, q, body):
 
 @route("POST", r"/api/projects", "acct:websites:manage")
 def projects_create(ctx, m, q, body):
-    """A website needs a name and the account's website address. The address is account-wide (post links are built
-    from it), so connecting never replaces one that is already saved: that is done in Settings."""
+    """A website needs a name and an address. The address is kept on the website; without one, post links use the
+    account's. Where links point is an owner's decision, so only account.manage may use a different address."""
     body = dict(body, name=str(body.get("name") or "").strip()[:200],
                 **{k: str(body.get(k) or "") for k in ("github_repo", "topic")})
     if not body["name"]:
@@ -549,16 +549,12 @@ def projects_create(ctx, m, q, body):
     saved = (cs.get_account(ctx.account_id) or {}).get("website_url") or ""
     if not url and not saved and not body["github_repo"]:      # the older, repository-based shape still works
         return 400, {"error": "website_url_required", "message": "Enter the website address."}
-    if url and saved and url != saved:
-        return 409, {"error": "website_url_differs",
-                     "message": f"This account's website is {saved}. Change it under Settings first."}
-    if url and not saved and not perms.allows(ctx.who, "settings:manage"):
+    if url and url != saved and not perms.allows(ctx.who, "settings:manage"):
         return 403, {"error": "forbidden", "required": "account.manage",
-                     "message": "Only an owner can save the website address."}
+                     "message": "Only an owner can use an address other than the account's."}
     if body.get("github_token") and not secrets_box.is_configured():
         return 500, _NO_ENC
-    if url and not saved:
-        cs.set_website_url(ctx.account_id, url)
+    body["website_url"] = url
     return 201, {"id": db.create_project(body, ctx.account_id), "message": "Project registered successfully."}
 
 
@@ -590,6 +586,18 @@ def project_update(ctx, m, q, body):
             data.pop(k, None)
     if data.get("github_token") and not secrets_box.is_configured():
         return 500, _NO_ENC
+    if data.get("website_url") is not None:
+        project = _own_project(ctx, int(m.group("pid")))
+        if not project:
+            return 404, {"error": "Project not found."}
+        try:
+            data["website_url"] = site_publish.clean_website(data["website_url"])
+        except ValueError as e:
+            return 400, {"error": "invalid_website_url", "message": str(e)}
+        # Where post links point is an owner's decision, including going back to the account's address.
+        if data["website_url"] != project.get("website_url", "") and not perms.allows(ctx.who, "settings:manage"):
+            return 403, {"error": "forbidden", "required": "account.manage",
+                         "message": "Only an owner can change a website address."}
     if not db.update_project(int(m.group("pid")), data, ctx.account_id):
         return 404, {"error": "Project not found or no changes made."}
     return 200, {"message": "Project updated successfully."}
@@ -630,7 +638,7 @@ def posts_list(ctx, m, q, body):
 
 def _with_url(account_id: str, post):
     """`url`: the post on the account's website, once it is published."""
-    return dict(post, url=site_publish.post_url(account_id, post["slug"]) if post.get("status") == "published" else "")
+    return dict(post, url=site_publish.post_url(account_id, post["slug"], post.get("project_id")) if post.get("status") == "published" else "")
 
 
 @route("GET", r"/api/posts/(?P<id>\d+)", "acct:posts:view")
@@ -667,7 +675,7 @@ def _publish_post(ctx, post_id: int, approve: bool) -> Response:
     db.update_post_status(post_id=post_id, status="published")
     blog_plan.sync_from_post(post_id)
     return 200, {"success": True, "message": "Article published.",
-                 "pub_result": {"success": True, "mode": "live", "url": site_publish.post_url(ctx.account_id, post["slug"])}}
+                 "pub_result": {"success": True, "mode": "live", "url": site_publish.post_url(ctx.account_id, post["slug"], post.get("project_id"))}}
 
 
 @route("POST", r"/api/posts/(?P<id>\d+)/approve", "acct:posts:full")

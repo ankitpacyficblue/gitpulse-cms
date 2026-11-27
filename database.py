@@ -242,6 +242,9 @@ def _apply_schema(conn):
     if "account_id" not in project_cols:
         # Nullable only for pre-account rows; those stay invisible to every account until assigned.
         cursor.execute("ALTER TABLE projects ADD COLUMN account_id TEXT REFERENCES accounts(id)")
+    if "website_url" not in project_cols:
+        # Each website has its own address; an empty one falls back to the account's.
+        cursor.execute("ALTER TABLE projects ADD COLUMN website_url TEXT NOT NULL DEFAULT ''")
     log_cols = [c[1] for c in cursor.execute("PRAGMA table_info(system_logs)").fetchall()]
     if "account_id" not in log_cols:
         cursor.execute("ALTER TABLE system_logs ADD COLUMN account_id TEXT")
@@ -430,8 +433,8 @@ def create_project(data: Dict[str, Any], account_id: str) -> int:
                 frontmatter_template, topic, target_audience, tone,
                 keywords, author_name, publishing_mode, publish_time,
                 is_active, auto_publish, forbidden_words, webhook_secret,
-                zero_redeploy_enabled, blog_page_path, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                zero_redeploy_enabled, blog_page_path, created_at, updated_at, website_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             account_id,
             data.get("name", "New Project"),
@@ -456,7 +459,8 @@ def create_project(data: Dict[str, Any], account_id: str) -> int:
             1 if data.get("zero_redeploy_enabled", True) else 0,
             data.get("blog_page_path", "public/blog/index.html").strip(),
             now,
-            now
+            now,
+            data.get("website_url", "")      # already checked by the route
         ))
         conn.commit()
         project_id = cursor.lastrowid
@@ -520,6 +524,7 @@ def update_project(project_id: int, data: Dict[str, Any], account_id: str) -> bo
                 webhook_secret = COALESCE(?, webhook_secret),
                 zero_redeploy_enabled = COALESCE(?, zero_redeploy_enabled),
                 blog_page_path = COALESCE(?, blog_page_path),
+                website_url = COALESCE(?, website_url),
                 updated_at = ?
             WHERE id = ? AND account_id = ?
         """, (
@@ -544,6 +549,7 @@ def update_project(project_id: int, data: Dict[str, Any], account_id: str) -> bo
             data.get("webhook_secret"),
             data.get("zero_redeploy_enabled"),
             data.get("blog_page_path"),
+            data.get("website_url"),      # already checked by the route
             now,
             project_id,
             account_id

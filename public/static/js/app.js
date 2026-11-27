@@ -1,6 +1,5 @@
 // GitPulse CMS - Frontend Application Controller
 
-let globalPresets = {};
 let accountsMode = false;
 let currentUser = null;
 let generated2FASecret = "";
@@ -47,7 +46,6 @@ async function initApp() {
     // First login with a one-time password: ask for a new one before loading anything else.
     if (needsPasswordChange()) { showPasswordChange(); return; }
     // 2. Load Dashboard Components
-    await fetchPresets();
     await loadClients();
     await refreshMe();
     if (needsPasswordChange()) { showPasswordChange(); return; }
@@ -348,10 +346,6 @@ function sumByCurrency(deals) {
 }
 
 // --- Presets ---
-async function fetchPresets() {
-    const data = await apiGet('/api/presets');
-    if (data) globalPresets = data;
-}
 
 // --- Status & Metrics ---
 async function loadStatus() {
@@ -436,8 +430,8 @@ async function loadProjects() {
             <div class="col-span-full p-8 text-center bg-slate-900 border border-slate-800 rounded-xl">
                 <div class="text-3xl mb-2">🌐</div>
                 <h3 class="text-base font-bold text-white mb-1">No Websites Connected Yet</h3>
-                <p class="text-xs text-slate-400 max-w-md mx-auto mb-4">Connect your GitHub repository in 60 seconds and start publishing automated SEO articles every day.</p>
-                <button onclick="openAddProjectModal()" class="btn-primary text-xs py-2 px-4 shadow-indigo-500/30">⚡ Connect Website in 60s</button>
+                <p class="text-xs text-slate-400 max-w-md mx-auto mb-4">Add its name and address, then plan and approve posts for it.</p>
+                <button onclick="openAddProjectModal()" class="btn-primary text-xs py-2 px-4 shadow-indigo-500/30">Connect website</button>
             </div>
         `;
         return;
@@ -468,10 +462,9 @@ async function loadProjects() {
                     </span>
                 </div>
                 <h3 class="font-bold text-white text-base">${escapeHtml(p.name)}</h3>
-                <a href="https://github.com/${escapeHtml(p.github_repo)}" target="_blank" class="text-xs text-cyan-400 hover:underline flex items-center gap-1 mt-0.5">
-                    github.com/${escapeHtml(p.github_repo)} ↗
-                </a>
-                <p class="text-xs text-slate-400 mt-2 line-clamp-2"><strong>Niche:</strong> ${escapeHtml(p.topic)}</p>
+                ${safeUrl(p.website_url) ? `<a href="${escapeHtml(p.website_url)}" target="_blank" rel="noopener" class="block text-xs text-cyan-400 hover:underline break-all mt-0.5">${escapeHtml(p.website_url)}</a>` : '<p class="text-xs text-slate-500 mt-0.5">Uses the account address</p>'}
+                ${can('account.manage') ? `<button type="button" class="btn-secondary text-xs mt-2" onclick="openEditAddress(${Number(p.id)}, '${escapeHtml(encodeURIComponent(p.website_url || ''))}')">Edit address</button>` : ''}
+                ${p.topic ? `<p class="text-xs text-slate-400 mt-2 line-clamp-2"><strong>Niche:</strong> ${escapeHtml(p.topic)}</p>` : ''}
                 
                 ${projectRunHtml(p, alertData)}
             </div>
@@ -480,10 +473,7 @@ async function loadProjects() {
                 <div class="flex justify-between items-center">
                     <div class="flex space-x-1.5">
                         <button onclick="triggerProjectRun(${p.id}, this)" class="btn-primary text-xs py-1 px-2.5">
-                            ✨ Write Today's Article
-                        </button>
-                        <button onclick="testGitHubConnection(${p.id}, this)" class="btn-secondary text-xs py-1 px-2">
-                            Verify Repo
+                            ✨ Write today's draft
                         </button>
                     </div>
                     <button onclick="deleteProject(${p.id})" class="btn-danger">
@@ -526,28 +516,12 @@ async function triggerProjectRun(projectId, btn) {
     btn.innerText = originalText;
 
     if (res && res.success) {
-        showToast(`Article '${res.title}' generated and published!`, 'success');
+        showToast(`Draft '${res.title}' written. It waits for your approval.`, 'success');
         loadStatus();
         loadProjects();
         loadLogs();
     } else {
         showToast(res ? (res.error || 'Trigger failed') : 'Execution error', 'error');
-    }
-}
-
-async function testGitHubConnection(projectId, btn) {
-    const originalText = btn.innerText;
-    btn.disabled = true;
-    btn.innerText = 'Checking...';
-
-    const res = await apiPost(`/api/projects/${projectId}/test-github`);
-    btn.disabled = false;
-    btn.innerText = originalText;
-
-    if (res && res.connected) {
-        showToast(res.message, 'success');
-    } else {
-        showToast(res ? res.message : 'Connection test failed', 'error');
     }
 }
 
@@ -587,17 +561,7 @@ async function loadClients() {
         if (accountsMode && headerFilter.value) { try { localStorage.setItem('gitpulse_account', headerFilter.value); } catch (e) {} }
     }
 
-    // Wizard client selector
-    const wizardClient = document.getElementById('wizard-client-id');
-    if (wizardClient) {
-        wizardClient.innerHTML = '<option value="">(Select or create business)</option>';
-        data.clients.forEach(c => {
-            const opt = document.createElement('option');
-            opt.value = c.id;
-            opt.innerText = c.name;
-            wizardClient.appendChild(opt);
-        });
-    }
+
 }
 
 async function onClientFilterChange() {
@@ -689,171 +653,55 @@ async function submitAddClient(e) {
     }
 }
 
-// --- Interactive 3-Step Wizard (Built for Non-Technical UX) ---
-let currentWizardStep = 1;
-
-function openAddProjectModal() {
-    currentWizardStep = 1;
-    goToWizardStep(1);
-    document.getElementById('modal-add-project').classList.remove('hidden');
-    loadClients();
+// --- Connect a website: name, address, account ---
+async function openAddProjectModal() {
+    await loadClients();
+    const sel = el('project-account');
+    sel.innerHTML = '';
+    (window.__accounts || []).forEach(a => sel.add(new Option(a.name, String(a.id))));
+    sel.value = getActiveAccountId();
+    el('project-name').value = '';
+    el('project-url').value = '';
+    el('modal-add-project').classList.remove('hidden');
+    fillProjectAddress();
 }
-
-function openConnectWizard() {
-    openAddProjectModal();
-}
-
 function closeAddProjectModal() {
-    document.getElementById('modal-add-project').classList.add('hidden');
+    el('modal-add-project').classList.add('hidden');
 }
-
-function goToWizardStep(step) {
-    // Validation before proceeding to step 3
-    if (step === 3) {
-        const repo = document.getElementById('wizard-repo').value.trim();
-        const name = document.getElementById('wizard-name').value.trim();
-        if (!repo) {
-            showToast('Please enter your GitHub repository (e.g. username/repo)', 'error');
-            return;
-        }
-        if (!name) {
-            document.getElementById('wizard-name').value = repo.split('/')[1] || repo;
-        }
-    }
-
-    currentWizardStep = step;
-
-    // Show/hide step panels
-    document.getElementById('wizard-step-1').classList.toggle('hidden', step !== 1);
-    document.getElementById('wizard-step-2').classList.toggle('hidden', step !== 2);
-    document.getElementById('wizard-step-3').classList.toggle('hidden', step !== 3);
-
-    // Update step bar visual nodes
-    for (let i = 1; i <= 3; i++) {
-        const node = document.getElementById(`step-node-${i}`);
-        if (!node) continue;
-        node.classList.remove('active', 'completed');
-        if (i === step) node.classList.add('active');
-        else if (i < step) node.classList.add('completed');
-    }
+// Starts from the account's address, which most websites use.
+async function fillProjectAddress() {
+    const account = el('project-account').value;
+    const info = account && await apiCall('GET', `/api/accounts/${encodeURIComponent(account)}`, undefined, { quiet: true, account });
+    if (el('project-account').value === account) el('project-url').value = (info && info.website_url) || '';
 }
-
-function selectWizardFramework(framework, cardEl) {
-    document.querySelectorAll('#wizard-step-1 .wizard-card').forEach(c => c.classList.remove('selected'));
-    cardEl.classList.add('selected');
-
-    document.getElementById('wizard-framework').value = framework;
-    const preset = globalPresets[framework] || globalPresets['generic'];
-    if (preset) {
-        document.getElementById('wizard-content-dir').value = preset.content_dir;
-        document.getElementById('wizard-file-ext').value = preset.file_extension;
-        const customDir = document.getElementById('wizard-custom-dir');
-        if (customDir) customDir.value = preset.content_dir;
-    }
-}
-
-function resetWizardVerify() {
-    const resEl = document.getElementById('wizard-verify-result');
-    if (resEl) {
-        resEl.className = 'hidden';
-        resEl.innerHTML = '';
-    }
-}
-
-async function verifyWizardGitHub() {
-    const repo = document.getElementById('wizard-repo').value.trim();
-    const token = document.getElementById('wizard-token').value.trim();
-    const btn = document.getElementById('btn-wizard-verify');
-    const resEl = document.getElementById('wizard-verify-result');
-
-    if (!repo) {
-        showToast('Please enter your GitHub repository first.', 'error');
-        return;
-    }
-
+async function submitProject(e) {
+    e.preventDefault();
+    const account = el('project-account').value, btn = el('project-save');
     btn.disabled = true;
-    btn.innerHTML = '<span class="inline-block animate-spin mr-1">🔄</span> Verifying GitHub Access...';
-
-    const res = await apiPost('/api/github/verify', {
-        github_repo: repo,
-        github_token: token
-    });
-
+    const res = await apiCall('POST', '/api/projects', { name: el('project-name').value.trim(), website_url: el('project-url').value.trim() }, { account });
     btn.disabled = false;
-    btn.innerHTML = '<span>⚡ Test Repository Connection</span>';
-
-    resEl.classList.remove('hidden');
-    if (res && res.valid) {
-        resEl.className = 'mt-2 p-2.5 rounded text-xs bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 flex items-center gap-2';
-        resEl.innerHTML = `<span>✅ <strong>Connected!</strong> Found <code>${escapeHtml(res.repo)}</code> on branch <code>${escapeHtml(res.branch)}</code>.</span>`;
-    } else {
-        resEl.className = 'mt-2 p-2.5 rounded text-xs bg-amber-500/10 border border-amber-500/30 text-amber-300 flex items-center gap-2';
-        resEl.innerHTML = `<span>⚠️ ${escapeHtml(res ? res.message : 'Could not verify repository. Please check name and token permissions.')}</span>`;
-    }
+    if (!res || !res.id) return;   // apiCall has shown why
+    showToast('Website connected.', 'success');
+    closeAddProjectModal();
+    await useAccount(account);
+    await loadProjects();
 }
 
-function applyInspiration(niche, topicText) {
-    document.getElementById('wizard-topic').value = topicText;
-    const nameInput = document.getElementById('wizard-name');
-    if (!nameInput.value) {
-        nameInput.value = niche;
-    }
-    showToast(`Applied topic inspiration: ${niche}`, 'info');
+let addressProject = null;
+function openEditAddress(id, url) {
+    addressProject = id;
+    el('address-url').value = decodeURIComponent(url);
+    el('modal-edit-address').classList.remove('hidden');
 }
-
-function selectTone(tone, pillEl) {
-    document.querySelectorAll('.tone-pill').forEach(p => p.classList.remove('selected'));
-    pillEl.classList.add('selected');
-    document.getElementById('wizard-tone').value = tone;
-}
-
-function selectPublishMode(mode, cardEl) {
-    document.querySelectorAll('#wizard-step-3 .wizard-card').forEach(c => c.classList.remove('selected'));
-    cardEl.classList.add('selected');
-    document.getElementById('wizard-publishing-mode').value = mode;
-}
-
-async function submitWizardProject() {
-    const btn = document.getElementById('btn-wizard-submit');
-    const name = document.getElementById('wizard-name').value.trim();
-    const repo = document.getElementById('wizard-repo').value.trim();
-    const topic = document.getElementById('wizard-topic').value.trim();
-
-    if (!name || !repo || !topic) {
-        showToast('Please fill in the website name, GitHub repository, and topic.', 'error');
-        return;
-    }
-
-    btn.disabled = true;
-    btn.innerText = 'Connecting Website...';
-
-    const payload = {
-        name: name,
-        github_repo: repo,
-        github_branch: document.getElementById('wizard-branch').value || 'main',
-        github_token: document.getElementById('wizard-token').value || '',
-        target_framework: document.getElementById('wizard-framework').value || 'nextjs',
-        content_dir: document.getElementById('wizard-content-dir').value || 'content/posts',
-        publishing_mode: document.getElementById('wizard-publishing-mode').value || 'pr',
-        publish_time: document.getElementById('wizard-publish-time').value || '09:00',
-        author_name: document.getElementById('wizard-author').value || 'Editorial Team',
-        topic: topic,
-        tone: document.getElementById('wizard-tone').value || 'Authoritative, practical, and engaging',
-        target_audience: 'Customers and Industry Readers'
-    };
-
-    const res = await apiPost('/api/projects', payload);
-    btn.disabled = false;
-    btn.innerText = '✨ Connect Website & Start Publishing';
-
-    if (res && res.id) {
-        showToast('🎉 Website successfully connected! Your daily blog pipeline is ready.', 'success');
-        closeAddProjectModal();
-        await loadProjects();
-        await loadStatus();
-    } else {
-        showToast(res ? res.error : 'Failed to register website', 'error');
-    }
+function closeEditAddress() { el('modal-edit-address').classList.add('hidden'); }
+async function saveAddress(e) {
+    e.preventDefault();
+    const res = await apiCall('PUT', `/api/projects/${addressProject}`, { website_url: el('address-url').value.trim() });
+    if (!res || res.error) return;
+    showToast('Address saved. New links use it.', 'success');
+    closeEditAddress();
+    await loadProjects();
+    el(`project-card-${addressProject}`)?.focus();
 }
 
 // --- Supabase Cloud Database UI Controller ---
@@ -939,10 +787,10 @@ async function loadSettings() {
     const settings = await apiGet('/api/settings');
     if (!settings) return;
 
-    if (settings.github_token) document.getElementById('setting-github-token').value = settings.github_token;
     if (settings.ai_provider) document.getElementById('setting-ai-provider').value = settings.ai_provider;
     if (settings.gemini_api_key) document.getElementById('setting-gemini-key').value = settings.gemini_api_key;
     if (settings.openai_api_key) document.getElementById('setting-openai-key').value = settings.openai_api_key;
+    el('remove-gh-platform').classList.toggle('hidden', !settings.github_token);
     if (settings.github_webhook_secret) document.getElementById('setting-webhook-secret').value = settings.github_webhook_secret;
     if (settings.supabase_url) document.getElementById('setting-supabase-url').value = settings.supabase_url;
     if (settings.supabase_key) document.getElementById('setting-supabase-key').value = settings.supabase_key;
@@ -950,7 +798,6 @@ async function loadSettings() {
 
 async function saveSettings() {
     const payload = {
-        github_token: document.getElementById('setting-github-token').value,
         ai_provider: document.getElementById('setting-ai-provider').value,
         gemini_api_key: document.getElementById('setting-gemini-key').value,
         openai_api_key: document.getElementById('setting-openai-key').value,
@@ -2217,8 +2064,7 @@ async function loadAccountSettings() {
     if (cfg.ai_provider) set('set-ai-provider', cfg.ai_provider);
     const key = document.getElementById('set-ai-key');
     if (key) { key.value = ''; key.placeholder = cfg.has_ai_api_key ? `Saved (${cfg.ai_api_key_masked || 'hidden'})` : 'Paste a key'; }
-    const gh = document.getElementById('set-gh-token');
-    if (gh) { gh.value = ''; gh.placeholder = cfg.has_github_token ? `Saved (${cfg.github_token_masked || 'hidden'})` : 'Paste a token'; }
+    el('remove-gh-account').classList.toggle('hidden', !cfg.has_github_token);
     const src = document.getElementById('set-ai-source');
     if (src) src.innerText = cfg.ai_key_source === 'account' ? 'Using this account\'s own key.' : 'Using the platform key until you add one.';
     const acct = (window.__accounts || []).find(a => String(a.id) === String(getActiveAccountId()));
@@ -2227,19 +2073,26 @@ async function loadAccountSettings() {
     if (window.__acctCurrency) { set('set-currency', window.__acctCurrency); set('new-deal-currency', window.__acctCurrency); }
 }
 
+// GitHub tokens are no longer used; this deletes one that was saved earlier.
+async function removeGithubToken(scope) {
+    if (!confirm('Delete the saved GitHub token?')) return;
+    const res = scope === 'platform' ? await apiPost('/api/settings', { github_token: '' }) : await apiPost('/api/account/settings', { clear_github_token: true });
+    if (!res || res.error) return;
+    el(`remove-gh-${scope}`).classList.add('hidden');
+    showToast('GitHub token removed.', 'success');
+}
+
 async function saveAccountSettings(e) {
     e.preventDefault();
     const val = id => (document.getElementById(id) || {}).value || '';
     const body = { ai_provider: val('set-ai-provider') };
     if (val('set-ai-key')) body.ai_api_key = val('set-ai-key');
-    if (val('set-gh-token')) body.github_token = val('set-gh-token');
     if ((document.getElementById('set-ai-clear') || {}).checked) body.clear_ai_key = true;
-    if ((document.getElementById('set-gh-clear') || {}).checked) body.clear_github_token = true;
     const res = await apiPost('/api/account/settings', body);
     const cur = await apiPatch(`/api/accounts/${encodeURIComponent(getActiveAccountId())}`, { default_currency: val('set-currency'), website_url: val('set-website').trim() });
     if (res && !res.error && cur && !cur.error) {
         showToast('Settings saved.', 'success');
-        ['set-ai-clear', 'set-gh-clear'].forEach(i => { const c = document.getElementById(i); if (c) c.checked = false; });
+        ['set-ai-clear'].forEach(i => { const c = document.getElementById(i); if (c) c.checked = false; });
         await loadClients();
         await refreshMe();
         loadAccountSettings();

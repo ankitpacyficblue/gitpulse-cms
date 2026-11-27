@@ -661,10 +661,10 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
         post_id = db.create_post(data)
     media.publish_linked(account_id, f"{full}\n{og['url'] if og else ''}")      # before the post is visible
     db.update_post_status(post_id=post_id, status="published")
-    url = site_publish.post_url(account_id, slug)
+    url = site_publish.post_url(account_id, slug, project["id"])
     if not url:
         alerts.raise_alert(account_id, "blog_failed", "The post is published, but it has no link and was not announced: "
-                           "save your website address under Settings.", link="blog")
+                           "save the website address on the website or under Settings.", link="blog")
         return {"success": True, "url": "", "post_id": post_id}
     try:
         from engine.whatsapp_client import WhatsAppClient
