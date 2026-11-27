@@ -285,7 +285,7 @@ def render_dashboard_html() -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GitPulse CMS - Automated Multi-Project GitHub Blog Engine</title>
+    <title>GitPulse CMS - Dashboard</title>
     <!-- Tailwind CSS Framework CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -557,7 +557,7 @@ def render_dashboard_html() -> str:
             <div class="flex justify-between items-center mb-4">
                 <div>
                     <h2 class="text-lg font-semibold text-white">System & Generation Logs</h2>
-                    <p class="text-sm text-slate-400">Real-time audit log of topic planning, AI text generation, authentication attempts, webhooks, and GitHub API transactions.</p>
+                    <p class="text-sm text-slate-400">Real-time audit log of topic planning, AI text generation, authentication attempts, webhooks and publishing.</p>
                 </div>
                 <button onclick="loadLogs()" class="btn-secondary text-xs">Refresh Logs</button>
             </div>
@@ -576,7 +576,7 @@ def render_dashboard_html() -> str:
                             <span>☁️ Supabase Cloud Database Architecture</span>
                             <span id="badge-supabase-status" class="text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400">Checking...</span>
                         </h2>
-                        <p class="text-xs text-slate-400 mt-0.5">Persist articles, multi-client repositories, and system configurations permanently in Supabase PostgreSQL across Vercel serverless runs.</p>
+                        <p class="text-xs text-slate-400 mt-0.5">Persist articles, client websites, and system configurations permanently in Supabase PostgreSQL across Vercel serverless runs.</p>
                     </div>
                 </div>
 
@@ -608,12 +608,6 @@ def render_dashboard_html() -> str:
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-5">
                     <h2 class="text-lg font-semibold text-white">Global Configuration & Tokens</h2>
                     <div class="space-y-4">
-                        <div>
-                            <label class="block text-xs font-medium text-slate-400 mb-1">GitHub Personal Access Token</label>
-                            <input type="password" id="setting-github-token" class="input-text" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx">
-                            <p class="text-[11px] text-slate-500 mt-1">Requires <code>repo</code> permissions (or Fine-Grained token with Read & Write to Contents and Pull Requests).</p>
-                        </div>
-
                         <div>
                             <label class="block text-xs font-medium text-slate-400 mb-1">AI Provider Engine</label>
                             <select id="setting-ai-provider" class="input-select">
@@ -649,7 +643,7 @@ def render_dashboard_html() -> str:
                         <h2 class="text-lg font-semibold text-white">Two-Factor Authentication (2FA)</h2>
                         <span id="badge-2fa-status" class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">Disabled</span>
                     </div>
-                    <p class="text-xs text-slate-400">Protect write access to your GitHub repositories by requiring a TOTP code (Google Authenticator, 1Password) at sign-in.</p>
+                    <p class="text-xs text-slate-400">Protect your account by requiring a TOTP code (Google Authenticator, 1Password) at sign-in.</p>
 
                     <div id="totp-setup-container" class="space-y-3 bg-slate-950 p-4 rounded-lg border border-slate-800 text-xs">
                         <button onclick="initiate2FASetup()" id="btn-setup-2fa" class="btn-secondary text-xs">Set Up Authenticator App</button>
@@ -1077,7 +1071,7 @@ def render_dashboard_html() -> str:
                     <ul id="token-list" class="space-y-2"></ul>
                 </section>
                 <section id="account-keys-card" class="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-3" aria-labelledby="keys-h" data-requires="account.manage">
-                    <h2 id="keys-h" class="text-base font-semibold text-white">Blog AI, GitHub and currency</h2>
+                    <h2 id="keys-h" class="text-base font-semibold text-white">Blog AI and currency</h2>
                     <p class="text-[11px] text-slate-500">Keys are stored encrypted and never shown again. Leave a field blank to keep what is saved.</p>
                     <form onsubmit="saveAccountSettings(event)" class="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <div>
@@ -1098,11 +1092,6 @@ def render_dashboard_html() -> str:
                             <label for="set-ai-key" class="block text-xs font-medium text-slate-300 mb-1">AI API key</label>
                             <input type="password" id="set-ai-key" autocomplete="new-password" class="input-text text-xs font-mono" placeholder="Paste a key">
                             <label class="text-[11px] text-slate-400 flex items-center gap-1 mt-1"><input type="checkbox" id="set-ai-clear"> Remove the saved key</label>
-                        </div>
-                        <div>
-                            <label for="set-gh-token" class="block text-xs font-medium text-slate-300 mb-1">GitHub token</label>
-                            <input type="password" id="set-gh-token" autocomplete="new-password" class="input-text text-xs font-mono" placeholder="Paste a token">
-                            <label class="text-[11px] text-slate-400 flex items-center gap-1 mt-1"><input type="checkbox" id="set-gh-clear"> Remove the saved token</label>
                         </div>
                         <div class="md:col-span-2"><button type="submit" class="btn-primary text-xs py-2 px-3">Save settings</button></div>
                     </form>
@@ -1295,7 +1284,7 @@ def render_dashboard_html() -> str:
                         <span id="badge-supabase-status" class="text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400">Checking...</span>
                     </h2>
                     <p class="text-sm text-slate-400 mt-1">
-                        Persist articles, multi-client repositories, CRM contacts, conversations, deals, and configurations permanently in Supabase PostgreSQL across Vercel serverless runs.
+                        Persist articles, client websites, CRM contacts, conversations, deals, and configurations permanently in Supabase PostgreSQL across Vercel serverless runs.
                     </p>
                 </div>
 
@@ -1325,7 +1314,7 @@ def render_dashboard_html() -> str:
                     <h4 class="font-semibold text-white">PostgreSQL Multi-Tenant Schema Tables:</h4>
                     <ul class="list-disc list-inside space-y-1 text-slate-400 font-mono text-[11px]">
                         <li><code>public.clients</code> - Multi-tenant business organization scoping</li>
-                        <li><code>public.projects</code> - Connected GitHub repositories & automation schedules</li>
+                        <li><code>public.projects</code> - Connected websites and their schedules</li>
                         <li><code>public.posts</code> - AI-generated articles & editorial staging queue</li>
                         <li><code>public.contacts</code> - WhatsApp CRM customer profiles & CDP audience tags</li>
                         <li><code>public.conversations</code> - Live threaded chat sessions & unread counts</li>
@@ -1341,240 +1330,23 @@ def render_dashboard_html() -> str:
     </div>
 </div>
 
-    <!-- Interactive 3-Step Website Connection Wizard (Built for Non-Technical Users) -->
+    <!-- Connect a website: name, address, account -->
     <div id="modal-add-project" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-project-heading">
-        <div class="modal-dialog max-w-2xl">
-            <!-- Header -->
-            <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
-                <div>
-                    <h3 id="modal-add-project-heading" class="text-lg font-bold text-white flex items-center gap-2">
-                        <span>⚡ Connect Your Website</span>
-                        <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-normal">3-Step Easy Setup</span>
-                    </h3>
-                    <p class="text-xs text-slate-400 mt-0.5">Automate daily SEO blog publishing directly into any GitHub project.</p>
+        <div class="modal-dialog max-w-md">
+            <h2 id="modal-add-project-heading" class="text-base font-bold text-white mb-3">Connect a website</h2>
+            <form onsubmit="submitProject(event)" class="space-y-3">
+                <div><label for="project-account" class="block text-xs text-slate-400 mb-1">Account</label><select id="project-account" class="input-select text-sm" required onchange="fillProjectAddress()"></select></div>
+                <div><label for="project-name" class="block text-xs text-slate-400 mb-1">Website name</label><input id="project-name" class="input-text text-sm" required maxlength="100" placeholder="Villa blog"></div>
+                <div><label for="project-url" class="block text-xs text-slate-400 mb-1">Website address</label><input id="project-url" type="url" class="input-text text-sm" required maxlength="200" placeholder="https://www.example.com">
+                    <p class="text-[11px] text-slate-500 mt-1">Posts open at /blog/&lt;post&gt; on this address. An account has one address.</p></div>
+                <div class="flex flex-wrap justify-end gap-2 pt-1">
+                    <button type="button" class="btn-secondary text-xs" onclick="closeAddProjectModal()">Cancel</button>
+                    <button type="submit" id="project-save" class="btn-primary text-xs">Connect website</button>
                 </div>
-                <button type="button" aria-label="Close" onclick="closeAddProjectModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
-            </div>
-
-            <!-- Visual Step Indicator -->
-            <div class="wizard-step-bar">
-                <div id="step-node-1" class="wizard-step-node active">
-                    <span class="wizard-step-number">1</span>
-                    <span>Website Platform</span>
-                </div>
-                <div class="h-0.5 flex-1 bg-slate-800 mx-2"></div>
-                <div id="step-node-2" class="wizard-step-node">
-                    <span class="wizard-step-number">2</span>
-                    <span>GitHub Repo</span>
-                </div>
-                <div class="h-0.5 flex-1 bg-slate-800 mx-2"></div>
-                <div id="step-node-3" class="wizard-step-node">
-                    <span class="wizard-step-number">3</span>
-                    <span>Topics & Tone</span>
-                </div>
-            </div>
-
-            <!-- STEP 1: Website Platform Picker -->
-            <div id="wizard-step-1" class="space-y-4">
-                <div>
-                    <div class="text-xs font-semibold text-slate-300 mb-1">What kind of website is this?</div>
-                    <p class="text-xs text-slate-400 mb-3">Click your platform and GitPulse will automatically configure file folders and templates for you.</p>
-                </div>
-
-                <div class="grid grid-cols-2 gap-3">
-                    <div class="wizard-card selected" onclick="selectWizardFramework('nextjs', this)">
-                        <div class="check-icon">✓</div>
-                        <div class="text-2xl mb-1.5">⚛️</div>
-                        <div class="font-bold text-white text-sm">Next.js</div>
-                        <div class="text-xs text-slate-400 mt-1">Modern React website. Automatically writes rich MDX to <code>content/posts</code>.</div>
-                    </div>
-
-                    <div class="wizard-card" onclick="selectWizardFramework('astro', this)">
-                        <div class="check-icon">✓</div>
-                        <div class="text-2xl mb-1.5">🚀</div>
-                        <div class="font-bold text-white text-sm">Astro</div>
-                        <div class="text-xs text-slate-400 mt-1">Superfast content collections. Writes Markdown to <code>src/content/blog</code>.</div>
-                    </div>
-
-                    <div class="wizard-card" onclick="selectWizardFramework('generic', this)">
-                        <div class="check-icon">✓</div>
-                        <div class="text-2xl mb-1.5">🌐</div>
-                        <div class="font-bold text-white text-sm">HTML / Simple Website</div>
-                        <div class="text-xs text-slate-400 mt-1">Any other website. It reads published posts from the GitPulse API.</div>
-                    </div>
-
-                    <div class="wizard-card" onclick="selectWizardFramework('hugo', this)">
-                        <div class="check-icon">✓</div>
-                        <div class="text-2xl mb-1.5">⚡</div>
-                        <div class="font-bold text-white text-sm">Hugo / Jekyll / Docs</div>
-                        <div class="text-xs text-slate-400 mt-1">Classic static site or GitHub Pages repo. Writes Markdown to <code>content/posts</code>.</div>
-                    </div>
-                </div>
-
-                <!-- Hidden inputs maintained automatically for form submission -->
-                <input type="hidden" id="wizard-framework" value="nextjs">
-                <input type="hidden" id="wizard-content-dir" value="content/posts">
-                <input type="hidden" id="wizard-file-ext" value=".mdx">
-
-                <!-- Collapsible technical settings for developers -->
-                <details class="text-xs text-slate-400 pt-1">
-                    <summary class="cursor-pointer text-indigo-400 hover:text-indigo-300">⚙️ Advanced Folder Settings (Optional)</summary>
-                    <div class="grid grid-cols-2 gap-3 mt-2 bg-slate-950/60 p-3 rounded-lg border border-slate-800">
-                        <div>
-                            <label class="block text-slate-400 mb-1">Target Directory</label>
-                            <input type="text" id="wizard-custom-dir" value="content/posts" class="input-text text-xs font-mono" oninput="document.getElementById('wizard-content-dir').value = this.value">
-                        </div>
-                        <div>
-                            <label class="block text-slate-400 mb-1">Branch</label>
-                            <input type="text" id="wizard-branch" value="main" class="input-text text-xs font-mono">
-                        </div>
-                    </div>
-                </details>
-
-                <div class="flex justify-end pt-3 border-t border-slate-800">
-                    <button type="button" onclick="goToWizardStep(2)" class="btn-primary text-sm flex items-center gap-1.5">
-                        <span>Continue to GitHub</span>
-                        <span>→</span>
-                    </button>
-                </div>
-            </div>
-
-            <!-- STEP 2: GitHub Repository Linker -->
-            <div id="wizard-step-2" class="space-y-4 hidden">
-                <div class="space-y-3">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-300 mb-1">Business / Client *</label>
-                        <div class="flex gap-2">
-                            <select id="wizard-client-id" class="input-select text-xs">
-                                <option value="">(Select or create business)</option>
-                            </select>
-                            <button type="button" onclick="openAddClientModal()" class="btn-secondary text-xs whitespace-nowrap">+ Add Client</button>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label class="block text-xs font-medium text-slate-300 mb-1">Website Name or Label *</label>
-                        <input type="text" id="wizard-name" class="input-text text-sm" placeholder="e.g. Acme Health Blog">
-                    </div>
-
-                    <div>
-                        <label class="block text-xs font-medium text-slate-300 mb-1">GitHub Repository (owner/repo) *</label>
-                        <input type="text" id="wizard-repo" class="input-text text-sm font-mono" placeholder="e.g. your-org/your-website" oninput="resetWizardVerify()">
-                        <p class="text-[11px] text-slate-400 mt-1">Format: <code>username/repository</code></p>
-                    </div>
-
-                    <!-- 1-Click Token Callout -->
-                    <div class="p-3 rounded-lg bg-indigo-950/40 border border-indigo-500/20 text-xs space-y-1.5">
-                        <div class="flex items-center justify-between">
-                            <span class="font-semibold text-indigo-300 flex items-center gap-1">🔑 GitHub Access Token</span>
-                            <a href="https://github.com/settings/tokens/new?scopes=repo&description=GitPulse+CMS" target="_blank" class="text-cyan-400 hover:underline flex items-center gap-0.5">
-                                <span>Create Token in 1-Click</span>
-                                <span>↗</span>
-                            </a>
-                        </div>
-                        <input type="password" id="wizard-token" class="input-text text-xs" placeholder="ghp_... (Leave blank to use the token saved in Settings)">
-                        <p class="text-[10px] text-slate-400">Requires <code>repo</code> permissions to create blog commits or pull requests.</p>
-                    </div>
-
-                    <!-- Interactive Live Verify Button & Status Banner -->
-                    <div>
-                        <button type="button" id="btn-wizard-verify" onclick="verifyWizardGitHub()" class="btn-secondary w-full text-xs py-2 flex items-center justify-center gap-2">
-                            <span>⚡ Test Repository Connection</span>
-                        </button>
-                        <div id="wizard-verify-result" class="hidden mt-2 p-2.5 rounded text-xs"></div>
-                    </div>
-                </div>
-
-                <div class="flex justify-between pt-3 border-t border-slate-800">
-                    <button type="button" onclick="goToWizardStep(1)" class="btn-secondary text-sm">← Back</button>
-                    <button type="button" onclick="goToWizardStep(3)" class="btn-primary text-sm flex items-center gap-1.5">
-                        <span>Continue to Topics & Tone</span>
-                        <span>→</span>
-                    </button>
-                </div>
-            </div>
-
-            <!-- STEP 3: Topic & Autopilot Preferences -->
-            <div id="wizard-step-3" class="space-y-4 hidden">
-                <div>
-                    <label class="block text-xs font-medium text-slate-300 mb-1">What should GitPulse write about? *</label>
-                    <textarea id="wizard-topic" rows="2" class="input-text text-xs resize-none" placeholder="e.g. Health innovations, intermittent fasting, clinical nutrition, and preventative wellness."></textarea>
-                    
-                    <!-- Instant Inspiration Chips -->
-                    <div class="flex flex-wrap gap-1.5 mt-2">
-                        <span class="text-[11px] text-slate-400 mr-1 flex items-center">Inspiration:</span>
-                        <span class="inspiration-chip" onclick="applyInspiration('AI & Machine Learning', 'Cutting-edge LLM architectures, agentic AI frameworks, prompt engineering, vector databases, and real-world deployment.')">🤖 AI & LLMs</span>
-                        <span class="inspiration-chip" onclick="applyInspiration('SaaS & Startups', 'Product-led growth, churn reduction, MRR scaling, user onboarding, and B2B SaaS architecture.')">🚀 SaaS & Growth</span>
-                        <span class="inspiration-chip" onclick="applyInspiration('Health & Wellness', 'Preventative health, evidence-based nutrition, longevity science, fitness routines, and mental wellness.')">🌿 Health & Wellness</span>
-                        <span class="inspiration-chip" onclick="applyInspiration('Fintech & Investing', 'Algorithmic trading, personal finance, automated wealth building, index funds, and financial independence.')">📈 Fintech & Finance</span>
-                    </div>
-                </div>
-
-                <!-- Tone Selector -->
-                <div>
-                    <label class="block text-xs font-medium text-slate-300 mb-1">Writing Tone</label>
-                    <input type="hidden" id="wizard-tone" value="Authoritative, practical, and engaging">
-                    <div class="grid grid-cols-3 gap-2">
-                        <div class="tone-pill selected" onclick="selectTone('Authoritative, practical, and engaging', this)">
-                            <div class="font-bold text-white text-xs">👔 Professional</div>
-                            <div class="text-[10px] text-slate-400 mt-0.5">Authoritative & clear</div>
-                        </div>
-                        <div class="tone-pill" onclick="selectTone('Conversational, modern, punchy, and direct', this)">
-                            <div class="font-bold text-white text-xs">🚀 Startup Casual</div>
-                            <div class="text-[10px] text-slate-400 mt-0.5">Energetic & punchy</div>
-                        </div>
-                        <div class="tone-pill" onclick="selectTone('Educational, benchmark-driven, step-by-step, and beginner-friendly', this)">
-                            <div class="font-bold text-white text-xs">🎓 Educational</div>
-                            <div class="text-[10px] text-slate-400 mt-0.5">Step-by-step guides</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Publishing Safety Choice -->
-                <div>
-                    <label class="block text-xs font-medium text-slate-300 mb-1">Publishing Mode</label>
-                    <input type="hidden" id="wizard-publishing-mode" value="pr">
-                    <div class="grid grid-cols-2 gap-3">
-                        <div class="wizard-card selected" onclick="selectPublishMode('pr', this)">
-                            <div class="check-icon">✓</div>
-                            <div class="font-bold text-white text-xs flex items-center gap-1">🛡️ Review First (Recommended)</div>
-                            <div class="text-[11px] text-slate-400 mt-1">Generates articles into your Review Queue so you can review before they go live on GitHub.</div>
-                        </div>
-                        <div class="wizard-card" onclick="selectPublishMode('direct', this)">
-                            <div class="check-icon">✓</div>
-                            <div class="font-bold text-white text-xs flex items-center gap-1">⚡ Full Autopilot</div>
-                            <div class="text-[11px] text-slate-400 mt-1">Directly commits and publishes articles to your website every day without manual steps.</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-300 mb-1">Daily Publishing Time (India time)</label>
-                        <select id="wizard-publish-time" class="input-select text-xs">
-                            <option value="09:00">Morning (9:00 AM)</option>
-                            <option value="13:00">Midday (1:00 PM)</option>
-                            <option value="18:00">Evening (6:00 PM)</option>
-                            <option value="04:00">Early morning (4:00 AM)</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-300 mb-1">Author Name</label>
-                        <input type="text" id="wizard-author" value="Editorial Team" class="input-text text-xs">
-                    </div>
-                </div>
-
-                <div class="flex justify-between pt-3 border-t border-slate-800">
-                    <button type="button" onclick="goToWizardStep(2)" class="btn-secondary text-sm">← Back</button>
-                    <button type="button" id="btn-wizard-submit" onclick="submitWizardProject()" class="btn-primary text-sm flex items-center gap-1.5 shadow-indigo-500/40">
-                        <span>✨ Connect Website & Start Publishing</span>
-                    </button>
-                </div>
-            </div>
+            </form>
         </div>
     </div>
 
-    <!-- Modal: Add New Business / Client -->
     <div id="modal-add-client" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-client-heading">
         <div class="modal-dialog max-w-md">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
