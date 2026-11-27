@@ -463,6 +463,7 @@ async function loadProjects() {
                 </div>
                 <h3 class="font-bold text-white text-base">${escapeHtml(p.name)}</h3>
                 ${safeUrl(p.website_url) ? `<a href="${escapeHtml(p.website_url)}" target="_blank" rel="noopener" class="block text-xs text-cyan-400 hover:underline break-all mt-0.5">${escapeHtml(p.website_url)}</a>` : '<p class="text-xs text-slate-500 mt-0.5">Uses the account address</p>'}
+                ${can('account.manage') ? `<button type="button" class="btn-secondary text-xs mt-2" onclick="openEditAddress(${Number(p.id)}, '${escapeHtml(encodeURIComponent(p.website_url || ''))}')">Edit address</button>` : ''}
                 ${p.topic ? `<p class="text-xs text-slate-400 mt-2 line-clamp-2"><strong>Niche:</strong> ${escapeHtml(p.topic)}</p>` : ''}
                 
                 ${projectRunHtml(p, alertData)}
@@ -684,6 +685,23 @@ async function submitProject(e) {
     closeAddProjectModal();
     await useAccount(account);
     await loadProjects();
+}
+
+let addressProject = null;
+function openEditAddress(id, url) {
+    addressProject = id;
+    el('address-url').value = decodeURIComponent(url);
+    el('modal-edit-address').classList.remove('hidden');
+}
+function closeEditAddress() { el('modal-edit-address').classList.add('hidden'); }
+async function saveAddress(e) {
+    e.preventDefault();
+    const res = await apiCall('PUT', `/api/projects/${addressProject}`, { website_url: el('address-url').value.trim() });
+    if (!res || res.error) return;
+    showToast('Address saved. New links use it.', 'success');
+    closeEditAddress();
+    await loadProjects();
+    el(`project-card-${addressProject}`)?.focus();
 }
 
 // --- Supabase Cloud Database UI Controller ---

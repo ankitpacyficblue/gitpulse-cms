@@ -245,9 +245,9 @@ def _apply_schema(conn):
     if "website_url" not in project_cols:
         # Each website has its own address; an empty one falls back to the account's.
         cursor.execute("ALTER TABLE projects ADD COLUMN website_url TEXT NOT NULL DEFAULT ''")
-        # Once, for The Villa Projekt only: other accounts' rows are left as they are.
+        # Existing websites start with their account's address, where the account has one.
         cursor.execute("UPDATE projects SET website_url = (SELECT a.website_url FROM accounts a WHERE a.id = projects.account_id) "
-                       "WHERE website_url = '' AND account_id IN (SELECT id FROM accounts WHERE LOWER(name) LIKE '%villa projekt%')")
+                       "WHERE website_url = '' AND account_id IN (SELECT id FROM accounts WHERE website_url <> '')")
     log_cols = [c[1] for c in cursor.execute("PRAGMA table_info(system_logs)").fetchall()]
     if "account_id" not in log_cols:
         cursor.execute("ALTER TABLE system_logs ADD COLUMN account_id TEXT")
@@ -527,6 +527,7 @@ def update_project(project_id: int, data: Dict[str, Any], account_id: str) -> bo
                 webhook_secret = COALESCE(?, webhook_secret),
                 zero_redeploy_enabled = COALESCE(?, zero_redeploy_enabled),
                 blog_page_path = COALESCE(?, blog_page_path),
+                website_url = COALESCE(?, website_url),
                 updated_at = ?
             WHERE id = ? AND account_id = ?
         """, (
@@ -551,6 +552,7 @@ def update_project(project_id: int, data: Dict[str, Any], account_id: str) -> bo
             data.get("webhook_secret"),
             data.get("zero_redeploy_enabled"),
             data.get("blog_page_path"),
+            data.get("website_url"),      # already checked by the route
             now,
             project_id,
             account_id

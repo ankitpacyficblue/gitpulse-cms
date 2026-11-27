@@ -1350,6 +1350,17 @@ def render_dashboard_html() -> str:
         </div>
     </div>
 
+    <div id="modal-edit-address" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-edit-address-h">
+        <div class="modal-dialog max-w-md">
+            <h2 id="modal-edit-address-h" class="text-base font-bold text-white mb-3">Website address</h2>
+            <form onsubmit="saveAddress(event)" class="space-y-3">
+                <div><label for="address-url" class="block text-xs text-slate-400 mb-1">Address</label><input id="address-url" type="url" class="input-text text-sm" maxlength="200" placeholder="https://www.example.com">
+                    <p class="text-[11px] text-slate-500 mt-1">Leave empty to use the account's address. Posts already published keep their saved link.</p></div>
+                <div class="flex flex-wrap justify-end gap-2"><button type="button" class="btn-secondary text-xs" onclick="closeEditAddress()">Cancel</button><button type="submit" class="btn-primary text-xs">Save address</button></div>
+            </form>
+        </div>
+    </div>
+
     <div id="modal-add-client" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-add-client-heading">
         <div class="modal-dialog max-w-md">
             <div class="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">

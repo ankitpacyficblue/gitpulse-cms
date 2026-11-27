@@ -770,19 +770,32 @@ class ConnectWebsiteTests(Base):
         self.assertEqual(site_publish.post_url(self.a, "s", plain), account + "/blog/s")
         self.assertEqual(site_publish.post_url(self.b, "s", own), "")      # another account never gets it
 
-    def test_migration_copies_the_address_onto_villa_rows_only(self):
-        for account, name in ((self.a, "The Villa Projekt"), (self.b, "Other Homes")):
-            with db.get_connection() as conn:
-                conn.execute("UPDATE accounts SET name = ?, website_url = 'https://www.example.com' WHERE id = ?", (name, account))
-                conn.commit()
-        villa = db.create_project({"name": "v"}, self.a)
-        other = db.create_project({"name": "o"}, self.b)
+    def test_migration_copies_each_accounts_address_onto_its_websites(self):
+        website(self, self.a)
+        one = db.create_project({"name": "one"}, self.a)
+        none = db.create_project({"name": "none"}, self.b)      # that account has no address
         with db.get_connection() as conn:
             conn.execute("ALTER TABLE projects DROP COLUMN website_url")      # a database from before this change
             conn.commit()
         db.init_db()
-        self.assertEqual(db.get_project(villa)["website_url"], "https://www.example.com")
-        self.assertEqual(db.get_project(other)["website_url"], "")
+        db.init_db()      # running it again changes nothing
+        self.assertEqual(db.get_project(one)["website_url"], cs.get_account(self.a)["website_url"])
+        self.assertEqual(db.get_project(none)["website_url"], "")
+
+    def test_only_an_owner_edits_a_website_address(self):
+        pid = self.connect(website_url="https://www.example.com")[1]["id"]
+        put = lambda url, api=None: (api or self.api)("PUT", f"/api/projects/{pid}", {"website_url": url})
+        self.assertEqual(put("http://x.com")[0], 400)
+        self.assertEqual(put("https://new.example.com/")[0], 200)
+        self.assertEqual(db.get_project(pid)["website_url"], "https://new.example.com")
+        admin = new_user("adm2")
+        join(self.a, admin, "admin")
+        api = Caller(admin, self.a)
+        self.assertEqual(put("https://other.example.com", api)[0], 403)
+        self.assertEqual(put("", api)[0], 403)
+        self.assertEqual(put("https://new.example.com", api)[0], 200)      # unchanged
+        self.assertEqual(put("")[0], 200)
+        self.assertEqual(db.get_project(pid)["website_url"], "")
 
     def test_only_an_owner_picks_a_different_address(self):
         admin = new_user("adm")

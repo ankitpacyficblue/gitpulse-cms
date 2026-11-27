@@ -541,6 +541,18 @@ def project_update(ctx, m, q, body):
             data.pop(k, None)
     if data.get("github_token") and not secrets_box.is_configured():
         return 500, _NO_ENC
+    if data.get("website_url") is not None:
+        project = _own_project(ctx, int(m.group("pid")))
+        if not project:
+            return 404, {"error": "Project not found."}
+        try:
+            data["website_url"] = site_publish.clean_website(data["website_url"])
+        except ValueError as e:
+            return 400, {"error": "invalid_website_url", "message": str(e)}
+        # Where post links point is an owner's decision, including going back to the account's address.
+        if data["website_url"] != project.get("website_url", "") and not has_permission(ctx.role, "account.manage"):
+            return 403, {"error": "forbidden", "required": "account.manage",
+                         "message": "Only an owner can change a website address."}
     if not db.update_project(int(m.group("pid")), data, ctx.account_id):
         return 404, {"error": "Project not found or no changes made."}
     return 200, {"message": "Project updated successfully."}
