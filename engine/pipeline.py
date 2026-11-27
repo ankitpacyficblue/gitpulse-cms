@@ -176,7 +176,7 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
     # Cross-Engine WhatsApp Automation: Notify subscribers & VIPs
     try:
         from engine.whatsapp_client import WhatsAppClient
-        url = site_publish.post_url(project["account_id"], article["slug"])
+        url = site_publish.post_url(project["account_id"], article["slug"], project_id)
         if url:
             WhatsAppClient(project["account_id"]).trigger_blog_publish_alert(article["title"], url)
     except Exception:
