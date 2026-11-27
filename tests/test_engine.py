@@ -8,7 +8,6 @@ Verifies:
 5. 1200x630 OpenGraph / Hero SVG image synthesis
 6. SEO Pre-Flight Linter & Brand Safety / Negative Keywords Filter
 7. Repository README Context Ingestion & Internal Linking
-8. Zero-Redeploy "One-Time Blog Page" generator & installer
 9. Public Headless Content Delivery API & RSS feed
 10. Bi-directional GitHub Webhook sync with HMAC signature verification
 11. Editorial Staging Queue & Split Editor approval lifecycle
@@ -64,7 +63,6 @@ from engine.totp import (
 from engine.image_generator import generate_hero_svg, svg_to_data_uri
 from engine.seo_linter import lint_article
 from engine.doc_ingestion import summarize_readme_context, get_internal_linking_suggestions
-from engine.templates_embed import generate_one_time_blog_html
 from server.routes_api import handle_api_request
 from server.routes_public import handle_public_request
 from server.routes_webhook import handle_github_webhook
@@ -218,13 +216,6 @@ class TestGitPulseCMS(unittest.TestCase):
         projects = list_projects(self.account_id)
         suggestions = get_internal_linking_suggestions(projects[0]["id"])
         self.assertIsInstance(suggestions, list)
-
-    def test_zero_redeploy_blog_page_generator(self):
-        html = generate_one_time_blog_html(project_id=1, project_name="Acme Tech", cms_base_url="https://cms.acme.com")
-        self.assertIn("Acme Tech - Official Blog", html)
-        self.assertIn("CMS_API = \"https://cms.acme.com\"", html)
-        self.assertIn("PROJECT_ID = 1", html)
-        self.assertIn("marked.parse", html)
 
     def test_public_headless_content_api(self):
         projects = list_projects(self.account_id)

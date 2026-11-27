@@ -41,7 +41,6 @@ from engine.github_client import GitHubClient
 from engine.permissions import permissions_for, has_permission
 from engine.pipeline import run_publication_pipeline
 from engine.seo_linter import lint_article
-from engine.templates_embed import generate_one_time_blog_html
 from engine.totp import generate_totp_secret, verify_totp_code, get_totp_uri
 from engine.whatsapp_client import WhatsAppClient, mock_enabled
 from scheduler.cron_worker import scheduler
@@ -556,26 +555,6 @@ def project_test_github(ctx, m, q, body):
         return 404, {"error": "Project not found."}
     ok, msg = GitHubClient(token=_gh_token(ctx, proj)).test_connection(proj["github_repo"])
     return (200 if ok else 400), {"connected": ok, "message": msg}
-
-
-@route("POST", r"/api/projects/(?P<pid>\d+)/install-blog-page", "acct:content.publish")
-def project_install_blog(ctx, m, q, body):
-    pid = int(m.group("pid"))
-    proj = _own_project(ctx, pid)
-    if not proj:
-        return 404, {"error": "Project not found."}
-    token = _gh_token(ctx, proj)
-    page_path = proj.get("blog_page_path", "public/blog/index.html")
-    html = generate_one_time_blog_html(pid, proj["name"], body.get("cms_base_url", ""))
-    if not token:
-        return 400, {"success": False, "error": "Add a GitHub token to this project first."}
-    ok, sha, err = GitHubClient(token=token).commit_file(
-        proj["github_repo"], page_path, html, proj["github_branch"],
-        f"feat(blog): install zero-redeploy dynamic blog page at {page_path}")
-    if ok:
-        return 200, {"success": True, "path": page_path, "commit_sha": sha,
-                     "message": f"Installed zero-redeploy blog to {proj['github_repo']} at {page_path}."}
-    return 500, {"success": False, "error": err or "Failed to commit blog page."}
 
 
 @route("GET", r"/api/posts", "acct:content.read")

@@ -396,13 +396,6 @@ def render_dashboard_html() -> str:
                             <span>Articles Feed</span>
                         </span>
                     </a>
-                    <a class="sidebar-nav-item" role="button" tabindex="0" onkeydown="navKey(event,this)" onclick="switchTab('zeroredeploy')">
-                        <span class="flex items-center gap-2">
-                            <span>⚡</span>
-                            <span>1-Click Blog Embed</span>
-                        </span>
-                        <span class="sidebar-badge bg-indigo-500/20 text-indigo-300">1-Time</span>
-                    </a>
                 </div>
 
                 <!-- SECTION 2: WHATSAPP AUTOMATION & CRM (WACRM) -->
@@ -653,59 +646,6 @@ def render_dashboard_html() -> str:
                         <!-- Dynamically populated -->
                     </tbody>
                 </table>
-            </div>
-        </div>
-
-        <!-- TAB: ZERO-REDEPLOY SETUP & PUBLIC API -->
-        <div id="tab-zeroredeploy" class="tab-content hidden">
-            <div class="max-w-4xl bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
-                <div>
-                    <h2 class="text-xl font-bold text-white">Zero-Redeploy "One-Time Blog Page" Architecture</h2>
-                    <p class="text-sm text-slate-400 mt-1">
-                        Connect any GitHub website repo once. GitPulse commits a single dynamic blog page. Future daily posts publish instantly with <strong>ZERO builds, ZERO CI/CD runs, and ZERO redeployments</strong>.
-                    </p>
-                </div>
-
-                <!-- 1-Click Installer Card -->
-                <div class="bg-slate-950 p-5 rounded-xl border border-indigo-500/30 space-y-4">
-                    <h3 class="text-base font-semibold text-indigo-300 flex items-center gap-2">
-                        <span>⚡ 1-Click GitHub Repository Installer</span>
-                    </h3>
-                    <p class="text-xs text-slate-400">Select any connected project to commit the standalone dynamic blog page to its repository:</p>
-
-                    <div class="flex flex-col sm:flex-row gap-3 items-center">
-                        <select id="zeroredeploy-project-select" class="input-select text-xs flex-1">
-                            <!-- Populated dynamically -->
-                        </select>
-                        <button onclick="installZeroRedeployBlog()" id="btn-install-blog" class="btn-primary text-xs whitespace-nowrap">
-                            Install Blog Page to Repository
-                        </button>
-                    </div>
-                    <div id="install-result" class="hidden text-xs p-3 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-300"></div>
-                </div>
-
-                <!-- Headless Public Endpoints -->
-                <div class="space-y-3">
-                    <h3 class="text-sm font-semibold text-slate-200">Public Headless Content API Endpoints</h3>
-                    <div class="space-y-2 text-xs font-mono">
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
-                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/posts</span>
-                            <span class="text-slate-500">Paginated JSON feed of published posts</span>
-                        </div>
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
-                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/posts/{slug}</span>
-                            <span class="text-slate-500">Full post markdown, frontmatter, & view counter</span>
-                        </div>
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
-                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/posts/{slug}/og-image.svg</span>
-                            <span class="text-slate-500">Dynamic 1200x630 OpenGraph hero banner</span>
-                        </div>
-                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-wrap gap-x-3 gap-y-1 justify-between items-center">
-                            <span class="text-cyan-400 break-all">GET /api/public/projects/{id}/rss.xml</span>
-                            <span class="text-slate-500">Auto-generated RSS 2.0 XML feed</span>
-                        </div>
-                    </div>
-                </div>
             </div>
         </div>
 
@@ -1710,7 +1650,7 @@ def render_dashboard_html() -> str:
                         <div class="check-icon">✓</div>
                         <div class="text-2xl mb-1.5">🌐</div>
                         <div class="font-bold text-white text-sm">HTML / Simple Website</div>
-                        <div class="text-xs text-slate-400 mt-1">Turnkey zero-redeploy blog. Automatically renders live articles without code changes.</div>
+                        <div class="text-xs text-slate-400 mt-1">Any other website. It reads published posts from the GitPulse API.</div>
                     </div>
 
                     <div class="wizard-card" onclick="selectWizardFramework('hugo', this)">

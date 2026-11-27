@@ -1,7 +1,7 @@
 # ⚡ GitPulse CMS
 
 > **Autonomous, multi-repository blog publishing engine for GitHub projects.**  
-> Automatically researches relevant topics, ingests repository context, generates in-depth technical articles via AI, validates SEO & brand safety, synthesizes 1200x630 OpenGraph banners, and delivers content to your GitHub websites either via Pull Requests/Commits **OR dynamically via Zero-Redeploy dynamic blog pages**.
+> Automatically researches relevant topics, ingests repository context, generates in-depth technical articles via AI, validates SEO & brand safety, synthesizes 1200x630 OpenGraph banners, and serves it to your websites through a public read API (it never commits to your repositories).
 
 ---
 
@@ -11,7 +11,7 @@ Every modern software company, open-source project, and dev tool needs an active
 
 **GitPulse CMS** is an end-to-end CMS designed specifically to plug into **any number of GitHub repositories** simultaneously:
 - **Zero Third-Party Dependencies:** Written in standard modern Python (3.8+)—runs immediately without `pip install` headaches or fragile `node_modules`.
-- **⚡ Zero-Redeploy "One-Time Blog Page" Architecture:** Commit a standalone dynamic blog page to client repositories **ONCE**. Future daily articles appear in real-time dynamically without burning CI/CD minutes or triggering rebuilds!
+- **Publishing without releases:** websites read published posts from the public API ([docs/PUBLISHING.md](docs/PUBLISHING.md)).
 - **🖼️ Automated Hero & OpenGraph Image Pipeline:** Pure Python 1200x630 SVG synthesis with gradients, title wrapping, category tags, author badge, and reading time.
 - **🔄 Bi-Directional GitHub Webhook Sync:** Cryptographic HMAC-SHA256 receiver automatically tracking PR merges and updating article status in real-time.
 - **✍️ Human-in-the-Loop Editorial Staging:** Hold drafts in staging, refine them in a live split-screen Markdown editor with instant HTML rendering, and approve with a single click.
@@ -22,31 +22,6 @@ Every modern software company, open-source project, and dev tool needs an active
 - **Pluggable AI Generation:** Native support for **Google Gemini** (1.5/2.0 Flash & Pro), **OpenAI** (GPT-4o), and a high-fidelity **Built-in Architectural Generator**.
 - **Real-Time Web Dashboard:** A responsive single-page application with metrics, repository manager, split editor, live markdown viewer, and audit logs.
 - **Background Cron Daemon:** Built-in lightweight scheduler executing automated daily publications at each project's specified UTC time.
-
----
-
-## ⚡ Zero-Redeploy Architecture (No CI/CD Rebuilds Needed)
-
-For businesses that do not want every daily blog post to trigger a full website deployment on Vercel, Netlify, or AWS, GitPulse provides the **Zero-Redeploy Dynamic Blog Page**:
-
-```
-+------------------+         Publishes New Post          +-----------------------+
-|  GitPulse CMS    | ----------------------------------> | SQLite / Public Cache |
-+------------------+                                     +-----------+-----------+
-                                                                     |
-                           Client Website (Deploys ONCE)             | Real-time JSON
-                           +---------------------------+             | (/api/public/...)
-                           |   public/blog/index.html  | <-----------+
-                           |   - Client-side SPA route |
-                           |   - Instant Search & Tags |
-                           |   - Dynamic Markdown view |
-                           +---------------------------+
-```
-
-1. In the GitPulse Dashboard or via CLI, click **"Install Blog Page to Repository"**.
-2. GitPulse commits a single, beautiful, responsive, dark-mode blog file (e.g. `public/blog/index.html`) to the client's repository once.
-3. When daily articles are published in GitPulse CMS, the client's blog updates **immediately in real-time** with **zero build time, zero deployment failures, and zero git clutter!**
-4. Search engine indexing is preserved via auto-generated RSS feeds (`/api/public/projects/:id/rss.xml`) and Sitemaps.
 
 ---
 
@@ -119,16 +94,13 @@ python3 cli.py init
 # 2. View all connected GitHub projects
 python3 cli.py list-projects
 
-# 3. Commit one-time Zero-Redeploy dynamic blog page to repo
-python3 cli.py install-blog-page --project-id 1
-
-# 4. Trigger an immediate article generation & publication
+# 3. Trigger an immediate article generation & publication
 python3 cli.py publish --project-id 1
 
-# 5. Generate draft only without committing to GitHub
+# 4. Generate draft only without publishing
 python3 cli.py publish --project-id 1 --draft-only
 
-# 6. Reset or create an admin password
+# 5. Reset or create an admin password
 python3 cli.py reset-password --username admin --password "StrongNewPassword!"
 ```
 
@@ -144,7 +116,6 @@ The dashboard navigation is organized into clean, dedicated sections:
   - `Connected Repos`: Multi-framework publishing targets with 3-step guided website connector.
   - `Editorial Staging`: Draft queue with live SEO pre-flight scoring and split-screen Markdown editor.
   - `Articles Feed`: Published posts feed with live GitHub commits, PR tracking, and markdown viewer.
-  - `1-Click Blog Embed`: Zero-redeploy standalone blog page installer & public headless JSON APIs.
 - **💬 WhatsApp Automation & CRM**:
   - `Shared Team Inbox`: Two-way threaded chat window with real-time delivery ticks (✓ sent, ✓✓ delivered, blue ✓✓ read), canned response chips, and message composer.
   - `Contacts & Audience (CDP)`: Contact directory with WhatsApp phone links, audience tags (`VIP`, `Customer`, `Lead`), notes, and search.

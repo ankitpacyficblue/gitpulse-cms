@@ -86,7 +86,6 @@ const TAB_GUARD = {
     'supabase': () => isPlatformAdmin(),
     'settings': () => isPlatformAdmin(),
     'logs': () => can('audit.read'),
-    'zeroredeploy': () => can('content.publish'),
     'wa-broadcasts': () => can('crm.read')
 };
 
@@ -130,7 +129,6 @@ function switchTab(tabName) {
         'repos': { title: 'Connected Projects', sub: 'Autonomous multi-repo daily blog publishing targets' },
         'staging': { title: 'Editorial Staging & Review', sub: 'Review, edit, and approve AI-generated drafts with live SEO scoring' },
         'posts': { title: 'Published Blog Articles', sub: 'Inspect published posts, live Markdown, and GitHub commits/PRs' },
-        'zeroredeploy': { title: 'Zero-Redeploy "One-Time Blog Page"', sub: 'Turnkey dynamic blog embed with zero CI/CD rebuilds' },
         'wa-inbox': { title: 'Shared Team Inbox', sub: 'Two-way WhatsApp conversations for your team' },
         'wa-contacts': { title: 'Contacts & Audience CRM', sub: 'Manage customer profiles, lead tags, and WhatsApp communication history' },
         'wa-deals': { title: 'Sales Pipeline (Kanban)', sub: 'Track and advance deals across qualification, proposals, and closed won' },
@@ -446,9 +444,6 @@ async function loadProjects() {
     const filterSelect = document.getElementById('post-filter-project');
     if (filterSelect) filterSelect.innerHTML = '<option value="">All Repositories</option>';
 
-    const zeroRedeploySelect = document.getElementById('zeroredeploy-project-select');
-    if (zeroRedeploySelect) zeroRedeploySelect.innerHTML = '';
-
     if (data.projects.length === 0) {
         grid.innerHTML = `
             <div class="col-span-full p-8 text-center bg-slate-900 border border-slate-800 rounded-xl">
@@ -476,13 +471,6 @@ async function loadProjects() {
             opt.value = p.id;
             opt.innerText = `${p.name} (${p.github_repo})`;
             filterSelect.appendChild(opt);
-        }
-
-        if (zeroRedeploySelect) {
-            const opt2 = document.createElement('option');
-            opt2.value = p.id;
-            opt2.innerText = `${p.name} (${p.github_repo})`;
-            zeroRedeploySelect.appendChild(opt2);
         }
 
         // Render card
@@ -530,11 +518,6 @@ async function loadProjects() {
                         Delete
                     </button>
                 </div>
-                
-                <!-- Zero Redeploy Installer button -->
-                <button onclick="installZeroRedeployForProject(${p.id})" class="w-full text-center text-[11px] py-1 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 hover:bg-indigo-500/20">
-                    🚀 Add 1-Time Live Blog to Website ↗
-                </button>
             </div>
         `;
         grid.appendChild(card);
@@ -606,47 +589,6 @@ async function deleteProject(projectId) {
         showToast('Project removed.', 'success');
         loadProjects();
         loadStatus();
-    }
-}
-
-// --- Zero-Redeploy "One-Time Blog Page" Installer ---
-async function installZeroRedeployBlog() {
-    const select = document.getElementById('zeroredeploy-project-select');
-    const projectId = select.value;
-    if (!projectId) return;
-
-    await installZeroRedeployForProject(projectId);
-}
-
-async function installZeroRedeployForProject(projectId) {
-    const btn = document.getElementById('btn-install-blog');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerText = 'Committing...';
-    }
-
-    const res = await apiPost(`/api/projects/${projectId}/install-blog-page`, {
-        cms_base_url: window.location.origin
-    });
-
-    if (btn) {
-        btn.disabled = false;
-        btn.innerText = 'Install Blog Page to Repository';
-    }
-
-    const resultBox = document.getElementById('install-result');
-    if (res && res.success) {
-        showToast('Zero-redeploy blog page committed to repository!', 'success');
-        if (resultBox) {
-            resultBox.classList.remove('hidden');
-            resultBox.innerHTML = `
-                <strong>Success!</strong> ${res.message}<br>
-                <span class="text-slate-400">Path: <code>${res.path}</code> (Commit: ${res.commit_sha})</span><br>
-                <span class="text-indigo-300">Your other project can now display all published blog posts dynamically with 0 future deployments!</span>
-            `;
-        }
-    } else {
-        showToast(res ? res.error : 'Installation failed', 'error');
     }
 }
 
@@ -2225,7 +2167,7 @@ function applyRolePermissions() {
     }
     const cfgNav = document.querySelector("[onclick*=\"switchTab('wa-config')\"]");
     if (cfgNav) cfgNav.classList.toggle('hidden', !can('wa.config'));
-    const navGate = { logs: 'audit.read', zeroredeploy: 'content.publish' };
+    const navGate = { logs: 'audit.read' };
     Object.keys(navGate).forEach(t => {
         const n = document.querySelector(`.sidebar-nav-item[onclick*="switchTab('${t}')"]`);
         if (n) n.classList.toggle('hidden', !can(navGate[t]));
