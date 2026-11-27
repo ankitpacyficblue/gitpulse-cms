@@ -245,9 +245,6 @@ def _apply_schema(conn):
     if "website_url" not in project_cols:
         # Each website has its own address; an empty one falls back to the account's.
         cursor.execute("ALTER TABLE projects ADD COLUMN website_url TEXT NOT NULL DEFAULT ''")
-        # Existing websites start with their account's address, where the account has one.
-        cursor.execute("UPDATE projects SET website_url = (SELECT a.website_url FROM accounts a WHERE a.id = projects.account_id) "
-                       "WHERE website_url = '' AND account_id IN (SELECT id FROM accounts WHERE website_url <> '')")
     log_cols = [c[1] for c in cursor.execute("PRAGMA table_info(system_logs)").fetchall()]
     if "account_id" not in log_cols:
         cursor.execute("ALTER TABLE system_logs ADD COLUMN account_id TEXT")

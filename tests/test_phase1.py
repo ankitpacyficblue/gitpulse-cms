@@ -770,17 +770,16 @@ class ConnectWebsiteTests(Base):
         self.assertEqual(site_publish.post_url(self.a, "s", plain), account + "/blog/s")
         self.assertEqual(site_publish.post_url(self.b, "s", own), "")      # another account never gets it
 
-    def test_migration_copies_each_accounts_address_onto_its_websites(self):
+    def test_migration_adds_an_empty_column_so_old_websites_use_the_account_address(self):
         website(self, self.a)
-        one = db.create_project({"name": "one"}, self.a)
-        none = db.create_project({"name": "none"}, self.b)      # that account has no address
+        pid = db.create_project({"name": "one"}, self.a)
         with db.get_connection() as conn:
             conn.execute("ALTER TABLE projects DROP COLUMN website_url")      # a database from before this change
             conn.commit()
         db.init_db()
         db.init_db()      # running it again changes nothing
-        self.assertEqual(db.get_project(one)["website_url"], cs.get_account(self.a)["website_url"])
-        self.assertEqual(db.get_project(none)["website_url"], "")
+        self.assertEqual(db.get_project(pid)["website_url"], "")
+        self.assertEqual(site_publish.post_url(self.a, "s", pid), cs.get_account(self.a)["website_url"] + "/blog/s")
 
     def test_only_an_owner_edits_a_website_address(self):
         pid = self.connect(website_url="https://www.example.com")[1]["id"]
