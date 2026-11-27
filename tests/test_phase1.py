@@ -25,6 +25,13 @@ KNOWLEDGE = {"ai_enabled": True, "business_facts": "We sell farm plots near Mysu
              "banned_claims": ["RERA approved", "guaranteed returns"]}
 
 
+def without_cover_rule(test):
+    """For tests about something else; CoverRequiredTests covers the rule itself."""
+    patch = mock.patch.object(blog_plan, "require_cover", lambda row: None)
+    patch.start()
+    test.addCleanup(patch.stop)
+
+
 class Base(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -455,6 +462,7 @@ class CustomFieldTests(Base):
 class BlogPlanTests(Base):
     def setUp(self):
         super().setUp()
+        without_cover_rule(self)
         self.writer = self.agent_api
         self.pid = db.create_project({"name": "Site", "github_repo": "x/y", "topic": "farm plots",
                                       "target_framework": "generic"}, self.a)
@@ -555,6 +563,10 @@ class BlogPlanTests(Base):
 
 
 class PublishNowTests(Base):
+    def setUp(self):
+        super().setUp()
+        without_cover_rule(self)
+
     def post_waiting(self, status="approved"):
         pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic", "github_token": "tok"}, self.a)
         later = (datetime.utcnow() + timedelta(5)).isoformat() + "Z"
@@ -589,12 +601,61 @@ class PublishNowTests(Base):
         self.assertIn("no access", out["message"])
 
 
+class CoverRequiredTests(Base):
+    COVER = '[{"media_id": 1, "alt": "", "cover": true}]'
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.object(blog_plan, "_post_files", lambda account_id, row: [])      # no file storage here
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.pid = db.create_project({"name": "S", "github_repo": "x/y", "topic": "t", "target_framework": "generic",
+                                      "github_token": "tok"}, self.a)
+
+    def put(self, item, **values):
+        with db.get_connection() as c:
+            for key, value in values.items():
+                c.execute(f"UPDATE blog_plan SET {key} = ? WHERE id = ?", (value, item))
+            c.commit()
+
+    def test_submit_approve_and_publish_need_a_cover(self):
+        when = (datetime.utcnow() - timedelta(minutes=1)).isoformat() + "Z"
+        item = self.api("POST", "/api/blog/plan", {"title": "T", "body": "B", "project_id": self.pid,
+                                                  "publish_at": when})[1]["item"]["id"]
+        step = lambda action: self.api("POST", f"/api/blog/plan/{item}/{action}")
+        self.assertEqual(step("submit")[1]["error"], "cover_required")
+        self.put(item, status="needs_approval")
+        self.assertEqual(step("approve")[1]["error"], "cover_required")
+        self.put(item, status="approved")                                   # approved before the rule
+        self.assertEqual(step("publish-now")[1]["error"], "cover_required")
+        with mock.patch("engine.github_client.GitHubClient.publish_post") as publish:
+            blog_plan.schedule_due()
+            jobs.tick()
+        publish.assert_not_called()
+        stored = self.api("GET", "/api/blog/plan")[1]["items"][0]
+        self.assertEqual(stored["status"], "failed")
+        self.assertIn("cover image", stored["error"])
+        self.put(item, images=self.COVER)
+        self.assertEqual([step("submit")[0], step("approve")[0]], [200, 200])
+
+    def test_writer_cannot_hand_in_without_a_cover(self):
+        code, out = self.api("POST", "/api/writer-tokens", {"name": "Toby"})
+        header = {"Authorization": "Bearer " + out["token"]}
+        for images in ([], None):
+            code, body = handle_api_request("POST", "/api/writer/posts", {}, {"title": "T", "body": "B", "images": images},
+                                            headers=header)
+            self.assertEqual((code, body["error"]), (409, "cover_required"), body)
+            self.assertIn("cover", body["message"])
+        self.assertEqual(self.api("GET", "/api/blog/plan")[1]["items"], [])
+
+
 class MediaTests(Base):
     PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 8
     PDF = b"%PDF-1.7 " + b"0" * 7
 
     def setUp(self):
         super().setUp()
+        without_cover_rule(self)
         env = mock.patch.dict(os.environ, {"MEDIA_SUPABASE_URL": "https://store.test", "MEDIA_SUPABASE_KEY": "k",
                                            "MEDIA_BUCKET": "b"})
         env.start()
@@ -754,6 +815,7 @@ class MediaTests(Base):
         header = {"Authorization": "Bearer " + out["token"]}
         return out, lambda method, path, body=None: handle_api_request(method, path, {}, body or {}, headers=header)
 
+    @mock.patch.object(blog_plan, "has_cover", lambda images: True)
     def test_writer_meta_description_and_project(self):
         pid = db.create_project({"name": "Villa", "github_repo": "x/y", "topic": "t", "target_framework": "generic"}, self.a)
         _, writer = self.writer()
@@ -778,7 +840,7 @@ class MediaTests(Base):
         self.next_upload = self.PNG
         up = writer("POST", "/api/writer/media/upload-url", {"name": "a.png", "mime": "image/png", "size": 16})[1]
         got = writer("POST", "/api/writer/media", {"media_id": up["media_id"]})[1]
-        draft = {"title": "Plots", "body": f"Hi ![a]({got['markdown_url']})", "images": [{"media_id": up["media_id"]}],
+        draft = {"title": "Plots", "body": f"Hi ![a]({got['markdown_url']})", "images": [{"media_id": up["media_id"], "cover": True}],
                  "publish_at": (datetime.utcnow() - timedelta(1)).isoformat() + "Z", "status": "approved", "external_id": "e1"}
         staff_image = self.upload()[1]["item"]["id"]
         self.assertEqual(writer("POST", "/api/writer/posts", dict(draft, images=[{"media_id": staff_image}], external_id="e2"))[0], 404)

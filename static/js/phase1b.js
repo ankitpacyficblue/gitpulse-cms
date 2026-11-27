@@ -241,6 +241,9 @@ async function loadBlogStatus() {
     renderReviewQueue();
     renderBlogStatus();
 }
+// Published posts are left alone.
+const coverWarning = i => i.status !== 'published' && !(i.images || []).some(m => m.cover)
+    ? '<p class="text-xs text-amber-200 mt-1">No cover image. Add one before this post can be submitted, approved or published.</p>' : '';
 function renderReviewQueue() {
     const waiting = statusItems.filter(i => i.status === 'needs_approval');
     const box = el('review-queue');
@@ -249,6 +252,7 @@ function renderReviewQueue() {
         return `<article class="${cardClass}">
             <h3 class="text-sm font-semibold text-white break-words">${escapeHtml(i.title)}</h3>
             <p class="text-[11px] text-slate-400">${escapeHtml([i.publish_at ? `Scheduled ${fmtIst(i.publish_at)}` : 'No date yet', i.writer ? `Writer ${i.writer}` : i.assignee_name, `${imgs.length} image${imgs.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '))}</p>
+            ${coverWarning(i)}
             <div class="flex flex-wrap gap-2 mt-2">${imgs.map(m => thumbHtml({ ...m, mime: 'image/' }, 'w-16 h-16')).join('')}</div>
             <details class="mt-2"><summary class="text-xs text-indigo-300 cursor-pointer">Read the post</summary><div class="text-sm text-slate-200 mt-2">${postPreviewHtml(i.body, imgs)}</div></details>
             ${can('content.publish') ? `<div class="flex flex-wrap gap-2 mt-3">
@@ -299,6 +303,7 @@ function renderBlogStatus() {
                 <h3 class="text-sm font-semibold text-white break-words min-w-0 flex-1">${escapeHtml(i.title)}</h3>
                 <span class="text-xs font-semibold ${colour}">${escapeHtml(label)}${isLate(i) ? ' <span class="ml-1 px-1.5 rounded bg-red-500/20 text-red-300">Late</span>' : ''}</span>
             </div>
+            ${coverWarning(i)}
             <dl class="text-xs text-slate-400 mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5">
                 ${cell('Writer', escapeHtml(i.writer || i.assignee_name || ''))}
                 ${cell('Scheduled', escapeHtml(fmtIst(i.publish_at)))}

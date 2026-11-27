@@ -17,6 +17,7 @@ from engine.messaging import IST
 EDITABLE = ("title", "topic", "keyword", "publish_at", "project_id", "assignee_id", "body", "images", "writer_token_id",
             "meta_description")
 MAX_IMAGES = 20
+COVER_MESSAGE = "Add a cover image first: attach an image and mark it as the cover."
 
 
 class PlanError(Exception):
@@ -229,12 +230,25 @@ def delete(account_id: str, item_id: int) -> None:
         conn.commit()
 
 
+def has_cover(images: Any) -> bool:
+    """`images`: the list, or the stored JSON text."""
+    if isinstance(images, str):
+        images = json.loads(images or "[]")
+    return isinstance(images, list) and any(isinstance(i, dict) and i.get("cover") for i in images)
+
+
+def require_cover(row: Dict[str, Any]) -> None:
+    if not has_cover(row["images"]):
+        raise PlanError(409, "cover_required", COVER_MESSAGE)
+
+
 def submit(account_id: str, item_id: int) -> Dict[str, Any]:
     row = _row(account_id, item_id)
     if row["status"] not in ("draft", "failed"):
         raise PlanError(409, "wrong_status", f"A post that is '{row['status']}' cannot be submitted.")
     if not row["body"]:
         raise PlanError(409, "empty_body", "Write or draft the post first.")
+    require_cover(row)
     _set(account_id, item_id, expected_status=row["status"], status="needs_approval", error="", rejected_note="")
     return get_item(account_id, item_id)
 
@@ -254,6 +268,7 @@ def approve(account_id: str, item_id: int, host: str = "") -> Dict[str, Any]:
     row = _row(account_id, item_id)
     if row["status"] != "needs_approval":
         raise PlanError(409, "wrong_status", "Only a post waiting for approval can be approved.")
+    require_cover(row)
     missing = [name for name, key in (("body", "body"), ("blog project", "project_id"), ("publish date", "publish_at"))
                if not row[key]]
     if missing:
@@ -273,6 +288,7 @@ def publish_now(account_id: str, item_id: int) -> Dict[str, Any]:
     row = _row(account_id, item_id)
     if row["status"] != "approved":
         raise PlanError(409, "wrong_status", "Only an approved post can be published.")
+    require_cover(row)
     with db.get_connection() as conn:      # updated_at stays: it names the approved version and its job
         moved = conn.execute("UPDATE blog_plan SET publish_at = ? WHERE id = ? AND account_id = ? AND status = 'approved' "
                              "AND updated_at = ?", (_now(), item_id, account_id, row["updated_at"])).rowcount > 0
@@ -468,6 +484,10 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
     project = db.get_project(row["project_id"]) if row["project_id"] else None
     if not project or project.get("account_id") != account_id:
         return {"success": False, "error": "The blog project no longer exists."}
+    try:
+        require_cover(row)      # also posts approved before the rule
+    except PlanError as e:
+        return {"success": False, "error": e.message}
     token = project.get("github_token") or cs.get_account_github_token(account_id)
     if not token:
         return {"success": False, "error": "No GitHub token is set for this project or account."}
