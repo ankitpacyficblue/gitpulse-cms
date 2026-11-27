@@ -17,6 +17,8 @@ from engine.messaging import IST
 EDITABLE = ("title", "topic", "keyword", "publish_at", "project_id", "assignee_id", "body", "images", "writer_token_id",
             "meta_description", "seo_title")
 MAX_IMAGES = 20
+FIRST_IMAGE = re.compile(r"!\[([^\]]*)\]\((https?://[^)\s]+)\)")
+LIVE_EDITABLE = {"title", "body", "keyword", "meta_description", "seo_title", "images"}
 COVER_MESSAGE = "Add a cover image first: attach an image and mark it as the cover."
 
 
@@ -208,14 +210,17 @@ def _set(account_id: str, item_id: int, expected_status: Optional[str] = None, *
     return changed
 
 
-def update(account_id: str, item_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+def update(account_id: str, item_id: int, data: Dict[str, Any], can_publish: bool = False) -> Dict[str, Any]:
+    """`can_publish`: the caller may change a post that is live. Writer tokens never may."""
     row = _row(account_id, item_id)
-    if row["status"] == "published":
-        raise PlanError(409, "already_published", "A published post cannot be edited here.")
+    if row["status"] == "published" and not can_publish:
+        raise PlanError(409, "already_published", "Only someone who can publish may edit a published post.")
     f = {k: v for k, v in _clean(account_id, data).items() if v != row[k]}
     if "title" in f and not f["title"]:
         raise PlanError(400, "title_required", "Give the post a title.")
-    if f:
+    if f and row["status"] == "published":
+        _update_live(account_id, row, f)
+    elif f:
         content = set(f) - {"assignee_id", "writer_token_id"}    # reassigning does not change what was approved
         if row["status"] == "approved" and content:
             f["status"] = "needs_approval"
@@ -226,8 +231,12 @@ def update(account_id: str, item_id: int, data: Dict[str, Any]) -> Dict[str, Any
 
 
 def delete(account_id: str, item_id: int) -> None:
-    _row(account_id, item_id)
+    row = _row(account_id, item_id)
+    if row["status"] == "published":
+        raise PlanError(409, "published", "Unpublish this post first: deleting it would leave it live.")
     with db.get_connection() as conn:
+        if row["post_id"]:      # kept as history, and never merged back
+            conn.execute("UPDATE posts SET status = 'deleted' WHERE id = ?", (row["post_id"],))
         conn.execute("DELETE FROM blog_plan WHERE id = ? AND account_id = ?", (item_id, account_id))
         conn.commit()
 
@@ -285,11 +294,23 @@ def approve(account_id: str, item_id: int, host: str = "") -> Dict[str, Any]:
     return get_item(account_id, item_id)
 
 
-def publish_now(account_id: str, item_id: int) -> Dict[str, Any]:
-    """Run an approved post's publish job at once: the scheduler's own job, so only one of the two can publish it."""
+def publish_now(account_id: str, item_id: int, host: str = "") -> Dict[str, Any]:
+    """Run an approved post's publish job at once: the scheduler's own job, so only one of the two can publish it.
+    A post in review, or one whose publish failed (a retry), is approved first, with the same checks."""
     row = _row(account_id, item_id)
+    if row["status"] in ("needs_approval", "failed"):
+        if not _set(account_id, item_id, expected_status=row["status"], status="needs_approval",
+                    publish_at=row["publish_at"] or _now()):
+            raise PlanError(409, "wrong_status", "The post changed. Reload and try again.")
+        try:
+            approve(account_id, item_id, host)
+        except PlanError:      # nothing changes when a check fails
+            _set(account_id, item_id, expected_status="needs_approval", status=row["status"],
+                 publish_at=row["publish_at"])
+            raise
+        row = _row(account_id, item_id)
     if row["status"] != "approved":
-        raise PlanError(409, "wrong_status", "Only an approved post can be published.")
+        raise PlanError(409, "wrong_status", "Only a post in review, approved or failed can be published.")
     require_cover(row)
     with db.get_connection() as conn:      # updated_at stays: it names the approved version and its job
         moved = conn.execute("UPDATE blog_plan SET publish_at = ? WHERE id = ? AND account_id = ? AND status = 'approved' "
@@ -373,6 +394,121 @@ def _guard(account_id: str, row: Dict[str, Any]) -> Optional[str]:
         return assistant.guard(knowledge, text)
     low = text.lower()
     return "banned claim" if any(c.lower() in low for c in knowledge["banned_claims"]) else None
+
+
+# ------------------------------------------------------------------ live posts
+
+def _write_post(post_id: int, data: Dict[str, Any]) -> None:
+    keys = [k for k in ("title", "excerpt", "content_markdown", "frontmatter_yaml", "tags", "meta_seo", "og_image_svg")
+            if k in data]
+    values = [json.dumps(data[k]) if k in ("tags", "meta_seo") else data[k] for k in keys]
+    with db.get_connection() as conn:
+        conn.execute(f"UPDATE posts SET {', '.join(k + ' = ?' for k in keys)} WHERE id = ?", (*values, post_id))
+        conn.commit()
+
+
+def _update_live(account_id: str, row: Dict[str, Any], fields: Dict[str, Any]) -> None:
+    """Change a published post and the copy the website reads. The address (slug) stays."""
+    fixed = sorted(set(fields) - LIVE_EDITABLE - {"assignee_id", "writer_token_id"})
+    if fixed:
+        raise PlanError(409, "published", "Unpublish the post to change: " + ", ".join(fixed) + ".")
+    new = dict(row, **fields)
+    if not set(fields) & LIVE_EDITABLE:
+        _set(account_id, row["id"], expected_status="published", **fields)
+        return
+    if not new["title"] or not new["body"]:
+        raise PlanError(409, "incomplete", "A published post needs a title and a body.")
+    post = db.get_post(row["post_id"]) if row["post_id"] else None
+    if not post:
+        raise PlanError(409, "missing_post", "The published copy of this post no longer exists.")
+    if row["origin"] == "" or has_cover(row["images"]):
+        require_cover(new)
+    blocked = _guard(account_id, new)
+    if blocked:
+        raise PlanError(409, "blocked", f"This change cannot go live: {blocked}.")
+    full = _with_images(account_id, new)
+    images = _post_files(account_id, new)
+    meta = json.loads(post["meta_seo"] or "{}")
+    tags = [k.strip() for k in new["keyword"].split(",") if k.strip()]
+    excerpt = new["meta_description"] or post["excerpt"]
+    meta.update(title=new["seo_title"], description=excerpt, keywords=tags, updated_at=_now())
+    if images or row["images"] != "[]":
+        meta.update(cover=_image(new, images, "cover"), og_image=_image(new, images, "og"))
+    og = meta.get("og_image")
+    media.publish_linked(account_id, f"{full}\n{og['url'] if og else ''}")
+    if not _set(account_id, row["id"], expected_status="published", **fields):
+        raise PlanError(409, "wrong_status", "The post changed. Reload and try again.")
+    _write_post(post["id"], {"title": new["title"], "excerpt": excerpt, "content_markdown": full, "tags": tags,
+                             "meta_seo": meta})
+
+
+def unpublish(account_id: str, item_id: int) -> Dict[str, Any]:
+    """Take a post off the website and make it a draft. Its `posts` row is kept and reused next time. Older
+    published copies at the same address come off too, so none of them shows up instead."""
+    row = _row(account_id, item_id)
+    if row["status"] != "published":
+        raise PlanError(409, "wrong_status", "Only a published post can be unpublished.")
+    back = "status = 'draft', published_at = '', post_url = '', error = '', updated_at = ?"
+    with db.get_connection() as conn:
+        post = conn.execute("SELECT project_id, slug FROM posts WHERE id = ?", (row["post_id"],)).fetchone() \
+            if row["post_id"] else None
+        if post:
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM posts WHERE project_id = ? AND slug = ? AND status = 'published'",
+                (post["project_id"], post["slug"])).fetchall()]
+            for post_id in ids:
+                conn.execute("UPDATE posts SET status = 'draft' WHERE id = ?", (post_id,))
+                conn.execute(f"UPDATE blog_plan SET {back} WHERE post_id = ? AND account_id = ? AND status = 'published'",
+                             (_now(), post_id, account_id))
+        conn.execute(f"UPDATE blog_plan SET {back} WHERE id = ? AND account_id = ?", (_now(), item_id, account_id))
+        conn.commit()
+    return get_item(account_id, item_id)
+
+
+# ------------------------------------------------------------------ one set of posts
+
+def merged_status(post_status: str) -> str:
+    return {"published": "published", "in_review": "needs_approval", "failed": "failed",
+            "publishing": "failed"}.get(post_status, "draft")
+
+
+def mirror(post_id: int, origin: str = "pipeline") -> Optional[int]:
+    """Give a `posts` row its `blog_plan` row. None: it has one, was deleted, or belongs to no account."""
+    post = db.get_post(post_id)
+    project = db.get_project(post["project_id"]) if post else None
+    if not post or post["status"] == "deleted" or not project or not project.get("account_id"):
+        return None
+    meta = json.loads(post["meta_seo"] or "{}")
+    tags = json.loads(post["tags"] or "[]")
+    status = merged_status(post["status"])
+    seo_title = meta.get("title") if meta.get("title") != post["title"] else ""
+    values = {"account_id": project["account_id"], "project_id": project["id"], "title": post["title"],
+              "keyword": ", ".join(str(t) for t in tags), "status": status, "body": post["content_markdown"],
+              "meta_description": (post["excerpt"] or "")[:300], "seo_title": (seo_title or "")[:120],
+              "post_id": post_id, "origin": origin, "created_at": post["created_at"],
+              "updated_at": meta.get("updated_at") or post["published_at"] or post["created_at"],
+              "published_at": (post["published_at"] or "") if status == "published" else "",
+              "error": (post["error_message"] or "")[:300] if status == "failed" else ""}
+    with db.get_connection() as conn:
+        if conn.execute("SELECT 1 FROM blog_plan WHERE post_id = ?", (post_id,)).fetchone():
+            return None
+        item_id = conn.execute(f"INSERT INTO blog_plan ({', '.join(values)}) VALUES ({','.join('?' * len(values))})",
+                               tuple(values.values())).lastrowid
+        conn.commit()
+    return item_id
+
+
+def sync_from_post(post_id: int) -> None:
+    """The older /api/posts screens change `posts` directly; keep the merged row in step."""
+    post = db.get_post(post_id)
+    if not post:
+        return
+    status = merged_status(post["status"])
+    with db.get_connection() as conn:
+        conn.execute("UPDATE blog_plan SET title = ?, body = ?, status = ?, published_at = ?, updated_at = ? "
+                     "WHERE post_id = ?", (post["title"], post["content_markdown"], status,
+                                           (post["published_at"] or "") if status == "published" else "", _now(), post_id))
+        conn.commit()
 
 
 # ------------------------------------------------------------------ AI draft
@@ -499,7 +635,8 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
     except PlanError as e:
         return {"success": False, "error": e.message}
     title, body = row["title"], row["body"]
-    slug = slugify(title)
+    old = db.get_post(row["post_id"]) if row["post_id"] else None      # published before: keep its row and address
+    slug = old["slug"] if old else slugify(title)
     day = datetime.now(IST).strftime("%Y-%m-%d")
     excerpt = row["meta_description"] or " ".join(line for line in body.splitlines() if line and not line.startswith("#"))[:155]
     tags = [k.strip() for k in row["keyword"].split(",") if k.strip()]
@@ -508,7 +645,7 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
         "title": title, "excerpt": excerpt, "date": day, "date_iso": _now(), "slug": slug, "tags": tags,
         "author": project.get("author_name", "Editorial Team"), "reading_time": max(1, len(body.split()) // 200)})
     og = _image(row, images, "og")
-    post_id = db.create_post({
+    data = {
         "project_id": project["id"], "title": title, "slug": slug, "excerpt": excerpt, "content_markdown": full,
         "frontmatter_yaml": front, "target_path": path, "tags": tags,
         "meta_seo": {"title": row["seo_title"], "description": excerpt, "keywords": tags,
@@ -516,7 +653,12 @@ def publish(account_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
         "image_prompt": "",
         "og_image_svg": generate_hero_svg(title=title, category=project.get("name", "Blog"),
                                           author=project.get("author_name", "Editorial Team"), reading_time=5),
-        "seo_score": 100, "seo_issues": [], "status": "publishing"})
+        "seo_score": 100, "seo_issues": [], "status": "publishing"}
+    if old:
+        post_id = old["id"]
+        _write_post(post_id, data)
+    else:
+        post_id = db.create_post(data)
     media.publish_linked(account_id, f"{full}\n{og['url'] if og else ''}")      # before the post is visible
     db.update_post_status(post_id=post_id, status="published")
     url = site_publish.post_url(account_id, slug)

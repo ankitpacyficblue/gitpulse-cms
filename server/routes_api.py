@@ -37,6 +37,7 @@ from engine.auth import (
     authenticate_user, revoke_session, update_user_password, verify_password,
     get_user_by_id, get_user_by_username,
 )
+from engine import blog_plan
 from engine.github_client import GitHubClient
 from engine.permissions import permissions_for, has_permission
 from engine.pipeline import run_publication_pipeline
@@ -591,6 +592,7 @@ def post_update(ctx, m, q, body):
         conn.execute("UPDATE posts SET seo_score = ?, seo_issues = ? WHERE id = ?",
                      (lint["score"], json.dumps(lint["issues"]), post_id))
         conn.commit()
+    blog_plan.sync_from_post(post_id)
     return 200, {"message": "Article updated in staging queue.", "seo_score": lint["score"], "seo_issues": lint["issues"]}
 
 
@@ -599,6 +601,7 @@ def _publish_post(ctx, post_id: int, approve: bool) -> Response:
     if not post:
         return 404, {"error": "Post not found."}
     db.update_post_status(post_id=post_id, status="published")
+    blog_plan.sync_from_post(post_id)
     return 200, {"success": True, "message": "Article published.",
                  "pub_result": {"success": True, "mode": "live", "url": site_publish.post_url(ctx.account_id, post["slug"])}}
 

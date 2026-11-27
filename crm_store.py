@@ -236,7 +236,8 @@ def init_schema(conn) -> None:
                        ("writer_token_id", "INTEGER"), ("published_at", "TEXT NOT NULL DEFAULT ''"),
                        ("external_id", "TEXT NOT NULL DEFAULT ''"),
                        ("meta_description", "TEXT NOT NULL DEFAULT ''"),
-                       ("seo_title", "TEXT NOT NULL DEFAULT ''"))),
+                       ("seo_title", "TEXT NOT NULL DEFAULT ''"),
+                       ("origin", "TEXT NOT NULL DEFAULT ''"))),
         ("entry_links", (("source", "TEXT NOT NULL DEFAULT 'website'"), ("campaign", "TEXT NOT NULL DEFAULT ''"))),
         ("contacts", (("consent_status", "TEXT NOT NULL DEFAULT 'unknown'"), ("consent_source", "TEXT NOT NULL DEFAULT ''"),
                       ("consent_at", "TEXT NOT NULL DEFAULT ''"), ("consent_wording", "TEXT NOT NULL DEFAULT ''"),
@@ -263,6 +264,7 @@ def init_schema(conn) -> None:
         "CREATE INDEX IF NOT EXISTS idx_blog_plan_acct ON blog_plan (account_id, publish_at)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_plan_external ON blog_plan (writer_token_id, external_id) "
         "WHERE external_id != ''",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_plan_post ON blog_plan (post_id) WHERE post_id IS NOT NULL",
         "CREATE INDEX IF NOT EXISTS idx_media_acct ON media_files (account_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs (status, run_at)",
         "CREATE INDEX IF NOT EXISTS idx_alerts_acct ON alerts (account_id, resolved_at)",
