@@ -772,6 +772,7 @@ async function loadSettings() {
     if (settings.ai_provider) document.getElementById('setting-ai-provider').value = settings.ai_provider;
     if (settings.gemini_api_key) document.getElementById('setting-gemini-key').value = settings.gemini_api_key;
     if (settings.openai_api_key) document.getElementById('setting-openai-key').value = settings.openai_api_key;
+    el('remove-gh-platform').classList.toggle('hidden', !settings.github_token);
     if (settings.github_webhook_secret) document.getElementById('setting-webhook-secret').value = settings.github_webhook_secret;
     if (settings.supabase_url) document.getElementById('setting-supabase-url').value = settings.supabase_url;
     if (settings.supabase_key) document.getElementById('setting-supabase-key').value = settings.supabase_key;
@@ -2045,12 +2046,22 @@ async function loadAccountSettings() {
     if (cfg.ai_provider) set('set-ai-provider', cfg.ai_provider);
     const key = document.getElementById('set-ai-key');
     if (key) { key.value = ''; key.placeholder = cfg.has_ai_api_key ? `Saved (${cfg.ai_api_key_masked || 'hidden'})` : 'Paste a key'; }
+    el('remove-gh-account').classList.toggle('hidden', !cfg.has_github_token);
     const src = document.getElementById('set-ai-source');
     if (src) src.innerText = cfg.ai_key_source === 'account' ? 'Using this account\'s own key.' : 'Using the platform key until you add one.';
     const acct = (window.__accounts || []).find(a => String(a.id) === String(getActiveAccountId()));
     const info = await apiGet(`/api/accounts/${encodeURIComponent(getActiveAccountId())}`);
     if (info && !info.error) set('set-website', info.website_url || '');
     if (window.__acctCurrency) { set('set-currency', window.__acctCurrency); set('new-deal-currency', window.__acctCurrency); }
+}
+
+// GitHub tokens are no longer used; this deletes one that was saved earlier.
+async function removeGithubToken(scope) {
+    if (!confirm('Delete the saved GitHub token?')) return;
+    const res = scope === 'platform' ? await apiPost('/api/settings', { github_token: '' }) : await apiPost('/api/account/settings', { clear_github_token: true });
+    if (!res || res.error) return;
+    el(`remove-gh-${scope}`).classList.add('hidden');
+    showToast('GitHub token removed.', 'success');
 }
 
 async function saveAccountSettings(e) {

@@ -608,6 +608,8 @@ def render_dashboard_html() -> str:
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-5">
                     <h2 class="text-lg font-semibold text-white">Global Configuration & Tokens</h2>
                     <div class="space-y-4">
+                        <button type="button" id="remove-gh-platform" class="hidden btn-secondary text-xs py-2 px-3 text-red-300" onclick="removeGithubToken('platform')">Remove saved GitHub token</button>
+
                         <div>
                             <label class="block text-xs font-medium text-slate-400 mb-1">AI Provider Engine</label>
                             <select id="setting-ai-provider" class="input-select">
@@ -1093,7 +1095,8 @@ def render_dashboard_html() -> str:
                             <input type="password" id="set-ai-key" autocomplete="new-password" class="input-text text-xs font-mono" placeholder="Paste a key">
                             <label class="text-[11px] text-slate-400 flex items-center gap-1 mt-1"><input type="checkbox" id="set-ai-clear"> Remove the saved key</label>
                         </div>
-                        <div class="md:col-span-2"><button type="submit" class="btn-primary text-xs py-2 px-3">Save settings</button></div>
+                        <div class="md:col-span-2 flex flex-wrap gap-2"><button type="submit" class="btn-primary text-xs py-2 px-3">Save settings</button>
+                            <button type="button" id="remove-gh-account" class="hidden btn-secondary text-xs py-2 px-3 text-red-300" onclick="removeGithubToken('account')">Remove saved GitHub token</button></div>
                     </form>
                 </section>
                 <section id="users-invite-card" class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-4" aria-labelledby="invite-h" data-requires="users.manage">
