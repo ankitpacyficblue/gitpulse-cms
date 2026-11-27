@@ -43,8 +43,10 @@ def run_publication_pipeline(project_id: int, force_publish: bool = False) -> Di
     project = get_project(project_id)
     if not project:
         raise ValueError(f"Project #{project_id} not found.")
+    if not project.get("topic"):      # a website connected by name and address only
+        project = dict(project, topic=project["name"], keywords=project.get("keywords") or project["name"])
 
-    log_event(f"Starting publication cycle for '{project['name']}' ({project['github_repo']}).", "INFO", project_id=project_id)
+    log_event(f"Starting publication cycle for '{project['name']}'.", "INFO", project_id=project_id)
 
     # 1. Target Repo Context Ingestion (RAG)
     # Each project publishes with its own token; the platform-wide token is deliberately not used,

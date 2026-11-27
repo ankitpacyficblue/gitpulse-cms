@@ -491,10 +491,29 @@ def projects_list(ctx, m, q, body):
 
 @route("POST", r"/api/projects", "acct:content.publish")
 def projects_create(ctx, m, q, body):
-    if not body.get("name") or not body.get("github_repo") or not body.get("topic"):
-        return 400, {"error": "Missing required fields: 'name', 'github_repo', and 'topic' are mandatory."}
+    """A website needs a name and the account's website address. The address is account-wide (post links are built
+    from it), so connecting never replaces one that is already saved: that is done in Settings."""
+    body = dict(body, name=str(body.get("name") or "").strip()[:200],
+                **{k: str(body.get(k) or "") for k in ("github_repo", "topic")})
+    if not body["name"]:
+        return 400, {"error": "name_required", "message": "Give the website a name."}
+    try:
+        url = site_publish.clean_website(body.get("website_url"))
+    except ValueError as e:
+        return 400, {"error": "invalid_website_url", "message": str(e)}
+    saved = (cs.get_account(ctx.account_id) or {}).get("website_url") or ""
+    if not url and not saved and not body["github_repo"]:      # the older, repository-based shape still works
+        return 400, {"error": "website_url_required", "message": "Enter the website address."}
+    if url and saved and url != saved:
+        return 409, {"error": "website_url_differs",
+                     "message": f"This account's website is {saved}. Change it under Settings first."}
+    if url and not saved and not has_permission(ctx.role, "account.manage"):
+        return 403, {"error": "forbidden", "required": "account.manage",
+                     "message": "Only an owner can save the website address."}
     if body.get("github_token") and not secrets_box.is_configured():
         return 500, _NO_ENC
+    if url and not saved:
+        cs.set_website_url(ctx.account_id, url)
     return 201, {"id": db.create_project(body, ctx.account_id), "message": "Project registered successfully."}
 
 
